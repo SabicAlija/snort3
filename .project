@@ -24,6 +24,7 @@
 		<nature>org.eclipse.cdt.managedbuilder.core.managedBuildNature</nature>
 		<nature>org.eclipse.cdt.managedbuilder.core.ScannerConfigNature</nature>
 	</natures>
+<<<<<<< f49db32cff174bc2998174d77f200e2cb6f7a549
 	<variableList>
 		<variable>
 			<name>LUA_PATH</name>
@@ -34,4 +35,6 @@
 			<value>file:/opt/snort3/etc/snort</value>
 		</variable>
 	</variableList>
+=======
+>>>>>>> Create Eclipse CMake project, wrapping snort source directory.
 </projectDescription>
