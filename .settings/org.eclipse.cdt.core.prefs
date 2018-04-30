@@ -1,0 +1,17 @@
+eclipse.preferences.version=1
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/LUA_PATH/delimiter=\:
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/LUA_PATH/operation=replace
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/LUA_PATH/value=/home/alija/git/github/sabicalija/snort3/src/managers/?.lua;/home/alija/git/github/sabicalija/snort3/build/Debug/src/managers/?.lua;
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/SNORT_LUA_PATH/delimiter=\:
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/SNORT_LUA_PATH/operation=append
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/SNORT_LUA_PATH/value=etc
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/append=true
+environment/project/cdt.managedbuild.config.gnu.cross.exe.debug.1731390364/appendContributed=true
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/LUA_PATH/delimiter=\:
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/LUA_PATH/operation=append
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/LUA_PATH/value=/home/alija/git/github/sabicalija/snort3/src/managers;/home/alija/git/github/sabicalija/snort3/build/Debug/src/managers;
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/SNORT_LUA_PATH/delimiter=\:
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/SNORT_LUA_PATH/operation=append
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/SNORT_LUA_PATH/value=etc
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/append=true
+environment/project/cdt.managedbuild.config.gnu.cross.exe.release.585925427/appendContributed=true

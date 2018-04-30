@@ -1,0 +1,1 @@
+https://stackoverflow.com/questions/9453851/how-to-configure-eclipse-cdt-for-cmake

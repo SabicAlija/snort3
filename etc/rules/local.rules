@@ -1,0 +1,109 @@
+<<<<<<< HEAD
+alert udp HOME_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: local traffic";)
+alert udp EXTERNAL_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: remote traffic (request)";)
+alert udp HOME_NET 3671 -> EXTERNAL_NET any (msg: "KNXnet/IP: remote traffic (response)";)
+=======
+<<<<<<< HEAD
+#alert icmp any any -> $HOME_NET any (                  
+#  msg:"ICMP connection attempt";                       
+#  sid:1000001;                                         
+#  rev:1;                                               
+#)
+
+#
+# KNXnet/IP
+#
+alert udp $HOME_NET any -> $KNX_NET 3671 (              
+  msg:"KNXnet/IP local communication";                  
+  sid:1000002;                                          
+  rev:1;                                                
+)   
+    
+alert udp $EXTERNAL_NET any -> $KNX_NET 3671 (          
+  msg:"KNXnet/IP remote communication (request)";       
+  sid:1000003;                                          
+  rev:1;                                                
+)   
+    
+alert udp $KNX_NET 3671 -> $EXTERNAL_NET any (          
+  msg:"KNXnet/IP remote communication (response)";      
+  sid:1000004;                                          
+  rev:1;                                                
+)
+
+# Service Identifier
+alert udp any any -> any any (                          
+  msg:"KNXnet/IP DEVICE_CONFIGURATION_REQ";             
+  content:"|06 10 03 10|";                              
+  sid:1000005;                                          
+  rev:1;                                                
+)
+
+alert udp any any -> any any (                          
+  msg:"KNXnet/IP DEVICE_CONFIGURATION_REQ";             
+  content:"|06 10 03 11|";                              
+  sid:1000006;                                          
+  rev:1;                                                
+)
+
+alert udp any any -> any any (                          
+  msg:"KNXnet/IP TUNNELING_REQUEST";                    
+  content:"|06 10 04 20|";                              
+  sid:1000007;                                          
+  rev:1;                                                
+)
+
+# Physical/Individual Addressing: Add Info not considered
+#alert udp any any -> any any (                          
+#  msg:"KNXnet/IP Individual Addressing (L_Data.req)";   
+#  content:"|06 10 04 20|";                              
+#  content:"|11|"; offset: 10;                           
+#  byte_test: 1, =, 0, 13, bitmask 0x80;                 
+#  sid:1000008;                                          
+#  rev:1;                                                
+#)
+
+#alert udp any any -> any any (                          
+#  msg:"KNXnet/IP Individual Addressing (L_Data.con)";   
+#  content:"|06 10 04 20|";                              
+#  content:"|2e|"; offset: 10;                           
+#  byte_test: 1, =, 0, 13, bitmask 0x80;                 
+#  sid:1000009;                                          
+#  rev:1;                                                
+#)
+
+#alert udp any any -> any any (                          
+#  msg:"KNXnet/IP Individual Addressing (L_Data.ind)";   
+#  content:"|06 10 04 20|";                              
+#  content:"|29|"; offset: 10;                           
+#  byte_test: 1, =, 0, 13, bitmask 0x80;                 
+#  sid:1000010;                                          
+#  rev:1;                                                
+#)
+
+#
+# BACnet/IP
+#
+alert udp $HOME_NET any -> $BAC_NET 47808 (             
+  msg:"BACnet/IP local communication";                  
+  sid:1000102;                                          
+  rev:1;                                                
+)
+
+alert udp $EXTERNAL_NET any -> $BAC_NET 47808 (         
+  msg:"BACnet/IP remote communication (request)";       
+  sid:1000103;                                          
+  rev:1;                                                  
+)
+
+alert udp $BAC_NET 47808 -> $EXTERNAL_NET any (         
+  msg:"BACnet/IP remote communication (response)";      
+  sid:1000104;                                          
+  rev:1;                                                
+)
+=======
+alert udp HOME_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: local traffic";)
+alert udp EXTERNAL_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: remote traffic (request)";)
+alert udp HOME_NET 3671 -> EXTERNAL_NET any (msg: "KNXnet/IP: remote traffic (response)";)
+>>>>>>> 31ad0e3... Add snort lua configuration, rules; Update project
+>>>>>>> 9669975... Add snort lua configuration, rules; Update project
