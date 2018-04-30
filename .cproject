@@ -35,7 +35,7 @@
                             							
                             <targetPlatform archList="all" binaryParser="org.eclipse.cdt.core.ELF" id="cdt.managedbuild.targetPlatform.gnu.cross.20047776" isAbstract="false" osList="all" superClass="cdt.managedbuild.targetPlatform.gnu.cross"/>
                             							
-                            <builder buildPath="/snort3/build/Debug" id="de.marw.cdt.cmake.core.genmakebuilder.1839682182" parallelBuildOn="false" superClass="de.marw.cdt.cmake.core.genmakebuilder"/>
+                            <builder buildPath="/snort3/build/Debug" id="de.marw.cdt.cmake.core.genmakebuilder.1839682182" keepEnvironmentInBuildfile="false" name="CMake Builder (GNU Make)" parallelBuildOn="false" superClass="de.marw.cdt.cmake.core.genmakebuilder"/>
                             							
                             <tool id="cdt.managedbuild.tool.gnu.cross.c.compiler.367953001" name="Cross GCC Compiler" superClass="cdt.managedbuild.tool.gnu.cross.c.compiler">
                                 								
