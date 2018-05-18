@@ -1,9 +1,3 @@
-<<<<<<< HEAD
-alert udp HOME_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: local traffic";)
-alert udp EXTERNAL_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: remote traffic (request)";)
-alert udp HOME_NET 3671 -> EXTERNAL_NET any (msg: "KNXnet/IP: remote traffic (response)";)
-=======
-<<<<<<< HEAD
 #alert icmp any any -> $HOME_NET any (                  
 #  msg:"ICMP connection attempt";                       
 #  sid:1000001;                                         
@@ -101,9 +95,3 @@ alert udp $BAC_NET 47808 -> $EXTERNAL_NET any (
   sid:1000104;                                          
   rev:1;                                                
 )
-=======
-alert udp HOME_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: local traffic";)
-alert udp EXTERNAL_NET any -> HOME_NET 3671 (msg: "KNXnet/IP: remote traffic (request)";)
-alert udp HOME_NET 3671 -> EXTERNAL_NET any (msg: "KNXnet/IP: remote traffic (response)";)
->>>>>>> 31ad0e3... Add snort lua configuration, rules; Update project
->>>>>>> 9669975... Add snort lua configuration, rules; Update project

@@ -54,19 +54,13 @@ end
 -- HOME_NET and EXTERNAL_NET must be set now
 -- setup the network addresses you are protecting
 -- HOME_NET = 'any
-HOME_NET = '172.22.0.0/16'
--- HOME_NET = [[172.22.0.0/16 10.0.0.0/8]]
+-- HOME_NET = '172.22.0.0/16'
+HOME_NET = [[172.22.0.0/16 10.0.0.0/8]]
 
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
 KNX_NET = [[172.22.10.76/32 172.22.10.77/32]]
-
 BAC_NET = [[172.22.11.76/32 172.22.11.77/32]]
+ENO_NET = '172.22.13.76/32'
 
-=======
->>>>>>> 31ad0e3... Add snort lua configuration, rules; Update project
->>>>>>> 9669975... Add snort lua configuration, rules; Update project
 -- set up the external network addresses.
 -- (leave as "any" in most situations)
 -- EXTERNAL_NET = 'any'
