@@ -91,7 +91,33 @@
             			
             <storageModule buildDir="build/${ConfigName}" moduleId="de.marw.cdt.cmake.core.settings">
                 				
-                <options/>
+                <options clearCache="true"/>
+                				
+                <linux command="cmake" generator="UnixMakefiles" use-default="true">
+                    					
+                    <defs>
+                        						
+                        <def name="DAQ_INCLUDE_DIR" type="STRING" val="/opt/daq/2.2.2/include"/>
+                        						
+                        <def name="DAQ_LIBRARY" type="STRING" val="/opt/daq/2.2.2/lib/libdaq_static.a"/>
+                        						
+                        <def name="ENABLE_SHELL" type="STRING" val="ON"/>
+                        						
+                        <def name="CMAKE_INSTALL_PREFIX" type="STRING" val="/opt/snort"/>
+                        					
+                    </defs>
+                    					
+                    <undefs/>
+                    				
+                </linux>
+                				
+                <win32 command="cmake" generator="MinGWMakefiles" use-default="true">
+                    					
+                    <defs/>
+                    					
+                    <undefs/>
+                    				
+                </win32>
                 			
             </storageModule>
             		
