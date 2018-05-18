@@ -1,2 +1,8 @@
 {
+    "cmake.configureSettings": {
+        "CMAKE_INSTALL_PREFIX": "/opt/snort",
+        "DAQ_INCLUDE_DIR": "/opt/daq/2.2.2/include",
+        "DAQ_LIBRARY": "/opt/daq/2.2.2/lib/libdaq_static.a",
+        "ENABLE_SHELL": "ON"
+    }
 }
