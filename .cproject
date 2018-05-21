@@ -121,9 +121,9 @@
                         						
                         <def name="DAQ_LIBRARY" type="STRING" val="/opt/daq/2.2.2/lib/libdaq_static.a"/>
                         						
-                        <def name="ENABLE_SHELL" type="STRING" val="ON"/>
+                        <def name="ENABLE_SHELL" type="BOOL" val="ON"/>
                         						
-                        <def name="CMAKE_INSTALL_PREFIX" type="STRING" val="/opt/snort"/>
+                        <def name="CMAKE_INSTALL_PREFIX" type="STRING" val="/opt/snort3"/>
                         						
                         <def name="CMAKE_CXX_FLAGS" type="STRING" val="-pg"/>
                         						
