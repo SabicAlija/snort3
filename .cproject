@@ -45,7 +45,7 @@
                                 								
                                 <option id="gnu.c.compiler.option.debugging.level.1901699220" name="Debug Level" superClass="gnu.c.compiler.option.debugging.level" useByScannerDiscovery="false" value="gnu.c.debugging.level.max" valueType="enumerated"/>
                                 								
-                                <option id="gnu.c.compiler.option.dialect.std.95006198" name="Language standard" superClass="gnu.c.compiler.option.dialect.std" useByScannerDiscovery="true" value="gnu.c.compiler.dialect.default" valueType="enumerated"/>
+                                <option id="gnu.c.compiler.option.dialect.std.95006198" name="Language standard" superClass="gnu.c.compiler.option.dialect.std" useByScannerDiscovery="true" value="gnu.c.compiler.dialect.c11" valueType="enumerated"/>
                                 								
                                 <option id="gnu.c.compiler.option.debugging.prof.1422454817" name="Generate prof information (-p)" superClass="gnu.c.compiler.option.debugging.prof" useByScannerDiscovery="false" value="false" valueType="boolean"/>
                                 								
@@ -67,7 +67,9 @@
                                 								
                                 <option id="gnu.cpp.compiler.option.debugging.codecov.110518255" name="Generate gcov information (-ftest-coverage -fprofile-arcs)" superClass="gnu.cpp.compiler.option.debugging.codecov" useByScannerDiscovery="false" value="false" valueType="boolean"/>
                                 								
-                                <option id="gnu.cpp.compiler.option.dialect.std.43576133" superClass="gnu.cpp.compiler.option.dialect.std" value="gnu.cpp.compiler.dialect.default" valueType="enumerated"/>
+                                <option id="gnu.cpp.compiler.option.dialect.std.43576133" name="Language standard" superClass="gnu.cpp.compiler.option.dialect.std" useByScannerDiscovery="true" value="gnu.cpp.compiler.dialect.default" valueType="enumerated"/>
+                                								
+                                <option id="gnu.cpp.compiler.option.dialect.flags.1746294801" name="Other dialect flags" superClass="gnu.cpp.compiler.option.dialect.flags" useByScannerDiscovery="true" value="-std=c++11" valueType="string"/>
                                 								
                                 <inputType id="cdt.managedbuild.tool.gnu.cpp.compiler.input.318517689" superClass="cdt.managedbuild.tool.gnu.cpp.compiler.input"/>
                                 							
@@ -125,16 +127,23 @@
                         						
                         <def name="CMAKE_INSTALL_PREFIX" type="STRING" val="/opt/snort3"/>
                         						
-                        <def name="CMAKE_CXX_FLAGS" type="STRING" val="-pg"/>
+                        <def name="CMAKE_CXX_FLAGS" type="STRING" val="-pg -std=c++11 -O0"/>
                         						
-                        <def name="CMAKE_C_FLAGS" type="STRING" val="-pg"/>
+                        <def name="CMAKE_C_FLAGS" type="STRING" val="-pg -std=c11 -O0"/>
                         					
                     </defs>
+                    					
+                    <undefs/>
                     				
                 </linux>
                 				
                 <win32 command="cmake" generator="MinGWMakefiles" use-default="true">
-				</win32>
+                    					
+                    <defs/>
+                    					
+                    <undefs/>
+                    				
+                </win32>
                 			
             </storageModule>
             		
