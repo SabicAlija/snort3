@@ -51,6 +51,8 @@
                                 								
                                 <option id="gnu.c.compiler.option.debugging.gprof.134894931" name="Generate gprof information (-pg)" superClass="gnu.c.compiler.option.debugging.gprof" useByScannerDiscovery="false" value="true" valueType="boolean"/>
                                 								
+                                <option id="gnu.c.compiler.option.misc.other.908459341" name="Other flags" superClass="gnu.c.compiler.option.misc.other" useByScannerDiscovery="false" value="-c -fmessage-length=0" valueType="string"/>
+                                								
                                 <inputType id="cdt.managedbuild.tool.gnu.c.compiler.input.555539666" superClass="cdt.managedbuild.tool.gnu.c.compiler.input"/>
                                 							
                             </tool>
@@ -70,6 +72,8 @@
                                 <option id="gnu.cpp.compiler.option.dialect.std.43576133" name="Language standard" superClass="gnu.cpp.compiler.option.dialect.std" useByScannerDiscovery="true" value="gnu.cpp.compiler.dialect.default" valueType="enumerated"/>
                                 								
                                 <option id="gnu.cpp.compiler.option.dialect.flags.1746294801" name="Other dialect flags" superClass="gnu.cpp.compiler.option.dialect.flags" useByScannerDiscovery="true" value="-std=c++11" valueType="string"/>
+                                								
+                                <option id="gnu.cpp.compiler.option.other.other.1909330266" name="Other flags" superClass="gnu.cpp.compiler.option.other.other" useByScannerDiscovery="false" value="-c -fmessage-length=0" valueType="string"/>
                                 								
                                 <inputType id="cdt.managedbuild.tool.gnu.cpp.compiler.input.318517689" superClass="cdt.managedbuild.tool.gnu.cpp.compiler.input"/>
                                 							
@@ -132,18 +136,11 @@
                         <def name="CMAKE_C_FLAGS" type="STRING" val="-pg -std=c11 -O0"/>
                         					
                     </defs>
-                    					
-                    <undefs/>
                     				
                 </linux>
                 				
                 <win32 command="cmake" generator="MinGWMakefiles" use-default="true">
-                    					
-                    <defs/>
-                    					
-                    <undefs/>
-                    				
-                </win32>
+				</win32>
                 			
             </storageModule>
             		
