@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -53,16 +53,13 @@ void DetectionFilterConfigFree(DetectionFilterConfig* config)
     snort_free(config);
 }
 
-void detection_filter_print_config(DetectionFilterConfig*)
-{ }
-
-int detection_filter_test(void* pv, const snort::SfIp* sip, const snort::SfIp* dip, long curtime)
+int detection_filter_test(void* pv, const SfIp* sip, const SfIp* dip, long curtime)
 {
     if (pv == nullptr)
         return 0;
 
     return sfthd_test_rule(detection_filter_hash, (THD_NODE*)pv,
-        sip, dip, curtime);
+        sip, dip, curtime, get_ips_policy()->policy_id);
 }
 
 THD_NODE* detection_filter_create(DetectionFilterConfig* df_config, THDX_STRUCT* thdx)
@@ -85,12 +82,7 @@ void detection_filter_init(DetectionFilterConfig* df_config)
         return;
 
     if ( !detection_filter_hash )
-    {
         detection_filter_hash = sfthd_local_new(df_config->memcap);
-
-        if ( !detection_filter_hash )
-            FatalError("can't allocate detection filter cache\n");
-    }
 }
 
 void detection_filter_term()
@@ -98,7 +90,7 @@ void detection_filter_term()
     if ( !detection_filter_hash )
         return;
 
-    snort::xhash_delete(detection_filter_hash);
+    delete detection_filter_hash;
     detection_filter_hash = nullptr;
 }
 

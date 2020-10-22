@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,16 +23,20 @@
 #include "config.h"
 #endif
 
-#include "app_info_table.h"
-#include "appid_session.h"
+#include <set>
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "utils/util.h"
 
+#include "app_info_table.h"
+#include "appid_inspector.h"
+#include "appid_session.h"
+
+using namespace std;
 using namespace snort;
 
 //-------------------------------------------------------------------------
@@ -43,73 +47,38 @@ using namespace snort;
 #define s_help \
     "detection option for application ids"
 
-// these defs are used during matching when the rule option eval function is called to
-// control the order in which the different id types are checked
-#define PAYLOAD    0
-#define MISC       1
-#define CP_CLIENT  2
-#define CP_SERVICE 3
-#define SP_CLIENT  3
-#define SP_SERVICE 2
-#define NUM_ID_TYPES 4
-
-struct AppIdInfo
-{
-    char* appid_name;
-    AppId appid_ordinal;
-};
-
-struct AppIdRuleOptionData
-{
-    std::vector<AppIdInfo> appid_table;
-    bool ids_mapped;
-};
-
-static THREAD_LOCAL ProfileStats appidRuleOptionPerfStats;
+static THREAD_LOCAL ProfileStats ips_appid_perf_stats;
 
 class AppIdIpsOption : public IpsOption
 {
 public:
-    AppIdIpsOption(const AppIdRuleOptionData& c) :
+    AppIdIpsOption(const set<string> &appid_table) :
         IpsOption(s_name)
     {
-        opt_data = c;
+        this->appid_table = appid_table;
     }
-
-    ~AppIdIpsOption() override
-    {
-        for (auto& appid_info : opt_data.appid_table)
-            snort_free(appid_info.appid_name);
-    }
-
     uint32_t hash() const override;
     bool operator==(const IpsOption&) const override;
     EvalStatus eval(Cursor&, Packet*) override;
 
 private:
-    void map_names_to_ids();
-    int match_id_against_rule(int16_t id);
-
-    AppIdRuleOptionData opt_data;
+    bool match_id_against_rule(OdpContext& odp_ctxt, int32_t id);
+    set<string> appid_table;
 };
 
 uint32_t AppIdIpsOption::hash() const
 {
-    uint32_t abc[3];
+    uint32_t a = appid_table.size();
+    uint32_t b = IpsOption::hash();
+    uint32_t c = 0;
 
-    abc[0] = opt_data.appid_table.size();
-    abc[1] = 0;
-    abc[2] = 0;
+    mix(a, b, c);
 
-    mix(abc[0], abc[1], abc[2]);
+    for ( auto& appid_name : appid_table )
+        mix_str(a, b, c, appid_name.c_str(), appid_name.length());
 
-    for ( auto& appid_info : opt_data.appid_table )
-        mix_str(abc[0], abc[1], abc[2],
-            appid_info.appid_name, strlen(appid_info.appid_name) );
-
-    finalize(abc[0], abc[1], abc[2]);
-
-    return abc[2];
+    finalize(a, b, c);
+    return c;
 }
 
 bool AppIdIpsOption::operator==(const IpsOption& ips) const
@@ -117,35 +86,22 @@ bool AppIdIpsOption::operator==(const IpsOption& ips) const
     if ( !IpsOption::operator==(ips) )
         return false;
 
-    const AppIdIpsOption& rhs = (const AppIdIpsOption&)ips;
+    return ( appid_table == ((const AppIdIpsOption&)ips).appid_table );
+}
 
-    if ( opt_data.appid_table.size() != rhs.opt_data.appid_table.size() )
+bool AppIdIpsOption::match_id_against_rule(OdpContext& odp_ctxt, int32_t id)
+{
+    if (id <= APP_ID_NONE)
         return false;
 
-    for (unsigned i = 0; i < opt_data.appid_table.size(); i++)
-        if ( strcmp(opt_data.appid_table[i].appid_name, rhs.opt_data.appid_table[i].appid_name) !=
-            0)
-            return false;
-
-    return true;
-}
-
-void AppIdIpsOption::map_names_to_ids()
-{
-    for (auto& appid_info : opt_data.appid_table)
-        appid_info.appid_ordinal = AppInfoManager::get_instance().get_appid_by_name(
-            appid_info.appid_name);
-
-    opt_data.ids_mapped = true;
-}
-
-int AppIdIpsOption::match_id_against_rule(int16_t id)
-{
-    for ( auto& appid_info : opt_data.appid_table )
-        if ( id == appid_info.appid_ordinal )
-            return id;
-
-    return 0;
+    const char *app_name_key = odp_ctxt.get_app_info_mgr().get_app_name_key(id);
+    if ( nullptr != app_name_key )
+    {
+        string app_name(app_name_key);
+        if ( appid_table.find(app_name) != appid_table.end() )
+            return true;
+    }
+    return false;
 }
 
 // to determine if the application ids in the rule match the flow get the current
@@ -153,31 +109,50 @@ int AppIdIpsOption::match_id_against_rule(int16_t id)
 // first match wins...
 IpsOption::EvalStatus AppIdIpsOption::eval(Cursor&, Packet* p)
 {
-    AppId app_ids[NUM_ID_TYPES];
+    RuleProfile profile(ips_appid_perf_stats);
 
     if ( !p->flow )
         return NO_MATCH;
 
-    Profile profile(appidRuleOptionPerfStats);
-
-    if ( !opt_data.ids_mapped )
-        map_names_to_ids();
-
     AppIdSession* session = appid_api.get_appid_session(*(p->flow));
-    if (!session)
+
+    // Skip detection for sessions using old odp context after odp reload
+    if ( !session or !pkt_thread_odp_ctxt or
+        (session->get_odp_ctxt_version() != pkt_thread_odp_ctxt->get_version()))
         return NO_MATCH;
 
-    // id order on stream api call is: service, client, payload, misc
-    if ((p->packet_flags & PKT_FROM_CLIENT))
-        session->get_application_ids(app_ids[CP_SERVICE], app_ids[CP_CLIENT],
-            app_ids[PAYLOAD], app_ids[MISC]);
-    else
-        session->get_application_ids(app_ids[SP_SERVICE], app_ids[SP_CLIENT],
-            app_ids[PAYLOAD], app_ids[MISC]);
+    AppId app_ids[APP_PROTOID_MAX];
+    AppId service_id = session->get_api().get_service_app_id();
+    OdpContext& odp_ctxt = session->get_odp_ctxt();
 
-    for ( unsigned i = 0; i < NUM_ID_TYPES; i++ )
-        if ( match_id_against_rule(app_ids[i]) )
+    if (service_id != APP_ID_HTTP2)
+    {
+        // id order on stream api call is: service, client, payload, misc
+        session->get_api().get_first_stream_app_ids(app_ids[APP_PROTOID_SERVICE], app_ids[APP_PROTOID_CLIENT],
+            app_ids[APP_PROTOID_PAYLOAD], app_ids[APP_PROTOID_MISC]);
+
+        for ( unsigned i = 0; i < APP_PROTOID_MAX; i++ )
+            if (match_id_against_rule(odp_ctxt, app_ids[i]))
+                return MATCH;
+    }
+    else
+    {
+        if (match_id_against_rule(odp_ctxt, service_id))
             return MATCH;
+
+        for (uint32_t i = 0; i < session->get_api().get_hsessions_size(); i++)
+        {
+            const AppIdHttpSession* hsession = session->get_http_session(i);
+            if (!hsession)
+                return NO_MATCH;
+            if (match_id_against_rule(odp_ctxt, hsession->client.get_id()))
+                return MATCH;
+            if (match_id_against_rule(odp_ctxt, hsession->payload.get_id()))
+                return MATCH;
+            if (match_id_against_rule(odp_ctxt, hsession->misc_app_id))
+                return MATCH;
+        }
+    }
 
     return NO_MATCH;
 }
@@ -192,15 +167,6 @@ static const Parameter s_params[] =
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
-static bool compare_appid_names(const AppIdInfo& l, const AppIdInfo& r)
-{
-    int rc = strcmp(l.appid_name, r.appid_name);
-    if ( rc < 0 )
-        return true;
-    else
-        return false;
-}
-
 class AppIdOptionModule : public Module
 {
 public:
@@ -211,19 +177,18 @@ public:
     bool end(const char*, int, SnortConfig*) override;
 
     ProfileStats* get_profile() const override
-    { return &appidRuleOptionPerfStats; }
+    { return &ips_appid_perf_stats; }
 
     Usage get_usage() const override
     { return DETECT; }
 
 public:
-    AppIdRuleOptionData opt_data;
+    std::set<string> appid_table;
 };
 
 bool AppIdOptionModule::begin(const char*, int, SnortConfig*)
 {
-    opt_data.appid_table.clear();
-    opt_data.ids_mapped = false;
+    appid_table.clear();
     return true;
 }
 
@@ -233,21 +198,20 @@ bool AppIdOptionModule::set(const char*, Value& v, SnortConfig*)
         return false;
 
     v.set_first_token();
-    std::string tok;
+    string tok;
 
     while ( v.get_next_csv_token(tok) )
     {
-        AppIdInfo appid_info;
-
         if ( tok[0] == '"' )
             tok.erase(0, 1);
 
         if ( tok[tok.length()-1] == '"' )
             tok.erase(tok.length() - 1, 1);
 
-        appid_info.appid_name = snort_strdup(tok.c_str());
-        appid_info.appid_ordinal = 0;
-        opt_data.appid_table.push_back(appid_info);
+        char *lcase_tok = AppInfoManager::strdup_to_lower(tok.c_str());
+        string app_name(lcase_tok);
+        appid_table.emplace(app_name);
+        snort_free(lcase_tok);
     }
 
     return true;
@@ -255,14 +219,12 @@ bool AppIdOptionModule::set(const char*, Value& v, SnortConfig*)
 
 bool AppIdOptionModule::end(const char*, int, SnortConfig*)
 {
-    std::sort(opt_data.appid_table.begin(), opt_data.appid_table.end(), compare_appid_names);
     return true;
 }
 
 //-------------------------------------------------------------------------
 // appid option api methods
 //-------------------------------------------------------------------------
-
 static Module* appid_option_mod_ctor()
 {
     return new AppIdOptionModule;
@@ -276,7 +238,7 @@ static void appid_option_mod_dtor(Module* m)
 static IpsOption* appid_option_ips_ctor(Module* p, OptTreeNode*)
 {
     AppIdOptionModule* m = (AppIdOptionModule*)p;
-    return new AppIdIpsOption(m->opt_data);
+    return new AppIdIpsOption(m->appid_table);
 }
 
 static void appid_option_ips_dtor(IpsOption* p)

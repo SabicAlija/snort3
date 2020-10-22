@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -144,9 +144,6 @@ typedef struct s_FTP_PARAM_FMT
     struct s_FTP_PARAM_FMT** choices;
     int numChoices;
     int prev_optional; /* Only set if optional is set */
-    const char* next_param; /* Pointer to buffer for the next parameter.
-                         To be used to backtrack for optional
-                         parameters that don't match. */
 }  FTP_PARAM_FMT;
 
 typedef struct s_FTP_CMD_CONF
@@ -164,6 +161,7 @@ typedef struct s_FTP_CMD_CONF
     bool file_get_cmd;
     bool encr_cmd;
     bool login_cmd;
+    bool prot_cmd;
     int dir_response;
 
     FTP_PARAM_FMT* param_format;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,6 +22,8 @@
 #include "config.h"
 #endif
 
+#include <daq.h>
+
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "log/text_log.h"
@@ -40,12 +42,14 @@ namespace
 const PegInfo pegs[]
 {
     { CountType::SUM, "bad_checksum", "non-zero icmp checksums" },
+    { CountType::SUM, "checksum_bypassed", "checksum calculations bypassed" },
     { CountType::END, nullptr, nullptr }
 };
 
 struct Stats
 {
     PegCount bad_ip4_cksum;
+    PegCount cksum_bypassed;
 };
 
 static THREAD_LOCAL Stats stats;
@@ -86,10 +90,10 @@ static const RuleMap icmp4_rules[] =
     { 0, nullptr }
 };
 
-class Icmp4Module : public CodecModule
+class Icmp4Module : public BaseCodecModule
 {
 public:
-    Icmp4Module() : CodecModule(CD_ICMP4_NAME, CD_ICMP4_HELP) { }
+    Icmp4Module() : BaseCodecModule(CD_ICMP4_NAME, CD_ICMP4_HELP) { }
 
     const RuleMap* get_rules() const override
     { return icmp4_rules; }
@@ -114,13 +118,31 @@ public:
     void log(TextLog* const, const uint8_t* pkt, const uint16_t len) override;
 
 private:
+    bool valid_checksum_from_daq(const RawData&);
     void ICMP4AddrTests(const DecodeData& snort, const CodecData& codec);
     void ICMP4MiscTests(const ICMPHdr* const, const CodecData&, const uint16_t);
 };
 } // namespace
 
 void Icmp4Codec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ICMPV4); }
+{ v.emplace_back(ProtocolId::ICMPV4); }
+
+inline bool Icmp4Codec::valid_checksum_from_daq(const RawData& raw)
+{
+    const DAQ_PktDecodeData_t* pdd =
+        (const DAQ_PktDecodeData_t*) daq_msg_get_meta(raw.daq_msg, DAQ_PKT_META_DECODE_DATA);
+    if (!pdd || !pdd->flags.bits.l4_checksum || !pdd->flags.bits.icmp || !pdd->flags.bits.l4)
+        return false;
+    // Sanity check to make sure we're talking about the same thing if offset is available
+    if (pdd->l4_offset != DAQ_PKT_DECODE_OFFSET_INVALID)
+    {
+        const uint8_t* data = daq_msg_get_data(raw.daq_msg);
+        if (raw.data - data != pdd->l4_offset)
+            return false;
+    }
+    stats.cksum_bypassed++;
+    return true;
+}
 
 bool Icmp4Codec::decode(const RawData& raw, CodecData& codec,DecodeData& snort)
 {
@@ -133,6 +155,18 @@ bool Icmp4Codec::decode(const RawData& raw, CodecData& codec,DecodeData& snort)
     /* set the header ptr first */
     const ICMPHdr* const icmph = reinterpret_cast<const ICMPHdr*>(raw.data);
     uint16_t len = 0;
+
+    if (snort::get_network_policy()->icmp_checksums() && !valid_checksum_from_daq(raw))
+    {
+        uint16_t csum = checksum::cksum_add((const uint16_t*)icmph, raw.len);
+
+        if (csum && !codec.is_cooked())
+        {
+            stats.bad_ip4_cksum++;
+            snort.decode_flags |= DECODE_ERR_CKSUM_ICMP;
+            return false;
+        }
+    }
 
     switch (icmph->type)
     {
@@ -176,18 +210,6 @@ bool Icmp4Codec::decode(const RawData& raw, CodecData& codec,DecodeData& snort)
     default:
         codec_event(codec, DECODE_ICMP4_TYPE_OTHER);
         break;
-    }
-
-    if (SnortConfig::icmp_checksums())
-    {
-        uint16_t csum = checksum::cksum_add((const uint16_t*)icmph, raw.len);
-
-        if (csum && !codec.is_cooked())
-        {
-            stats.bad_ip4_cksum++;
-            snort.decode_flags |= DECODE_ERR_CKSUM_ICMP;
-            return false;
-        }
     }
 
     len =  icmp::ICMP_BASE_LEN;
@@ -432,13 +454,6 @@ void Icmp4Codec::log(TextLog* const log, const uint8_t* raw_pkt,
             break;
         }
 
-/* written this way since inet_ntoa was typedef'ed to use sfip_ntoa
- * which requires SfIp instead of inaddr's.  This call to inet_ntoa
- * is a rare case that doesn't use SfIp's. */
-
-// XXX-IPv6 NOT YET IMPLEMENTED - IPV6 addresses technically not supported - need to change ICMP
-
-        /* no inet_ntop in Windows */
         snort_inet_ntop(AF_INET, (const void*)(&icmph->s_icmp_gwaddr.s_addr),
             buf, sizeof(buf));
         TextLog_Print(log, " NEW GW: %s", buf);
@@ -533,7 +548,7 @@ void Icmp4Codec::log(TextLog* const log, const uint8_t* raw_pkt,
     case icmp::IcmpType::ADDRESSREPLY:
         TextLog_Print(log, "ID: %u  Seq: %u  ADDRESS REPLY: 0x%08X",
             ntohs(icmph->s_icmp_id), ntohs(icmph->s_icmp_seq),
-            (u_int)ntohl(icmph->s_icmp_mask));
+            ntohl(icmph->s_icmp_mask));
         break;
 
     default:

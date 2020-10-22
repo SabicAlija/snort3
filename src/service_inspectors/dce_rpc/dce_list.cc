@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -143,7 +143,7 @@ static void DCE2_ListInsertTail(DCE2_List* list, DCE2_ListNode* n)
 static void DCE2_ListInsertHead(DCE2_List* list, DCE2_ListNode* n)
 {
     if ((list == nullptr) || (n == nullptr))
-        return;   
+        return;
 
     if (list->head == nullptr)
     {

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,11 +22,9 @@
 #ifndef DCE_SMB_H
 #define DCE_SMB_H
 
-#include "framework/counts.h"
+#include "dce_co.h"
 #include "protocols/packet.h"
 #include "profiler/profiler_defs.h"
-
-#include "dce_co.h"
 #include "smb_common.h"
 #include "smb_message.h"
 
@@ -180,37 +178,66 @@ struct dce2SmbStats
     */
     PegCount smb_files_processed;
     /* SMB2 stats */
-    PegCount smb2_create;
-    PegCount smb2_write;
-    PegCount smb2_read;
-    PegCount smb2_set_info;
-    PegCount smb2_tree_connect;
-    PegCount smb2_tree_disconnect;
-    PegCount smb2_close;
+    PegCount v2_setup;
+    PegCount v2_setup_err_resp;
+    PegCount v2_setup_inv_str_sz;
+    PegCount v2_setup_resp_hdr_err;
+    PegCount v2_tree_cnct;
+    PegCount v2_tree_cnct_err_resp;
+    PegCount v2_tree_cnct_ignored;
+    PegCount v2_tree_cnct_inv_str_sz;
+    PegCount v2_tree_cnct_resp_hdr_err;
+    PegCount v2_crt;
+    PegCount v2_crt_err_resp;
+    PegCount v2_crt_inv_file_data;
+    PegCount v2_crt_inv_str_sz;
+    PegCount v2_crt_resp_hdr_err;
+    PegCount v2_crt_req_hdr_err;
+    PegCount v2_crt_rtrkr_misng;
+    PegCount v2_crt_req_ipc;
+    PegCount v2_crt_tree_trkr_misng;
+    PegCount v2_wrt;
+    PegCount v2_wrt_err_resp;
+    PegCount v2_wrt_ignored;
+    PegCount v2_wrt_inv_str_sz;
+    PegCount v2_wrt_req_hdr_err;
+    PegCount v2_read;
+    PegCount v2_read_err_resp;
+    PegCount v2_read_ignored;
+    PegCount v2_read_inv_str_sz;
+    PegCount v2_read_rtrkr_misng;
+    PegCount v2_read_resp_hdr_err;
+    PegCount v2_read_req_hdr_err;
+    PegCount v2_stinf;
+    PegCount v2_stinf_err_resp;
+    PegCount v2_stinf_ignored;
+    PegCount v2_stinf_inv_str_sz;
+    PegCount v2_stinf_req_ftrkr_misng;
+    PegCount v2_stinf_req_hdr_err;
+    PegCount v2_cls;
+    PegCount v2_cls_err_resp;
+    PegCount v2_cls_ignored;
+    PegCount v2_cls_inv_str_sz;
+    PegCount v2_cls_req_ftrkr_misng;
+    PegCount v2_cls_req_hdr_err;
+    PegCount v2_tree_discn;
+    PegCount v2_tree_discn_ignored;
+    PegCount v2_tree_discn_inv_str_sz;
+    PegCount v2_tree_discn_req_hdr_err;
+    PegCount v2_logoff;
+    PegCount v2_logoff_inv_str_sz;
+    PegCount v2_hdr_err;
+    PegCount v2_bad_next_cmd_offset;
+    PegCount v2_extra_file_data_err;
+    PegCount v2_inv_file_ctx_err;
+    PegCount v2_msgs_uninspected;
+    PegCount v2_cmpnd_req_lt_crossed;
     PegCount concurrent_sessions;
     PegCount max_concurrent_sessions;
 };
 
 extern THREAD_LOCAL dce2SmbStats dce2_smb_stats;
 extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_main;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_session;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_new_session;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_detect;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_log;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_co_seg;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_co_frag;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_co_reass;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_co_ctx;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_seg;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_req;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_uid;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_tid;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_fid;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_file;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_file_detect;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_file_api;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_fingerprint;
-extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_smb_negotiate;
 
 enum DCE2_SmbSsnState
 {
@@ -268,9 +295,9 @@ struct DCE2_SmbFileChunk
 
 enum DCE2_SmbVersion
 {
-    DCE2_SMB_VERISON_NULL,
-    DCE2_SMB_VERISON_1,
-    DCE2_SMB_VERISON_2
+    DCE2_SMB_VERSION_NULL,
+    DCE2_SMB_VERSION_1,
+    DCE2_SMB_VERSION_2
 };
 
 struct DCE2_SmbFileTracker
@@ -324,6 +351,8 @@ struct DCE2_SmbFileTracker
             bool sequential_only;
         } file;
     } tracker;
+
+    DCE2_SmbPduState smb2_pdu_state;
 
 #define fid_v1                file_key.id_smb1.file_id
 #define uid_v1                file_key.id_smb1.u_id
@@ -406,7 +435,6 @@ struct DCE2_SmbRequestTracker
 struct DCE2_SmbSsnData
 {
     DCE2_SsnData sd;  // This member must be first
-
     DCE2_Policy policy;
 
     int dialect_index;
@@ -447,8 +475,6 @@ struct DCE2_SmbSsnData
     // This is a reference to a file tracker so shouldn't be freed.
     DCE2_SmbFileTracker* fapi_ftracker;
 
-    Smb2Request* smb2_requests;
-
     DCE2_SmbFileTracker* fb_ftracker;
     bool block_pdus;
 
@@ -470,22 +496,24 @@ public:
     ~Dce2SmbFlowData() override;
 
     static void init()
-    {
-        inspector_id = snort::FlowData::create_flow_data_id();
-    }
+    { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;
-    DCE2_SmbSsnData dce2_smb_session;
+    DCE2_SmbVersion smb_version;
+    void* dce2_smb_session_data;
 };
 
 // Used for reassembled packets
 #define DCE2_MOCK_HDR_LEN__SMB_CLI \
-    (sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbWriteAndXReq))
+    ((unsigned)(sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbWriteAndXReq)))
 #define DCE2_MOCK_HDR_LEN__SMB_SRV \
-    (sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbReadAndXResp))
+    ((unsigned)(sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbReadAndXResp)))
 
-DCE2_SmbSsnData* get_dce2_smb_session_data(snort::Flow*);
+DCE2_SsnData* get_dce2_session_data(snort::Flow*);
 
 const char* get_smb_com_string(uint8_t);
 #endif

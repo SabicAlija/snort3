@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -84,11 +84,8 @@ public:
 class Active
 {
 public:
-    static void drop_packet(const Packet*, bool force = false);
-
+    void drop_packet(const Packet*, bool force = false) { }
 };
-
-void Active::drop_packet(const Packet* , bool ) { }
 
 bool Normalize_IsEnabled(NormFlags )
 {
@@ -105,16 +102,6 @@ NormMode Normalize_GetMode(NormFlags )
 
 TEST_GROUP(tcp_normalizers)
 {
-    //Flow* flow = nullptr;
-    //TcpSession* session = nullptr;
-
-    void setup()
-    {
-    }
-
-    void teardown()
-    {
-    }
 };
 
 TEST(tcp_normalizers, os_policy)
@@ -242,7 +229,6 @@ TEST(tcp_normalizers, norm_options_enabled)
 
 int main(int argc, char** argv)
 {
-    //MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
     return CommandLineTestRunner::RunAllTests(argc, argv);
 }
 

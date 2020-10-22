@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,8 @@
 #include "lua_detector_api.h"
 #include "lua_detector_module.h"
 #include "lua_detector_util.h"
+
+using namespace snort;
 
 /* Lua flag bit/index to C flag value (0 for invalid). */
 static const uint64_t FLAGS_TABLE_LUA_TO_C[32]
@@ -155,8 +157,8 @@ static inline uint64_t convert_flags_c_to_lua(uint64_t in)
  */
 static int create_detector_flow(lua_State* L)
 {
-    snort::SfIp saddr;
-    snort::SfIp daddr;
+    SfIp saddr;
+    SfIp daddr;
 
     AppIdDetector* ud = *UserData<AppIdDetector>::check(L, DETECTOR, 1);
     // Verify detector user data and that we are in packet context
@@ -201,17 +203,14 @@ static int create_detector_flow(lua_State* L)
     uint16_t dport = lua_tonumber(L, 5);
     IpProtocol proto = (IpProtocol)lua_tonumber(L, 6);
 
-    auto detector_flow = new DetectorFlow();
+    auto detector_flow = new DetectorFlow(L, AppIdSession::create_future_session(lsd->ldp.pkt, &saddr, sport,
+        &daddr, dport, proto, 0));
     UserData<DetectorFlow>::push(L, DETECTORFLOW, detector_flow);
 
-    detector_flow->myLuaState = L;
     lua_pushvalue(L, -1);
     detector_flow->userDataRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
-    LuaDetectorManager::add_detector_flow(detector_flow);
-
-    detector_flow->asd = AppIdSession::create_future_session(lsd->ldp.pkt, &saddr, sport,
-        &daddr, dport, proto, 0, 0, ud->get_handler().get_inspector());
+    odp_thread_local_ctxt->get_lua_detector_mgr().set_detector_flow(detector_flow);
 
     if (!detector_flow->asd)
     {
@@ -221,22 +220,6 @@ static int create_detector_flow(lua_State* L)
     }
 
     return 1;
-}
-
-// free DetectorFlow and its corresponding user data.
-void free_detector_flow(void* userdata)
-{
-    DetectorFlow* detector_flow = (DetectorFlow*)userdata;
-
-    /*The detectorUserData itself is a userdata and therefore be freed by Lua side. */
-    if (detector_flow->userDataRef != LUA_REFNIL)
-    {
-        auto L = detector_flow->myLuaState;
-        luaL_unref(L, LUA_REGISTRYINDEX, detector_flow->userDataRef);
-        detector_flow->userDataRef = LUA_REFNIL;
-    }
-
-    delete detector_flow;
 }
 
 /**Sets a flow flag
@@ -313,7 +296,7 @@ static int clear_detector_flow_flag(lua_State* L)
 }
 
 /**Set service id on a flow
- * If funtion is implemented, then
+ * If function is implemented, then
  * verify detector user data and that we are in packet context
  *
  * @param Lua_State* - Lua state variable.
@@ -325,7 +308,7 @@ static int set_detector_flow_service_id(lua_State*)
 { return 0; }
 
 /**Set client application id on a flow, during packet processing
- * If funtion is implemented, then
+ * If function is implemented, then
  * verify detector user data and that we are in packet context
  *
  * @param Lua_State* - Lua state variable.
@@ -339,7 +322,7 @@ static int set_detecter_flow_cln_app_id(lua_State*)
 }
 
 /**Set client application type id on a flow, during packet processing
- * If funtion is implemented, then
+ * If function is implemented, then
  * verify detector user data and that we are in packet context
  *
  * @param Lua_State* - Lua state variable.
@@ -372,8 +355,7 @@ static int get_detector_flow_key(lua_State* L)
     // Verify detector user data and that we are in packet context
     assert(pLuaData.ptr);
 
-    lua_pushlstring(L, (char*)&pLuaData->asd->session_id,
-        sizeof(pLuaData->asd->session_id));
+    lua_pushstring(L, pLuaData->asd->get_api().get_session_id().c_str());
 
     return 1;
 }

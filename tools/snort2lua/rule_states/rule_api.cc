@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -17,10 +17,10 @@
 //--------------------------------------------------------------------------
 // rule_api.cc author Josh Rosenbaum <jrosenba@cisco.com>
 
+#include "rule_api.h"
 #include <string>
-#include "rule_states/rule_api.h"
-#include "helpers/s2l_util.h"
 #include "helpers/converter.h"
+#include "helpers/s2l_util.h"
 
 namespace rules
 {

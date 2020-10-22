@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -166,7 +166,14 @@ void TcpConnector::process_receive()
     if (rval == -1)
     {
         if (errno != EINTR)
-            ErrorMessage("TcpC Input Thread: Error polling on socket %d: %s (%d)\n", pfds[0].fd, strerror(errno), errno);
+        {
+
+            char error_msg[1024] = {0};
+            if (strerror_r(errno, error_msg, sizeof(error_msg)) == 0)
+                ErrorMessage("TcpC Input Thread: Error polling on socket %d: %s\n", pfds[0].fd, error_msg);
+            else
+                ErrorMessage("TcpC Input Thread: Error polling on socket %d: (%d)\n", pfds[0].fd, errno);
+        }
         return;
     }
     else if ((pfds[0].revents & (POLLHUP|POLLERR|POLLNVAL)) != 0)
@@ -177,10 +184,12 @@ void TcpConnector::process_receive()
     }
     else if (rval > 0 && pfds[0].revents & POLLIN)
     {
-        TcpConnectorMsgHandle* handle;
-        if ( (handle = read_message(sock_fd)) != nullptr )
-            if ( !receive_ring->put(handle) )
-                ErrorMessage("TcpC Input Thread: overrun\n");
+        TcpConnectorMsgHandle* handle = read_message(sock_fd);
+        if (handle && !receive_ring->put(handle))
+        {
+            ErrorMessage("TcpC Input Thread: overrun\n");
+            delete handle;
+        }
     }
 }
 
@@ -338,8 +347,8 @@ static TcpConnector* tcp_connector_tinit_call(TcpConnectorConfig* cfg, const cha
         return nullptr;
     }
 
-    TcpConnector* tcp_connector = new TcpConnector(cfg, sfd);
-    return tcp_connector;
+    TcpConnector* tcp_conn = new TcpConnector(cfg, sfd);
+    return tcp_conn;
 }
 
 static TcpConnector* tcp_connector_tinit_answer(TcpConnectorConfig* cfg, const char* port)
@@ -390,18 +399,26 @@ static TcpConnector* tcp_connector_tinit_answer(TcpConnectorConfig* cfg, const c
 
     if ( listen(sfd, 10) < 0 )
     {
-        ErrorMessage("listen() failure: %s\n", strerror(errno));
+        char error_msg[1024] = {0};
+        if (strerror_r(errno, error_msg, sizeof(error_msg)) == 0)
+            ErrorMessage("listen() failure: %s\n", error_msg);
+        else
+            ErrorMessage("listen() failure: %d\n", errno);
         return nullptr;
     }
 
     if ( (peer_sfd = accept(sfd, nullptr, nullptr )) < 0 )
     {
-        ErrorMessage("accept() failure: %s\n", strerror(errno));
+        char error_msg[1024] = {0};
+        if (strerror_r(errno, error_msg, sizeof(error_msg)) == 0)
+            ErrorMessage("accept() failure: %s\n", error_msg);
+        else
+            ErrorMessage("accept() failure: %d\n", errno);
         return nullptr;
     }
 
-    TcpConnector* tcp_connector  = new TcpConnector(cfg, peer_sfd);
-    return tcp_connector;
+    TcpConnector* tcp_conn = new TcpConnector(cfg, peer_sfd);
+    return tcp_conn;
 }
 
 // Create a per-thread object
@@ -420,23 +437,23 @@ static Connector* tcp_connector_tinit(ConnectorConfig* config)
 
     snprintf(port_string, sizeof(port_string), "%5hu", static_cast<uint16_t>(cfg->base_port + instance));
 
-    TcpConnector* tcp_connector;
+    TcpConnector* tcp_conn;
 
     if ( cfg->setup == TcpConnectorConfig::Setup::CALL )
-        tcp_connector = tcp_connector_tinit_call(cfg, port_string);
+        tcp_conn = tcp_connector_tinit_call(cfg, port_string);
     else if ( cfg->setup == TcpConnectorConfig::Setup::ANSWER )
-        tcp_connector = tcp_connector_tinit_answer(cfg, port_string);
+        tcp_conn = tcp_connector_tinit_answer(cfg, port_string);
     else
-        tcp_connector = nullptr;
+        tcp_conn = nullptr;
 
-    return tcp_connector;
+    return tcp_conn;
 }
 
 static void tcp_connector_tterm(Connector* connector)
 {
-    TcpConnector* tcp_connector = (TcpConnector*)connector;
+    TcpConnector* tcp_conn = (TcpConnector*)connector;
 
-    delete tcp_connector;
+    delete tcp_conn;
 }
 
 static ConnectorCommon* tcp_connector_ctor(Module* m)

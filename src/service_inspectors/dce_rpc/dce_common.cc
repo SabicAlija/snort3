@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -82,85 +82,61 @@ static const char* dce2_get_policy_name(DCE2_Policy policy)
     return policyStr;
 }
 
-bool dce2_set_common_config(Value& v, dce2CommonProtoConf& common)
+bool dce2_set_common_config(const Value& v, dce2CommonProtoConf& common)
 {
-    if ( v.is("disable_defrag") )
+    if ( v.is("limit_alerts") )
+        common.limit_alerts = v.get_bool();
+
+    else if ( v.is("disable_defrag") )
         common.disable_defrag = v.get_bool();
 
     else if ( v.is("max_frag_len") )
-        common.max_frag_len = v.get_long();
+        common.max_frag_len = v.get_uint16();
+
     else
         return false;
+
     return true;
 }
 
-bool dce2_set_co_config(Value& v, dce2CoProtoConf& co)
+bool dce2_set_co_config(const Value& v, dce2CoProtoConf& co)
 {
     if (dce2_set_common_config(v, co.common))
         return true;
+
     else if ( v.is("policy") )
-        co.policy = (DCE2_Policy)v.get_long();
+        co.policy = (DCE2_Policy)v.get_uint8();
+
     else if ( v.is("reassemble_threshold") )
-        co.co_reassemble_threshold = v.get_long();
+        co.co_reassemble_threshold = v.get_uint16();
+
     else
         return false;
+
     return true;
 }
 
-void print_dce2_common_config(dce2CommonProtoConf& common)
+void print_dce2_common_config(const dce2CommonProtoConf& common)
 {
-    LogMessage("    Defragmentation: %s\n",
-        common.disable_defrag ?
-        "DISABLED" : "ENABLED");
-    LogMessage("    Max Fragment length: %d\n",
-        common.max_frag_len);
+    ConfigLogger::log_flag("limit_alerts", common.limit_alerts);
+    ConfigLogger::log_flag("disable_defrag", common.disable_defrag);
+    ConfigLogger::log_value("max_frag_len", common.max_frag_len);
 }
 
-void print_dce2_co_config(dce2CoProtoConf& co)
+void print_dce2_co_config(const dce2CoProtoConf& co)
 {
     print_dce2_common_config(co.common);
 
-    LogMessage("    Policy : %s\n",
-        dce2_get_policy_name(co.policy));
-    LogMessage("    Reassemble Threshold : %d\n",
-        co.co_reassemble_threshold);
+    ConfigLogger::log_value("policy", dce2_get_policy_name(co.policy));
+    ConfigLogger::log_value("reassemble_threshold", co.co_reassemble_threshold);
 }
 
-bool dce2_paf_abort(Flow* flow, DCE2_SsnData* sd)
+bool dce2_paf_abort(DCE2_SsnData* sd)
 {
-    // FIXIT-L Checking flags from flow is okay here because this is in paf?
-    if ( (flow->get_session_flags() & SSNFLAG_MIDSTREAM) )
-        return true;
-
-    else if ( !(flow->get_session_flags() & SSNFLAG_ESTABLISHED) )
-        return true;
-
     if ((sd != nullptr) && DCE2_SsnNoInspect(sd))
         return true;
 
     return false;
-}
-
-
-static void dce2_protocol_detect(DCE2_SsnData* sd, snort::Packet* pkt)
-{
-    if (sd->trans == DCE2_TRANS_TYPE__TCP)
-    {
-        // FIXIT-M this doesn't look right; profile immediately goes out of scope
-        Profile profile(dce2_tcp_pstat_detect);
-    }
-    else if (sd->trans == DCE2_TRANS_TYPE__SMB)
-    {
-        Profile profile(dce2_smb_pstat_detect);
-    }
-    else
-    {
-        Profile profile(dce2_udp_pstat_detect);
-    }
-
-    DetectionEngine::detect(pkt);
-
-    dce2_detected = 1;
 }
 
 void DCE2_Detect(DCE2_SsnData* sd)
@@ -173,16 +149,16 @@ void DCE2_Detect(DCE2_SsnData* sd)
         DCE2_Detect(sd);
         return;
     }
-    snort::Packet* top_pkt = DetectionEngine::get_current_packet();
-    dce2_protocol_detect(sd, top_pkt);
+    Packet* top_pkt = DetectionEngine::get_current_packet();
+    DetectionEngine::detect(top_pkt);
+    dce2_detected = 1;
     /* Always reset rule option data after detecting */
-    DCE2_ResetRopts(sd , top_pkt);
+    DCE2_ResetRopts(sd, top_pkt);
 }
 
-DCE2_TransType get_dce2_trans_type(const snort::Packet* p)
+DCE2_TransType get_dce2_trans_type(const Packet* p)
 {
-    DCE2_SmbSsnData* smb_data = get_dce2_smb_session_data(p->flow);
-    DCE2_SsnData* sd = (smb_data != nullptr) ? &(smb_data->sd) : nullptr;
+    DCE2_SsnData* sd = get_dce2_session_data(p->flow);
     if ((sd != nullptr) && (sd->trans == DCE2_TRANS_TYPE__SMB))
     {
         return DCE2_TRANS_TYPE__SMB;
@@ -241,13 +217,13 @@ bool DceEndianness::get_offset_endianness(int32_t offset, uint8_t& endian)
     }
 
     endian = (byte_order == DCERPC_BO_FLAG__BIG_ENDIAN) ? ENDIAN_BIG : ENDIAN_LITTLE;
- 
+
     return true;
 }
 
-uint16_t DCE2_GetRpktMaxData(DCE2_SsnData* sd, DCE2_RpktType rtype)
+uint16_t DCE2_GetRpktMaxData(DCE2_RpktType rtype)
 {
-    snort::Packet* p = sd->wire_pkt;
+    Packet* p = DetectionEngine::get_current_packet();
     uint16_t overhead = 0;
 
     switch (rtype)
@@ -257,14 +233,14 @@ uint16_t DCE2_GetRpktMaxData(DCE2_SsnData* sd, DCE2_RpktType rtype)
         break;
 
     case DCE2_RPKT_TYPE__SMB_CO_SEG:
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
             overhead += DCE2_MOCK_HDR_LEN__SMB_CLI;
         else
             overhead += DCE2_MOCK_HDR_LEN__SMB_SRV;
         break;
 
     case DCE2_RPKT_TYPE__SMB_CO_FRAG:
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
             overhead += DCE2_MOCK_HDR_LEN__SMB_CLI + DCE2_MOCK_HDR_LEN__CO_CLI;
         else
             overhead += DCE2_MOCK_HDR_LEN__SMB_SRV + DCE2_MOCK_HDR_LEN__CO_SRV;
@@ -273,7 +249,7 @@ uint16_t DCE2_GetRpktMaxData(DCE2_SsnData* sd, DCE2_RpktType rtype)
     case DCE2_RPKT_TYPE__TCP_CO_SEG:
         break;
     case DCE2_RPKT_TYPE__TCP_CO_FRAG:
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
             overhead += DCE2_MOCK_HDR_LEN__CO_CLI;
         else
             overhead += DCE2_MOCK_HDR_LEN__CO_SRV;
@@ -283,10 +259,10 @@ uint16_t DCE2_GetRpktMaxData(DCE2_SsnData* sd, DCE2_RpktType rtype)
         assert(false);
         return 0;
     }
-    return (snort::Packet::max_dsize - overhead);
+    return (Packet::max_dsize - overhead);
 }
 
-static void dce2_fill_rpkt_info(snort::Packet* rpkt, snort::Packet* p)
+static void dce2_fill_rpkt_info(Packet* rpkt, Packet* p)
 {
     rpkt->endianness = new DceEndianness();
     rpkt->pkth = p->pkth;
@@ -300,10 +276,10 @@ static void dce2_fill_rpkt_info(snort::Packet* rpkt, snort::Packet* p)
     rpkt->user_network_policy_id = p->user_network_policy_id;
 }
 
-snort::Packet* DCE2_GetRpkt(snort::Packet* p,DCE2_RpktType rpkt_type,
+Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
     const uint8_t* data, uint32_t data_len)
 {
-    snort::Packet* rpkt = DetectionEngine::set_next_packet(p);
+    Packet* rpkt = DetectionEngine::set_next_packet(p);
     uint8_t* wrdata = const_cast<uint8_t*>(rpkt->data);
     dce2_fill_rpkt_info(rpkt, p);
     uint16_t data_overhead = 0;
@@ -316,7 +292,7 @@ snort::Packet* DCE2_GetRpkt(snort::Packet* p,DCE2_RpktType rpkt_type,
 
     case DCE2_RPKT_TYPE__SMB_TRANS:
         rpkt->pseudo_type = PSEUDO_PKT_SMB_TRANS;
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
         {
             data_overhead = DCE2_MOCK_HDR_LEN__SMB_CLI;
             memset(wrdata, 0, data_overhead);
@@ -332,7 +308,7 @@ snort::Packet* DCE2_GetRpkt(snort::Packet* p,DCE2_RpktType rpkt_type,
 
     case DCE2_RPKT_TYPE__SMB_CO_SEG:
         rpkt->pseudo_type = PSEUDO_PKT_DCE_SEG;
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
         {
             data_overhead = DCE2_MOCK_HDR_LEN__SMB_CLI;
             memset(wrdata, 0, data_overhead);
@@ -348,7 +324,7 @@ snort::Packet* DCE2_GetRpkt(snort::Packet* p,DCE2_RpktType rpkt_type,
 
     case DCE2_RPKT_TYPE__SMB_CO_FRAG:
         rpkt->pseudo_type = PSEUDO_PKT_DCE_FRAG;
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
         {
             data_overhead = DCE2_MOCK_HDR_LEN__SMB_CLI + DCE2_MOCK_HDR_LEN__CO_CLI;
             memset(wrdata, 0, data_overhead);
@@ -378,7 +354,7 @@ snort::Packet* DCE2_GetRpkt(snort::Packet* p,DCE2_RpktType rpkt_type,
         if (rpkt_type == DCE2_RPKT_TYPE__TCP_CO_FRAG)
         {
             rpkt->pseudo_type = PSEUDO_PKT_DCE_FRAG;
-            if (DCE2_SsnFromClient(p))
+            if (p->is_from_client())
             {
                 data_overhead = DCE2_MOCK_HDR_LEN__CO_CLI;
                 memset(wrdata, 0, data_overhead);
@@ -402,10 +378,10 @@ snort::Packet* DCE2_GetRpkt(snort::Packet* p,DCE2_RpktType rpkt_type,
         return nullptr;
     }
 
-    if ((data_overhead + data_len) > snort::Packet::max_dsize)
-        data_len -= (data_overhead + data_len) - snort::Packet::max_dsize;
+    if ((data_overhead + data_len) > Packet::max_dsize)
+        data_len -= (data_overhead + data_len) - Packet::max_dsize;
 
-    if (data_len > snort::Packet::max_dsize - data_overhead)
+    if (data_len > Packet::max_dsize - data_overhead)
     {
         delete rpkt->endianness;
         rpkt->endianness = nullptr;
@@ -413,14 +389,14 @@ snort::Packet* DCE2_GetRpkt(snort::Packet* p,DCE2_RpktType rpkt_type,
     }
 
     memcpy_s((void*)(rpkt->data + data_overhead),
-        snort::Packet::max_dsize - data_overhead, data, data_len);
+        Packet::max_dsize - data_overhead, data, data_len);
 
     rpkt->dsize = data_len + data_overhead;
     using_rpkt = true;
     return rpkt;
 }
 
-DCE2_Ret DCE2_AddDataToRpkt(snort::Packet* rpkt, const uint8_t* data, uint32_t data_len)
+DCE2_Ret DCE2_AddDataToRpkt(Packet* rpkt, const uint8_t* data, uint32_t data_len)
 {
     if ((rpkt == nullptr) || (data == nullptr) || (data_len == 0))
         return DCE2_RET__ERROR;
@@ -429,16 +405,16 @@ DCE2_Ret DCE2_AddDataToRpkt(snort::Packet* rpkt, const uint8_t* data, uint32_t d
         return DCE2_RET__ERROR;
 
     // FIXIT-L PORT_IF_NEEDED packet size and hdr check
-    const uint8_t* pkt_data_end = rpkt->data + snort::Packet::max_dsize;
+    const uint8_t* pkt_data_end = rpkt->data + Packet::max_dsize;
     const uint8_t* payload_end = rpkt->data + rpkt->dsize;
 
     if ((payload_end + data_len) > pkt_data_end)
         data_len = pkt_data_end - payload_end;
 
-    if (data_len > snort::Packet::max_dsize - rpkt->dsize)
+    if (data_len > Packet::max_dsize - rpkt->dsize)
         return DCE2_RET__ERROR;
 
-    memcpy_s((void*)(payload_end), snort::Packet::max_dsize - rpkt->dsize,
+    memcpy_s((void*)(payload_end), Packet::max_dsize - rpkt->dsize,
         data, data_len);
 
     rpkt->dsize += (uint16_t)data_len;

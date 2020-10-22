@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_segment.cc author davis mcpherson <davmcphe@@cisco.com>
+// tcp_segment.cc author davis mcpherson <davmcphe@cisco.com>
 // Created on: Sep 21, 2015
 
 #ifdef HAVE_CONFIG_H
@@ -25,73 +25,131 @@
 
 #include "tcp_segment_node.h"
 
+#include "main/thread.h"
+#include "memory/memory_cap.h"
 #include "utils/util.h"
 
 #include "segment_overlap_editor.h"
 #include "tcp_module.h"
 
-// FIXIT-P this is going to set each member 2X; once here and once in init
-// separate ctors with default initializers would set them only once
-TcpSegmentNode::TcpSegmentNode() :
-    prev(nullptr), next(nullptr), data(nullptr),
-    tv({ 0, 0 }), ts(0), seq(0), offset(0), orig_dsize(0),
-    payload_size(0), urg_offset(0), buffered(false)
+#define USE_RESERVE
+#ifdef USE_RESERVE
+static THREAD_LOCAL TcpSegmentNode* reserved = nullptr;
+static THREAD_LOCAL unsigned reserve_sz = 0;
+
+static constexpr unsigned num_res = 4096;
+static constexpr unsigned res_min = 1024;
+static constexpr unsigned res_max = 1460;
+#endif
+
+void TcpSegmentNode::setup()
 {
+#ifdef USE_RESERVE
+    reserved = nullptr;
+    reserve_sz = 0;
+#endif
+}
+
+void TcpSegmentNode::clear()
+{
+#ifdef USE_RESERVE
+    while ( reserved )
+    {
+        TcpSegmentNode* tsn = reserved;
+        reserved = reserved->next;
+        memory::MemoryCap::update_deallocations(sizeof(*tsn) + tsn->size);
+        tcpStats.mem_in_use -= tsn->size;
+        snort_free(tsn);
+    }
+    reserve_sz = 0;
+#endif
 }
 
 //-------------------------------------------------------------------------
 // TcpSegment stuff
 //-------------------------------------------------------------------------
-TcpSegmentNode* TcpSegmentNode::init(TcpSegmentDescriptor& tsd)
+
+TcpSegmentNode* TcpSegmentNode::create(
+    const struct timeval& tv, const uint8_t* payload, uint16_t len)
 {
-    return init(tsd.get_pkt()->pkth->ts, tsd.get_pkt()->data, tsd.get_seg_len() );
+    TcpSegmentNode* tsn;
+
+#ifdef USE_RESERVE
+    if ( reserved and len > res_min and len <= res_max )
+    {
+        tsn = reserved;
+        reserved = tsn->next;
+        --reserve_sz;
+    }
+    else
+#endif
+    {
+        size_t size = sizeof(*tsn) + len;
+        memory::MemoryCap::update_allocations(size);
+        tsn = (TcpSegmentNode*)snort_alloc(size);
+        tsn->size = len;
+        tcpStats.mem_in_use += len;
+    }
+    tsn->tv = tv;
+    tsn->i_len = tsn->c_len = len;
+    memcpy(tsn->data, payload, len);
+
+    tsn->prev = tsn->next = nullptr;
+    tsn->i_seq = tsn->c_seq = 0;
+    tsn->offset = 0;
+    tsn->ts = 0;
+
+    return tsn;
+}
+
+TcpSegmentNode* TcpSegmentNode::init(const TcpSegmentDescriptor& tsd)
+{
+    return create(tsd.get_pkt()->pkth->ts, tsd.get_pkt()->data, tsd.get_len());
 }
 
 TcpSegmentNode* TcpSegmentNode::init(TcpSegmentNode& tns)
 {
-    return init(tns.tv, tns.payload(), tns.payload_size);
-}
-
-TcpSegmentNode* TcpSegmentNode::init(const struct timeval& tv, const uint8_t* data, unsigned dsize)
-{
-    TcpSegmentNode* ss = new TcpSegmentNode;
-    ss->data = ( uint8_t* )snort_alloc(dsize);
-    memcpy(ss->data, data, dsize);
-    ss->offset = 0;
-    ss->tv = tv;
-    ss->orig_dsize = dsize;
-    ss->payload_size = ss->orig_dsize;
-    tcpStats.mem_in_use += dsize;
-    return ss;
+    return create(tns.tv, tns.payload(), tns.c_len);
 }
 
 void TcpSegmentNode::term()
 {
-    snort_free(data);
+#ifdef USE_RESERVE
+    if ( size == res_max and reserve_sz < num_res )
+    {
+        next = reserved;
+        reserved = this;
+        reserve_sz++;
+    }
+    else
+#endif
+    {
+        memory::MemoryCap::update_deallocations(sizeof(*this) + size);
+        tcpStats.mem_in_use -= size;
+        snort_free(this);
+    }
     tcpStats.segs_released++;
-    tcpStats.mem_in_use -= orig_dsize;
-    delete this;
 }
 
-bool TcpSegmentNode::is_retransmit(const uint8_t* rdata, uint16_t rsize, uint32_t rseq, uint16_t orig_dsize, bool *full_retransmit)
+bool TcpSegmentNode::is_retransmit(const uint8_t* rdata, uint16_t rsize,
+    uint32_t rseq, uint16_t orig_dsize, bool *full_retransmit)
 {
     // retransmit must have same payload at same place
-    if ( !SEQ_EQ(seq, rseq) )
+    if ( !SEQ_EQ(i_seq, rseq) )
         return false;
 
-    if( orig_dsize == payload_size )
+    if ( orig_dsize == c_len )
     {
-        if ( ( ( payload_size <= rsize )and !memcmp(data, rdata, payload_size) )
-            or ( ( payload_size > rsize )and !memcmp(data, rdata, rsize) ) )
-        {
+        uint16_t cmp_len = ( c_len <= rsize ) ? c_len : rsize;
+        if ( !memcmp(data, rdata, cmp_len) )
             return true;
-        }
     }
     //Checking for a possible split of segment in which case
     //we compare complete data of the segment to find a retransmission
-    else if(full_retransmit and (orig_dsize == rsize) and !memcmp(data, rdata, rsize) )
+    else if ( (orig_dsize == rsize) and !memcmp(data, rdata, rsize) )
     {
-        *full_retransmit = true;
+        if ( full_retransmit )
+            *full_retransmit = true;
         return true;
     }
 

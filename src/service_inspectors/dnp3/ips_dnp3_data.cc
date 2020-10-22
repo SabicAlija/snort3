@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,7 +26,7 @@
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "protocols/packet.h"
 #include "profiler/profiler.h"
 
@@ -57,9 +57,9 @@ public:
 
 uint32_t Dnp3DataOption::hash() const
 {
-    uint32_t a = 0, b = 0, c = 0;
+    uint32_t a = IpsOption::hash(), b = 0, c = 0;
 
-    mix_str(a, b, c, get_name());
+    mix(a, b, c);
     finalize(a,b,c);
 
     return c;
@@ -67,12 +67,12 @@ uint32_t Dnp3DataOption::hash() const
 
 bool Dnp3DataOption::operator==(const IpsOption& ips) const
 {
-    return !strcmp(get_name(), ips.get_name());
+    return IpsOption::operator==(ips);
 }
 
 IpsOption::EvalStatus Dnp3DataOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(dnp3_data_perf_stats);
+    RuleProfile profile(dnp3_data_perf_stats);
 
     if ((p->has_tcp_data() && !p->is_full_pdu()) || !p->flow || !p->dsize)
         return NO_MATCH;

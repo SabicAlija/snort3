@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,12 +23,16 @@
 #define APP_FORECAST_H
 
 #include <ctime>
+
 #include "flow/flow.h"
 #include "protocols/packet.h"
+#include "utils/cpp_macros.h"
+
 #include "appid_types.h"
 #include "application_ids.h"
 
 class AppIdSession;
+class OdpContext;
 namespace snort
 {
 struct Packet;
@@ -44,20 +48,22 @@ struct Packet;
 
 struct AFElement
 {
+    AFElement(AppId forecast, AppId target) : forecast(forecast), target(target) { }
+
     AppId forecast;
     AppId target;
 };
 
+PADDING_GUARD_BEGIN
 class AFActKey
 {
     public:
-        AFActKey(snort::Packet* p, AppidSessionDirection dir, AppId forecast, AFActKey &master_key)
+        AFActKey(snort::Packet* p, AppidSessionDirection dir, AppId forecast) :
+            forecast(forecast)
         {
             const snort::SfIp* src = dir ? p->ptrs.ip_api.get_dst() : p->ptrs.ip_api.get_src();
 
-            for (int i = 0; i < 4; i++)
-                master_key.ip[i] = src->get_ip6_ptr()[i];
-            master_key.forecast = forecast;
+            memcpy(ip, src->get_ip6_ptr(), sizeof(ip));
         }
 
         bool operator<(const AFActKey &key) const
@@ -69,18 +75,17 @@ class AFActKey
         uint32_t ip[4];
         AppId forecast;
 };
+PADDING_GUARD_END
 
 struct AFActVal
 {
+    AFActVal(AppId target, time_t last) : target(target), last(last) { }
+
     AppId target;
     time_t last;
 };
 
-void appid_forecast_tinit();
-void appid_forecast_tterm();
-void appid_forecast_pterm();
-void add_af_indicator(AppId, AppId, AppId);
-void check_session_for_AF_indicator(snort::Packet*, AppidSessionDirection, AppId);
+void check_session_for_AF_indicator(snort::Packet*, AppidSessionDirection, AppId, const OdpContext&);
 AppId check_session_for_AF_forecast(AppIdSession&, snort::Packet*, AppidSessionDirection, AppId);
 
 #endif

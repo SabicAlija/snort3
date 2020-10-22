@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -47,55 +47,55 @@ public:
     void set_debug_mode()
     { debug = true; }
 
-    bool get_debug_mode()
+    bool get_debug_mode() const
     { return debug; }
 
     void set_stream_insert(bool enable)
     { inspect_stream_insert = enable; }
 
-    bool get_stream_insert()
+    bool get_stream_insert() const
     { return inspect_stream_insert; }
 
     void set_max_queue_events(unsigned num_events)
     { max_queue_events = num_events; }
 
-    unsigned get_max_queue_events()
+    unsigned get_max_queue_events() const
     { return max_queue_events; }
 
     void set_bleed_over_port_limit(unsigned n)
     { bleedover_port_limit = n; }
 
-    int get_bleed_over_port_limit()
+    int get_bleed_over_port_limit() const
     { return bleedover_port_limit; }
 
-    int get_single_rule_group()
+    int get_single_rule_group() const
     { return portlists_flags & PL_SINGLE_RULE_GROUP; }
 
-    int get_bleed_over_warnings()
+    int get_bleed_over_warnings() const
     { return portlists_flags & PL_BLEEDOVER_WARNINGS_ENABLED; }
 
-    int get_debug_print_nc_rules()
+    int get_debug_print_nc_rules() const
     { return portlists_flags & PL_DEBUG_PRINT_NC_DETECT_RULES; }
 
-    int get_debug_print_rule_group_build_details()
+    int get_debug_print_rule_group_build_details() const
     { return portlists_flags & PL_DEBUG_PRINT_RULEGROUP_BUILD; }
 
-    int get_debug_print_rule_groups_compiled()
+    int get_debug_print_rule_groups_compiled() const
     { return portlists_flags & PL_DEBUG_PRINT_RULEGROUPS_COMPILED; }
 
-    int get_debug_print_rule_groups_uncompiled()
+    int get_debug_print_rule_groups_uncompiled() const
     { return portlists_flags & PL_DEBUG_PRINT_RULEGROUPS_UNCOMPILED; }
 
     void set_debug_print_fast_patterns(bool b)
     { debug_print_fast_pattern = b; }
 
-    bool get_debug_print_fast_patterns()
+    bool get_debug_print_fast_patterns() const
     { return debug_print_fast_pattern; }
 
     void set_split_any_any(bool enable)
     { split_any_any = enable; }
 
-    bool get_split_any_any()
+    bool get_split_any_any() const
     { return split_any_any; }
 
     void set_single_rule_group()
@@ -116,54 +116,51 @@ public:
     void set_debug_print_rule_groups_uncompiled()
     { portlists_flags |= PL_DEBUG_PRINT_RULEGROUPS_UNCOMPILED; }
 
-    void set_search_opt(int flag)
+    void set_search_opt(bool flag)
     { search_opt = flag; }
 
-    int get_search_opt()
+    bool get_search_opt() const
     { return search_opt; }
 
     bool set_search_method(const char*);
     const char* get_search_method();
 
+    bool set_offload_search_method(const char*);
     void set_max_pattern_len(unsigned);
+    void set_queue_limit(unsigned);
 
-    const snort::MpseApi* get_search_api()
+    unsigned get_queue_limit() const
+    { return queue_limit; }
+
+    const snort::MpseApi* get_search_api() const
     { return search_api; }
 
-    bool get_trim()
-    { return trim; }
+    const snort::MpseApi* get_offload_search_api() const
+    { return offload_search_api; }
 
-    void trimmed()
-    { num_patterns_trimmed++; }
-
-    int get_num_patterns_trimmed()
-    { return num_patterns_trimmed; }
-
-    int get_num_patterns_truncated()
+    int get_num_patterns_truncated() const
     { return num_patterns_truncated; }
 
-    int set_max(int bytes);
-
-    int get_max_pattern_len()
-    { return max_pattern_len; }
+    unsigned set_max(unsigned bytes);
 
 private:
-    const snort::MpseApi* search_api;
+    const snort::MpseApi* search_api = nullptr;
+    const snort::MpseApi* offload_search_api = nullptr;
 
     bool inspect_stream_insert = true;
-    bool trim;
     bool split_any_any = false;
     bool debug_print_fast_pattern = false;
     bool debug = false;
+    bool search_opt = false;
 
     unsigned max_queue_events = 5;
     unsigned bleedover_port_limit = 1024;
+    unsigned max_pattern_len = 0;
 
-    int search_opt = 0;
+    unsigned queue_limit = 0;
+
     int portlists_flags = 0;
-    int max_pattern_len = 0;
     int num_patterns_truncated = 0;  // due to max_pattern_len
-    int num_patterns_trimmed = 0;    // due to zero byte prefix
 };
 
 #endif

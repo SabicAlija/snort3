@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -45,12 +45,15 @@ bool SpellBook::translate(const char* in, HexVector& out)
 
     while ( in[i] )
     {
+        if ( !isprint(in[i]) )
+            return false;
+
         if ( wild )
         {
             if ( in[i] != '*' )
-                out.push_back(WILD);
+                out.emplace_back(WILD);
 
-            out.push_back(in[i]);
+            out.emplace_back(in[i]);
             wild = false;
         }
         else
@@ -58,7 +61,7 @@ bool SpellBook::translate(const char* in, HexVector& out)
             if ( in[i] == '*' )
                 wild = true;
             else
-                out.push_back(in[i]);
+                out.emplace_back(in[i]);
         }
         ++i;
     }
@@ -84,12 +87,15 @@ void SpellBook::add_spell(
     p->value = val;
 }
 
-bool SpellBook::add_spell(const char* key, const char* val)
+bool SpellBook::add_spell(const char* key, const char*& val)
 {
     HexVector hv;
 
     if ( !translate(key, hv) )
+    {
+        val = nullptr;
         return false;
+    }
 
     unsigned i = 0;
     MagicPage* p = root;
@@ -111,7 +117,10 @@ bool SpellBook::add_spell(const char* key, const char* val)
         ++i;
     }
     if ( p->key == key )
+    {
+        val = p->value.c_str();
         return false;
+    }
 
     add_spell(key, val, hv, i, p);
     return true;

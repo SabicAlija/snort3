@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -67,7 +67,10 @@
 #define PROTO_IS_FTP_DATA(ssn)          FTPP_SI_IS_PROTO(ssn, FTPP_SI_PROTO_FTP_DATA)
 #define PROTO_IS_TELNET(ssn)            FTPP_SI_IS_PROTO(ssn, FTPP_SI_PROTO_TELNET)
 
-#define FTP_FLG_MALWARE  (1<<0)
+#define FTP_FLG_MALWARE                 0x01
+#define FTP_FLG_SEARCH_ABANDONED        0x02
+#define FTP_PROTP_CMD_ISSUED            0x04
+#define FTP_PROTP_CMD_ACCEPT            0x08
 
 typedef struct s_FTP_TELNET_SESSION
 {
@@ -101,6 +104,9 @@ public:
 
     static void init()
     { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;
@@ -166,6 +172,7 @@ struct FTP_SESSION
 
     /* A file is being transferred on ftp-data channel */
     char* filename;
+    size_t path_hash;
     int file_xfer_info; /* -1: ignore, 0: unknown, >0: filename length */
     unsigned char flags;
 
@@ -185,6 +192,9 @@ public:
     static void init()
     { inspector_id = snort::FlowData::create_flow_data_id(); }
 
+    size_t size_of() override
+    { return sizeof(*this); }
+
 public:
     static unsigned inspector_id;
     FTP_SESSION session;
@@ -202,6 +212,7 @@ struct FTP_DATA_SESSION
     FTP_TELNET_SESSION ft_ssn;
     snort::FlowKey ftp_key;
     char* filename;
+    size_t path_hash;
     int data_chan;
     int file_xfer_info;
     FilePosition position;
@@ -222,10 +233,14 @@ public:
     void handle_expected(snort::Packet*) override;
     void handle_eof(snort::Packet*) override;
 
+    size_t size_of() override
+    { return sizeof(*this); }
+
 public:
     static unsigned inspector_id;
     FTP_DATA_SESSION session;
     bool eof_handled = false;
+    bool in_tls = false;
 };
 
 #define FTPDATA_FLG_REASSEMBLY_SET  (1<<0)
@@ -272,8 +287,12 @@ int SetSiInput(FTPP_SI_INPUT*, snort::Packet*);
 struct FtpStats
 {
     PegCount total_packets;
+    PegCount total_bytes;
     PegCount concurrent_sessions;
     PegCount max_concurrent_sessions;
+    PegCount starttls;
+    PegCount ssl_search_abandoned;
+    PegCount ssl_search_abandoned_too_soon;
 };
 
 struct TelnetStats

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,9 +22,7 @@
 #ifndef TCP_STATE_LISTEN_H
 #define TCP_STATE_LISTEN_H
 
-#include "stream/libtcp/tcp_state_handler.h"
-
-class TcpSession;
+#include "tcp_state_handler.h"
 
 class TcpStateListen : public TcpStateHandler
 {

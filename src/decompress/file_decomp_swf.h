@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@
 
 #include "file_decomp.h"
 
-/* FIXIT-L Other than the API prototypes, the other parts of this header should
+/* FIXIT-RC Other than the API prototypes, the other parts of this header should
    be private to file_decomp_swf. */
 
 /* Both ZLIB & LZMA files have an uncompressed eight byte header.  The signature is

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -52,11 +52,11 @@ static const Parameter s_params[] =
 
 static const Parameter enable_packet_tracer_params[] =
 {
-    {"proto", Parameter::PT_INT, nullptr, nullptr, "numerical IP protocol ID filter"},
+    {"proto", Parameter::PT_INT, "0:255", nullptr, "numerical IP protocol ID filter"},
     {"src_ip", Parameter::PT_STRING, nullptr, nullptr, "source IP address filter"},
-    {"src_port", Parameter::PT_INT, nullptr, nullptr, "source port filter"},
+    {"src_port", Parameter::PT_INT, "0:65535", nullptr, "source port filter"},
     {"dst_ip", Parameter::PT_STRING, nullptr, nullptr, "destination IP address filter"},
-    {"dst_port", Parameter::PT_INT, nullptr, nullptr, "destination port filter"},
+    {"dst_port", Parameter::PT_INT, "0:65535", nullptr, "destination port filter"},
     {nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr}
 };
 
@@ -70,16 +70,16 @@ static const Command packet_tracer_cmds[] =
 class PacketTracerDebug : public AnalyzerCommand
 {
   public:
-    PacketTracerDebug(PTSessionConstraints *cs);
-    void execute(Analyzer &) override;
+    PacketTracerDebug(PacketConstraints* cs);
+    bool execute(Analyzer&, void**) override;
     const char *stringify() override { return "PACKET_TRACER_DEBUG"; }
 
   private:
-    PTSessionConstraints constraints = {};
+    PacketConstraints constraints;
     bool enable = false;
 };
 
-PacketTracerDebug::PacketTracerDebug(PTSessionConstraints *cs)
+PacketTracerDebug::PacketTracerDebug(PacketConstraints* cs)
 {
     if (cs)
     {
@@ -88,12 +88,14 @@ PacketTracerDebug::PacketTracerDebug(PTSessionConstraints *cs)
     }
 }
 
-void PacketTracerDebug::execute(Analyzer &)
+bool PacketTracerDebug::execute(Analyzer&, void**)
 {
     if (enable)
         PacketTracer::set_constraints(&constraints);
-    else 
+    else
         PacketTracer::set_constraints(nullptr);
+
+    return true;
 }
 
 static int enable(lua_State* L)
@@ -105,6 +107,9 @@ static int enable(lua_State* L)
     int dport = luaL_optint(L, 5, 0);
 
     SfIp sip, dip;
+    sip.clear();
+    dip.clear();
+
     if (sipstr)
     {
         if (sip.set(sipstr) != SFIP_SUCCESS)
@@ -117,26 +122,32 @@ static int enable(lua_State* L)
             LogMessage("Invalid destination IP address provided: %s\n", dipstr);
     }
 
-    PTSessionConstraints constraints = {};
+    PacketConstraints constraints = {};
 
     if (proto)
-        constraints.protocol = (IpProtocol)proto;
+    {
+        constraints.ip_proto = (IpProtocol)proto;
+        constraints.set_bits |= PacketConstraints::SetBits::IP_PROTO;
+    }
 
     if (sip.is_set())
     {
-        memcpy(&constraints.sip, sip.get_ip6_ptr(), sizeof(constraints.sip));
-        constraints.sip_flag = true;
+        constraints.src_ip = sip;
+        constraints.set_bits |= PacketConstraints::SetBits::SRC_IP;
     }
 
     if (dip.is_set())
     {
-        memcpy(&constraints.dip, dip.get_ip6_ptr(), sizeof(constraints.dip));
-        constraints.dip_flag = true;
+        constraints.dst_ip = dip;
+        constraints.set_bits |= PacketConstraints::SetBits::DST_IP;
     }
 
-    constraints.sport = sport;
-    constraints.dport = dport;
-
+    constraints.src_port = sport;
+    constraints.dst_port = dport;
+    if ( sport )
+        constraints.set_bits |= PacketConstraints::SetBits::SRC_PORT;
+    if ( dport )
+        constraints.set_bits |= PacketConstraints::SetBits::DST_PORT;
     main_broadcast_command(new PacketTracerDebug(&constraints), true);
     return 0;
 }
@@ -158,7 +169,7 @@ bool PacketTracerModule::set(const char *, Value &v, SnortConfig*)
 
     else if ( v.is("output") )
     {
-        switch ( v.get_long() )
+        switch ( v.get_uint8() )
         {
             case PACKET_TRACE_CONSOLE:
                 config->file = "-";
@@ -191,7 +202,7 @@ bool PacketTracerModule::begin(const char*, int, SnortConfig*)
 }
 bool PacketTracerModule::end(const char*, int, SnortConfig*)
 {
-    if (config != nullptr) 
+    if (config != nullptr)
     {
         PacketTracer::configure(config->enabled, config->file);
         delete config;

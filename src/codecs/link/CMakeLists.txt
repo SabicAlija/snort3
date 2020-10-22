@@ -35,3 +35,4 @@ if(STATIC_CODECS)
         ${PLUGIN_SOURCES}
     )
 endif(STATIC_CODECS)
+

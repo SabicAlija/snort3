@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,20 +42,13 @@ static void check_flags(SnortConfig* sc)
     if ((sc->run_flags & RUN_FLAG__INLINE) &&
         (sc->run_flags & RUN_FLAG__INLINE_TEST))
     {
-        FatalError("Cannot use inline adapter mode and inline test "
+        ParseError("Cannot use inline adapter mode and inline test "
             "mode together. \n");
     }
 
     if (Trough::get_loop_count() && !(sc->run_flags & RUN_FLAG__READ))
     {
-        FatalError("--pcap-loop can only be used in combination with pcaps "
-            "on the command line.\n");
-    }
-
-    if ((sc->run_flags & RUN_FLAG__PCAP_RELOAD) &&
-        !(sc->run_flags & RUN_FLAG__READ))
-    {
-        FatalError("--pcap-reload can only be used in combination with pcaps "
+        ParseError("--pcap-loop can only be used in combination with pcaps "
             "on the command line.\n");
     }
 }
@@ -80,16 +73,6 @@ static bool set_arg(
 
     case Parameter::PT_INT:
     case Parameter::PT_PORT:
-    {
-        char* end = nullptr;
-        long n = strtol(val, &end, 0);
-
-        if ( !*end )
-            v.set(n);
-        else
-            ok = false;
-        break;
-    }
     case Parameter::PT_REAL:
     {
         char* end = nullptr;

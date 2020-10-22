@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_state_closed.cc author davis mcpherson <davmcphe@@cisco.com>
+// tcp_state_closed.cc author davis mcpherson <davmcphe@cisco.com>
 // Created on: Jul 30, 2015
 
 #ifdef HAVE_CONFIG_H
@@ -31,10 +31,11 @@
 #include "catch/snort_catch.h"
 #endif
 
+using namespace snort;
+
 TcpStateClosed::TcpStateClosed(TcpStateMachine& tsm) :
     TcpStateHandler(TcpStreamTracker::TCP_CLOSED, tsm)
-{
-}
+{ }
 
 bool TcpStateClosed::syn_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
@@ -44,8 +45,8 @@ bool TcpStateClosed::syn_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 
 bool TcpStateClosed::syn_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    snort::Flow* flow = tsd.get_flow();
-    flow->set_expire(tsd.get_pkt(), trk.session->config->session_timeout);
+    Flow* flow = tsd.get_flow();
+    flow->set_expire(tsd.get_pkt(), trk.session->tcp_config->session_timeout);
     return true;
 }
 
@@ -63,7 +64,7 @@ bool TcpStateClosed::ack_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 
 bool TcpStateClosed::data_seg_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    snort::Flow* flow = tsd.get_flow();
+    Flow* flow = tsd.get_flow();
 
     trk.update_tracker_ack_sent(tsd);
     // data on a segment when we're not accepting data any more alert!
@@ -97,7 +98,7 @@ bool TcpStateClosed::fin_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
     trk.update_tracker_ack_recv(tsd);
 
-    if( tsd.get_seg_len() > 0 )
+    if( tsd.is_data_segment() )
     {
         if ( trk.is_rst_pkt_sent() )
             trk.session->tel.set_tcp_event(EVENT_DATA_AFTER_RESET);
@@ -115,10 +116,7 @@ bool TcpStateClosed::rst_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
         trk.session->update_perf_base_state(TcpStreamTracker::TCP_CLOSING);
         trk.session->set_pkt_action_flag(ACTION_RST);
     }
-    else
-    {
-        trk.session->tel.set_tcp_event(EVENT_BAD_RST);
-    }
+
     return true;
 }
 
@@ -134,14 +132,14 @@ bool TcpStateClosed::do_post_sm_packet_actions(TcpSegmentDescriptor& tsd, TcpStr
 
     if ( trk.get_tcp_event() != TcpStreamTracker::TCP_FIN_RECV_EVENT )
     {
-        TcpStreamTracker::TcpState talker_state = trk.session->get_talker_state();
-        snort::Flow* flow = tsd.get_flow();
+        TcpStreamTracker::TcpState talker_state = trk.session->get_talker_state(tsd);
+        Flow* flow = tsd.get_flow();
 
         if ( ( talker_state == TcpStreamTracker::TCP_TIME_WAIT ) || !flow->two_way_traffic() )
         {
             // The last ACK is a part of the session. Delete the session after processing is
             // complete.
-            trk.session->clear_session(false, true, false, tsd.get_pkt() );
+            trk.session->clear_session(false, true, false, tsd.is_meta_ack_packet() ? nullptr : tsd.get_pkt() );
             flow->session_state |= STREAM_STATE_CLOSED;
             trk.session->set_pkt_action_flag(ACTION_LWSSN_CLOSED);
         }
@@ -150,14 +148,14 @@ bool TcpStateClosed::do_post_sm_packet_actions(TcpSegmentDescriptor& tsd, TcpStr
     return true;
 }
 
-#ifdef FOO  // FIXIT-H UNIT_TEST need work
+#if 0  // FIXIT-M unit tests need work
 #include "tcp_normalizers.h"
 #include "tcp_reassemblers.h"
 
 TEST_CASE("TCP State Closed", "[tcp_closed_state][stream_tcp]")
 {
     // initialization code here
-    snort::Flow* flow = new snort::Flow;
+    Flow* flow = new Flow;
     TcpStreamTracker* ctrk = new TcpStreamTracker(true);
     TcpStreamTracker* strk = new TcpStreamTracker(false);
     TcpEventLogger* tel = new TcpEventLogger;

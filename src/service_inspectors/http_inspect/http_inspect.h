@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,12 +24,16 @@
 // HttpInspect class
 //-------------------------------------------------------------------------
 
+#include "framework/cursor.h"
+#include "log/messages.h"
+
+#include "http_buffer_info.h"
+#include "http_common.h"
 #include "http_enum.h"
 #include "http_field.h"
 #include "http_module.h"
 #include "http_msg_section.h"
 #include "http_stream_splitter.h"
-#include "log/messages.h"
 
 class HttpApi;
 
@@ -42,18 +46,27 @@ public:
     bool get_buf(snort::InspectionBuffer::Type ibt, snort::Packet* p,
         snort::InspectionBuffer& b) override;
     bool get_buf(unsigned id, snort::Packet* p, snort::InspectionBuffer& b) override;
-    bool http_get_buf(unsigned id, uint64_t sub_id, uint64_t form, snort::Packet* p,
-        snort::InspectionBuffer& b);
-    bool get_fp_buf(snort::InspectionBuffer::Type ibt, snort::Packet* p, snort::InspectionBuffer& b) override;
+    const Field& http_get_buf(Cursor& c, snort::Packet* p,
+        const HttpBufferInfo& buffer_info);
+    bool get_fp_buf(snort::InspectionBuffer::Type ibt, snort::Packet* p,
+        snort::InspectionBuffer& b) override;
     bool configure(snort::SnortConfig*) override;
-    void show(snort::SnortConfig*) override { snort::LogMessage("HttpInspect\n"); }
+    void show(const snort::SnortConfig*) const override;
     void eval(snort::Packet* p) override;
     void clear(snort::Packet* p) override;
+
     HttpStreamSplitter* get_splitter(bool is_client_to_server) override
-    {
-        return new HttpStreamSplitter(is_client_to_server, this);
-    }
+    { return new HttpStreamSplitter(is_client_to_server, this); }
+
+    bool can_carve_files() const override
+    { return true; }
+
+    bool can_start_tls() const override
+    { return true; }
+
     static HttpEnums::InspectSection get_latest_is(const snort::Packet* p);
+    static HttpCommon::SourceId get_latest_src(const snort::Packet* p);
+    void disable_detection(snort::Packet* p);
 
     // Callbacks that provide "extra data"
     static int get_xtra_trueip(snort::Flow*, uint8_t**, uint32_t*, uint32_t*);
@@ -66,16 +79,17 @@ private:
     friend HttpStreamSplitter;
 
     bool process(const uint8_t* data, const uint16_t dsize, snort::Flow* const flow,
-        HttpEnums::SourceId source_id_, bool buf_owner) const;
-    static HttpEnums::SourceId get_latest_src(const snort::Packet* p);
+        HttpCommon::SourceId source_id_, bool buf_owner) const;
+    static HttpFlowData* http_get_flow_data(const snort::Flow* flow);
+    static void http_set_flow_data(snort::Flow* flow, HttpFlowData* flow_data);
 
     const HttpParaList* const params;
 
     // Registrations for "extra data"
-    static uint32_t xtra_trueip_id;
-    static uint32_t xtra_uri_id;
-    static uint32_t xtra_host_id;
-    static uint32_t xtra_jsnorm_id;
+    const uint32_t xtra_trueip_id;
+    const uint32_t xtra_uri_id;
+    const uint32_t xtra_host_id;
+    const uint32_t xtra_jsnorm_id;
 };
 
 #endif

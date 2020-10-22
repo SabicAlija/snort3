@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2005 Martin Roesch <roesch@sourcefire.com>
 //
@@ -31,15 +31,14 @@ class ContextSwitcher;
 namespace snort
 {
 class Flow;
+class SFDAQInstance;
 struct Packet;
 struct SnortConfig;
-
-typedef void (* MainHook_f)(Packet*);
 
 class Snort
 {
 public:
-    static SnortConfig* get_reload_config(const char* fname);
+    static SnortConfig* get_reload_config(const char* fname, const char* plugin_path = nullptr);
     static SnortConfig* get_updated_policy(SnortConfig*, const char* fname, const char* iname);
     static SnortConfig* get_updated_module(SnortConfig*, const char* name);
     static void setup(int argc, char* argv[]);
@@ -48,40 +47,21 @@ public:
     static void cleanup();
 
     static bool is_starting();
-    static bool is_reloading();
     static bool has_dropped_privileges();
-
-    static bool thread_init_privileged(const char* intf);
-    static void thread_init_unprivileged();
-    static void thread_term();
-
-    static void thread_idle();
-    static void thread_rotate();
-
-    static void capture_packet();
-
-    static DAQ_Verdict process_packet(
-        Packet*, const DAQ_PktHdr_t*, const uint8_t* pkt, bool is_frag=false);
-
-    static DAQ_Verdict packet_callback(void*, const DAQ_PktHdr_t*, const uint8_t*);
-
-    static void inspect(Packet*);
-
-    static void set_main_hook(MainHook_f);
-    static ContextSwitcher* get_switcher();
-
-    SO_PUBLIC static Packet* get_packet();
+    SO_PUBLIC static bool is_reloading();
 
 private:
     static void init(int, char**);
     static void term();
     static void clean_exit(int);
+    static void reload_failure_cleanup(SnortConfig*);
 
 private:
     static bool initializing;
     static bool reloading;
     static bool privileges_dropped;
 };
+
 }
 
 #endif

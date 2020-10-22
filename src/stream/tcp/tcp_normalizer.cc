@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_normalization.cc author davis mcpherson <davmcphe@@cisco.com>
+// tcp_normalization.cc author davis mcpherson <davmcphe@cisco.com>
 // Created on: Jul 31, 2015
 
 #ifdef HAVE_CONFIG_H
@@ -25,10 +25,9 @@
 
 #include "tcp_normalizer.h"
 
-#include "stream/libtcp/tcp_stream_session.h"
-#include "stream/libtcp/tcp_stream_tracker.h"
-
-#include "packet_io/active.h"
+#include "tcp_module.h"
+#include "tcp_stream_session.h"
+#include "tcp_stream_tracker.h"
 
 using namespace snort;
 
@@ -59,14 +58,13 @@ NormPegs TcpNormalizer::get_normalization_counts(unsigned& c)
 }
 
 void TcpNormalizer::trim_payload(
-    TcpNormalizerState&,
-    TcpSegmentDescriptor& tsd, uint32_t max, NormMode mode, TcpPegCounts peg)
+    TcpNormalizerState&, TcpSegmentDescriptor& tsd, uint32_t max, NormMode mode, TcpPegCounts peg)
 {
     if (mode == NORM_MODE_ON)
     {
-        uint16_t fat = tsd.get_seg_len() - max;
-        tsd.set_seg_len(max);
-        tsd.get_pkt()->packet_flags |= PKT_RESIZED;
+        uint16_t fat = tsd.get_len() - max;
+        tsd.set_len(max);
+        tsd.set_packet_flags(PKT_RESIZED);
         tsd.set_end_seq(tsd.get_end_seq() - fat);
     }
 
@@ -74,8 +72,7 @@ void TcpNormalizer::trim_payload(
 }
 
 bool TcpNormalizer::strip_tcp_timestamp(
-    TcpNormalizerState&,
-    TcpSegmentDescriptor& tsd, const tcp::TcpOption* opt, NormMode mode)
+    TcpNormalizerState&, TcpSegmentDescriptor& tsd, const tcp::TcpOption* opt, NormMode mode)
 {
     tcp_norm_stats[PC_TCP_TS_NOP][mode]++;
 
@@ -83,7 +80,7 @@ bool TcpNormalizer::strip_tcp_timestamp(
     {
         // set raw option bytes to nops
         memset((void*)opt, (uint32_t)tcp::TcpOptCode::NOP, tcp::TCPOLEN_TIMESTAMP);
-        tsd.get_pkt()->packet_flags |= PKT_MODIFIED;
+        tsd.set_packet_flags(PKT_MODIFIED);
         return true;
     }
 
@@ -99,38 +96,40 @@ bool TcpNormalizer::packet_dropper(
 
     if (mode == NORM_MODE_ON)
     {
-        Active::drop_packet(tsd.get_pkt());
+        tsd.drop_packet();
+        tcpStats.discards++;
         return true;
     }
 
+    tcpStats.discards_skipped++;
     return false;
 }
 
 void TcpNormalizer::trim_syn_payload(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd, uint32_t max)
 {
-    if (tsd.get_seg_len() > max)
+    if (tsd.get_len() > max)
         trim_payload(tns, tsd, max, (NormMode)tns.trim_syn, PC_TCP_TRIM_SYN);
 }
 
 void TcpNormalizer::trim_rst_payload(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd, uint32_t max)
 {
-    if (tsd.get_seg_len() > max)
+    if (tsd.get_len() > max)
         trim_payload(tns, tsd, max, (NormMode)tns.trim_rst, PC_TCP_TRIM_RST);
 }
 
 void TcpNormalizer::trim_win_payload(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd, uint32_t max)
 {
-    if (tsd.get_seg_len() > max)
+    if (tsd.get_len() > max)
         trim_payload(tns, tsd, max, (NormMode)tns.trim_win, PC_TCP_TRIM_WIN);
 }
 
 void TcpNormalizer::trim_mss_payload(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd, uint32_t max)
 {
-    if (tsd.get_seg_len() > max)
+    if (tsd.get_len() > max)
         trim_payload(tns, tsd, max, (NormMode)tns.trim_mss, PC_TCP_TRIM_MSS);
 }
 
@@ -147,14 +146,15 @@ void TcpNormalizer::ecn_tracker(
 }
 
 void TcpNormalizer::ecn_stripper(
-    TcpNormalizerState& tns, Packet* p)
+    TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
-    if (!tns.session->ecn && (p->ptrs.tcph->th_flags & (TH_ECE | TH_CWR)))
+    const tcp::TCPHdr* tcph = tsd.get_tcph();
+    if (!tns.session->ecn && (tcph->th_flags & (TH_ECE | TH_CWR)))
     {
         if (tns.strip_ecn == NORM_MODE_ON)
         {
-            (const_cast<tcp::TCPHdr*>(p->ptrs.tcph))->th_flags &= ~(TH_ECE | TH_CWR);
-            p->packet_flags |= PKT_MODIFIED;
+            (const_cast<tcp::TCPHdr*>(tcph))->th_flags &= ~(TH_ECE | TH_CWR);
+            tsd.set_packet_flags(PKT_MODIFIED);
         }
 
         tcp_norm_stats[PC_TCP_ECN_SSN][tns.strip_ecn]++;
@@ -188,35 +188,40 @@ uint32_t TcpNormalizer::get_stream_window(
 uint32_t TcpNormalizer::get_tcp_timestamp(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd, bool strip)
 {
-    tcp::TcpOptIterator iter(tsd.get_tcph(), tsd.get_pkt() );
+    if ( tsd.is_meta_ack_packet() )
+        return TF_NONE;
 
-    // using const because non-const is not supported
-    for ( const tcp::TcpOption& opt : iter )
+    if ( tsd.get_pkt()->ptrs.decode_flags & DECODE_TCP_TS )
     {
-        if ( opt.code == tcp::TcpOptCode::TIMESTAMP )
+        tcp::TcpOptIterator iter(tsd.get_tcph(), tsd.get_pkt() );
+
+        // using const because non-const is not supported
+        for ( const tcp::TcpOption& opt : iter )
         {
-            bool stripped = false;
-
-            if (strip)
-                stripped = strip_tcp_timestamp(tns, tsd, &opt, (NormMode)tns.opt_block);
-
-            if (!stripped)
+            if ( opt.code == tcp::TcpOptCode::TIMESTAMP )
             {
-                tsd.set_ts(extract_32bits(opt.data) );
-                return TF_TSTAMP;
+                bool stripped = false;
+
+                if (strip)
+                    stripped = strip_tcp_timestamp(tns, tsd, &opt, (NormMode)tns.opt_block);
+
+                if (!stripped)
+                {
+                    tsd.set_timestamp(extract_32bits(opt.data) );
+                    return TF_TSTAMP;
+                }
             }
         }
     }
-    tsd.set_ts(0);
-
+    tsd.set_timestamp(0);
     return TF_NONE;
 }
 
 bool TcpNormalizer::validate_rst_seq_geq(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
-    // FIXIT-H check for rcv_nxt == 0 is hack for uninitialized rcv_nxt, fix this
-    if ( ( tns.tracker->rcv_nxt == 0 ) || SEQ_GEQ(tsd.get_seg_seq(), tns.tracker->rcv_nxt) )
+    // FIXIT-M check for rcv_nxt == 0 is hack for uninitialized rcv_nxt
+    if ( ( tns.tracker->rcv_nxt == 0 ) || SEQ_GEQ(tsd.get_seq(), tns.tracker->rcv_nxt) )
         return true;
 
     return false;
@@ -225,14 +230,14 @@ bool TcpNormalizer::validate_rst_seq_geq(
 bool TcpNormalizer::validate_rst_end_seq_geq(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
-    // FIXIT-H check for r_win_base == 0 is hack for uninitialized r_win_base, fix this
+    // FIXIT-M check for r_win_base == 0 is hack for uninitialized r_win_base
     if ( tns.tracker->r_win_base == 0 )
         return true;
 
     if ( SEQ_GEQ(tsd.get_end_seq(), tns.tracker->r_win_base))
     {
         // reset must be admitted when window closed
-        if (SEQ_LEQ(tsd.get_seg_seq(), tns.tracker->r_win_base + get_stream_window(tns, tsd)))
+        if (SEQ_LEQ(tsd.get_seq(), tns.tracker->r_win_base + get_stream_window(tns, tsd)))
             return true;
     }
 
@@ -244,8 +249,8 @@ bool TcpNormalizer::validate_rst_seq_eq(
 {
     uint32_t expected_seq = tns.tracker->rcv_nxt + tns.tracker->get_fin_seq_adjust();
 
-    // FIXIT-H check for rcv_nxt == 0 is hack for uninitialized rcv_nxt, fix this
-    if ( ( tns.tracker->rcv_nxt == 0 ) || SEQ_EQ(tsd.get_seg_seq(), expected_seq) )
+    // FIXIT-M check for rcv_nxt == 0 is hack for uninitialized rcv_nxt
+    if ( ( tns.tracker->rcv_nxt == 0 ) || SEQ_EQ(tsd.get_seq(), expected_seq) )
         return true;
 
     return false;
@@ -264,20 +269,30 @@ bool TcpNormalizer::validate_rst(
 int TcpNormalizer::validate_paws_timestamp(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
-    if ( ( (int)( ( tsd.get_ts() - tns.peer_tracker->get_ts_last() ) + tns.paws_ts_fudge ) ) < 0 )
+    const uint32_t peer_ts_last = tns.peer_tracker->get_ts_last();
+    if ( peer_ts_last && ( ( (int)( ( tsd.get_timestamp() - peer_ts_last ) + tns.paws_ts_fudge ) ) < 0 ) )
     {
-        /* bail, we've got a packet outside the PAWS window! */
-        //inc_tcp_discards();
-        tns.session->tel.set_tcp_event(EVENT_BAD_TIMESTAMP);
-        packet_dropper(tns, tsd, NORM_TCP_OPT);
-        return ACTION_BAD_PKT;
+        if ( tsd.get_pkt()->is_retry() )
+        {
+            //  Retry packets can legitimately have old timestamps
+            //  in TCP options (if a re-transmit comes in before
+            //  the retry) so don't consider it an error.
+            tsd.set_timestamp(tns.peer_tracker->get_ts_last());
+            return ACTION_NOTHING;
+        }
+        else
+        {
+            /* bail, we've got a packet outside the PAWS window! */
+            tns.session->tel.set_tcp_event(EVENT_BAD_TIMESTAMP);
+            packet_dropper(tns, tsd, NORM_TCP_OPT);
+            return ACTION_BAD_PKT;
+        }
     }
     else if ( ( tns.peer_tracker->get_ts_last() != 0 )
-        && ( ( uint32_t )tsd.get_pkt()->pkth->ts.tv_sec > tns.peer_tracker->get_ts_last_packet() +
+        && ( ( uint32_t )tsd.get_packet_timestamp() > tns.peer_tracker->get_ts_last_packet() +
         PAWS_24DAYS ) )
     {
         /* this packet is from way too far into the future */
-        //inc_tcp_discards();
         tns.session->tel.set_tcp_event(EVENT_BAD_TIMESTAMP);
         packet_dropper(tns, tsd, NORM_TCP_OPT);
         return ACTION_BAD_PKT;
@@ -313,7 +328,7 @@ int TcpNormalizer::validate_paws(
         tns.session->tel.set_tcp_event(EVENT_NO_TIMESTAMP);
 
         /* Ignore the timestamp for this first packet, next one will checked. */
-        if ( tns.session->config->policy == StreamPolicy::OS_SOLARIS )
+        if ( tns.session->tcp_config->policy == StreamPolicy::OS_SOLARIS )
             tns.tracker->clear_tf_flags(TF_TSTAMP);
 
         packet_dropper(tns, tsd, NORM_TCP_OPT);
@@ -330,7 +345,7 @@ int TcpNormalizer::handle_paws_no_timestamps(
         if (!(tns.peer_tracker->get_tf_flags() & TF_TSTAMP))
         {
             // SYN skipped, may have missed talker's timestamp , so set it now.
-            if (tsd.get_ts() == 0)
+            if (tsd.get_timestamp() == 0)
                 tns.peer_tracker->set_tf_flags(TF_TSTAMP | TF_TSTAMP_ZERO);
             else
                 tns.peer_tracker->set_tf_flags(TF_TSTAMP);
@@ -338,10 +353,11 @@ int TcpNormalizer::handle_paws_no_timestamps(
 
         // Only valid to test this if listener is using timestamps. Otherwise, timestamp
         // in this packet is not used, regardless of its value.
-        if ( ( tns.paws_drop_zero_ts && ( tsd.get_ts() == 0 ) ) &&
+        if ( ( tns.paws_drop_zero_ts && ( tsd.get_timestamp() == 0 ) ) &&
             ( tns.tracker->get_tf_flags() & TF_TSTAMP ) )
         {
             tns.session->tel.set_tcp_event(EVENT_BAD_TIMESTAMP);
+            packet_dropper(tns, tsd, NORM_TCP_BLOCK);
             return ACTION_BAD_PKT;
         }
     }

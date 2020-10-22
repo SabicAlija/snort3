@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -37,6 +37,8 @@
 #include "ftp_bounce_lookup.h"
 #include "ftp_cmd_lookup.h"
 #include "ftpp_return_codes.h"
+
+using namespace snort;
 
 #define CONF_SEPARATORS " \n"
 
@@ -355,7 +357,7 @@ static int DoNextFormat(FTP_PARAM_FMT* ThisFmt, int allocated,
     char* ErrorString, int ErrStrLen)
 {
     FTP_PARAM_FMT* NextFmt;
-    int iRet = FTPP_SUCCESS;
+    int iRet;
     char* fmt = NextToken(CONF_SEPARATORS);
 
     if (!fmt)
@@ -413,7 +415,7 @@ static int DoNextFormat(FTP_PARAM_FMT* ThisFmt, int allocated,
             {
                 /* explicit check that we have enough room for copy */
                 if (numChoices <= ThisFmt->numChoices)
-                    snort::ParseError("Can't do memcpy - index out of range ");
+                    ParseError("Can't do memcpy - index out of range ");
 
                 memcpy(tmpChoices, ThisFmt->choices,
                     sizeof(FTP_PARAM_FMT*) * ThisFmt->numChoices);
@@ -592,9 +594,10 @@ int ProcessFTPCmdValidity(
 
     iRet = DoNextFormat(HeadFmt, 0, ErrorString, ErrStrLen);
 
-    /* Need to check to be sure we got a complete command  */
+    /* Need to check to be sure we got a complete command */
     if (iRet)
     {
+        ftpp_ui_config_reset_ftp_cmd_format(HeadFmt);
         return FTPP_FATAL_ERR;
     }
 
@@ -646,7 +649,7 @@ int ProcessFTPAllowBounce(
 
     if (iRet)
     {
-        snort::ParseError("Failed to add configuration for Bounce object '%s'.", ALLOW_BOUNCE);
+        ParseError("Failed to add configuration for Bounce object '%s'.", ALLOW_BOUNCE);
         snort_free(newBounce);
         return FTPP_FATAL_ERR;
     }

@@ -3,10 +3,10 @@ project (snort CXX C)
 
 set (VERSION_MAJOR 3)
 set (VERSION_MINOR 0)
-set (VERSION_PATCH 0)
+set (VERSION_PATCH 3)
 set (VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
 
-set (CMAKE_CXX_STANDARD 11)
+set (CMAKE_CXX_STANDARD 14)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 set (CMAKE_CXX_EXTENSIONS OFF)
 
@@ -57,8 +57,11 @@ endif (ENABLE_UNIT_TESTS)
 add_subdirectory (src)
 add_subdirectory (tools)
 add_subdirectory (lua)
-add_subdirectory (doc)
 add_subdirectory (daqs)
+
+if ( MAKE_DOC )
+    add_subdirectory (doc)
+endif ( MAKE_DOC )
 
 # Miscellaneous stuff.  Does NOT directly affect Snort's build environment.
 include (${CMAKE_MODULE_PATH}/packaging_data.cmake)
@@ -73,6 +76,8 @@ configure_file(
 add_custom_target(uninstall
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
 
+string(TOUPPER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_UPPER)
+
 message("
 -------------------------------------------------------
 ${CMAKE_PROJECT_NAME} version ${VERSION}
@@ -85,13 +90,21 @@ Install options:
 Compiler options:
     CC:             ${CMAKE_C_COMPILER}
     CXX:            ${CMAKE_CXX_COMPILER}
-    CFLAGS:         ${CMAKE_C_FLAGS}
-    CXXFLAGS:       ${CMAKE_CXX_FLAGS}
+    CFLAGS:         ${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${CMAKE_BUILD_TYPE_UPPER}}
+    CXXFLAGS:       ${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${CMAKE_BUILD_TYPE_UPPER}}
     EXE_LDFLAGS:    ${CMAKE_EXE_LINKER_FLAGS}
     MODULE_LDFLAGS: ${CMAKE_MODULE_LINKER_FLAGS}
 
 Feature options:\
 ")
+
+if (ENABLE_STATIC_DAQ)
+    message("\
+    DAQ Modules:    Static (${DAQ_STATIC_MODULES})")
+else ()
+    message("\
+    DAQ Modules:    Dynamic")
+endif ()
 
 if (HAVE_FLATBUFFERS)
     message("\
@@ -117,6 +130,14 @@ else ()
     ICONV:          OFF")
 endif ()
 
+if (HAVE_LIBUNWIND)
+    message("\
+    Libunwind:      ON")
+else ()
+    message("\
+    Libunwind:      OFF")
+endif ()
+
 if (HAVE_LZMA)
     message("\
     LZMA:           ON")
@@ -125,7 +146,15 @@ else ()
     LZMA:           OFF")
 endif ()
 
-if (HAVE_SAFEC AND SAFEC_ENABLED)
+if (USE_TIRPC)
+    message("\
+    RPC DB:         TIRPC")
+else ()
+    message("\
+    RPC DB:         Built-in")
+endif ()
+
+if (HAVE_SAFEC)
     message("\
     SafeC:          ON")
 else ()

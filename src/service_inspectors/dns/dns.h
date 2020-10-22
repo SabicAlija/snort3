@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -83,7 +83,7 @@ struct DNSNameState
 #define DNS_RR_TYPE_A                       0x0001
 #define DNS_RR_TYPE_NS                      0x0002
 #define DNS_RR_TYPE_MD                      0x0003 // obsolete
-#define DNS_RR_TYPE_MF                      0x0004 // obsolete 
+#define DNS_RR_TYPE_MF                      0x0004 // obsolete
 #define DNS_RR_TYPE_CNAME                   0x0005
 #define DNS_RR_TYPE_SOA                     0x0006
 #define DNS_RR_TYPE_MB                      0x0007 // experimental
@@ -174,6 +174,9 @@ public:
 
     static void init()
     { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;

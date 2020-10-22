@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_stream_config.h author davis mcpherson <davmcphe@@cisco.com>
+// tcp_stream_config.h author davis mcpherson <davmcphe@cisco.com>
 // Created on: Oct 22, 2015
 
 #ifndef TCP_STREAM_CONFIG_H
@@ -28,6 +28,7 @@
 
 #define STREAM_CONFIG_SHOW_PACKETS             0x00000001
 #define STREAM_CONFIG_NO_ASYNC_REASSEMBLY      0x00000002
+#define STREAM_CONFIG_NO_REASSEMBLY            0x00000004
 
 #define STREAM_DEFAULT_SSN_TIMEOUT  30
 
@@ -49,11 +50,9 @@ public:
         return false;
     }
 
-    void show_config();
-    static void show_config(TcpStreamConfig*);
+    void show() const;
 
     StreamPolicy policy = StreamPolicy::OS_DEFAULT;
-    ReassemblyPolicy reassembly_policy = ReassemblyPolicy::OS_DEFAULT;
 
     uint16_t flags = 0;
     uint16_t flush_factor = 0;
@@ -68,8 +67,10 @@ public:
     uint32_t max_consec_small_segs = STREAM_DEFAULT_CONSEC_SMALL_SEGS;
     uint32_t max_consec_small_seg_size = STREAM_DEFAULT_MAX_SMALL_SEG_SIZE;
 
-    int hs_timeout = -1;
     uint32_t paf_max = 16384;
+    int hs_timeout = -1;
+
+    bool no_ack;
 };
 
 #endif

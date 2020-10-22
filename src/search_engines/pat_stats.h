@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,6 +31,7 @@ struct PatMatQStat
     PegCount max_inq;
     PegCount tot_inq_flush;
     PegCount tot_inq_inserts;
+    PegCount tot_inq_overruns;
     PegCount tot_inq_uinserts;
     PegCount non_qualified_events;
     PegCount qualified_events;

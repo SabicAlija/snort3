@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,7 @@
 
 #include "log/messages.h"
 #include "main/snort_config.h"
+#include "trace/trace.h"
 #include "utils/util.h"
 
 #include "dce_smb.h"
@@ -33,7 +34,7 @@
 using namespace snort;
 using namespace std;
 
-Trace TRACE_NAME(dce_smb);
+THREAD_LOCAL const Trace* dce_smb_trace = nullptr;
 
 static const PegInfo dce2_smb_pegs[] =
 {
@@ -82,53 +83,156 @@ static const PegInfo dce2_smb_pegs[] =
     { CountType::SUM, "smb_server_segs_reassembled", "total smb server segments reassembled" },
     { CountType::SUM, "max_outstanding_requests", "total smb maximum outstanding requests" },
     { CountType::SUM, "files_processed", "total smb files processed" },
-    { CountType::SUM, "smbv2_create", "total number of SMBv2 create packets seen" },
-    { CountType::SUM, "smbv2_write", "total number of SMBv2 write packets seen" },
-    { CountType::SUM, "smbv2_read", "total number of SMBv2 read packets seen" },
-    { CountType::SUM, "smbv2_set_info", "total number of SMBv2 set info packets seen" },
-    { CountType::SUM, "smbv2_tree_connect", "total number of SMBv2 tree connect packets seen" },
-    { CountType::SUM, "smbv2_tree_disconnect",
+    { CountType::SUM, "v2_setup", "total number of SMBv2 setup packets seen" },
+    { CountType::SUM, "v2_setup_err_resp", "total number of SMBv2 setup error response packets seen" },
+    { CountType::SUM, "v2_setup_inv_str_sz",
+        "total number of SMBv2 setup packets seen with invalid structure size" },
+    { CountType::SUM, "v2_setup_resp_hdr_err",
+        "total number of SMBv2 setup response packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_tree_cnct", "total number of SMBv2 tree connect packets seen" },
+    { CountType::SUM, "v2_tree_cnct_err_resp",
+        "total number of SMBv2 tree connect error response packets seen" },
+    { CountType::SUM, "v2_tree_cnct_ignored",
+        "total number of SMBv2 setup response packets ignored due to failure in creating tree tracker" },
+    { CountType::SUM, "v2_tree_cnct_inv_str_sz",
+        "total number of SMBv2 tree connect packets seen with invalid structure size" },
+    { CountType::SUM, "v2_tree_cnct_resp_hdr_err",
+        "total number of SMBv2 tree connect response packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_crt", "total number of SMBv2 create packets seen" },
+    { CountType::SUM, "v2_crt_err_resp", "total number of SMBv2 create error response packets seen" },
+    { CountType::SUM, "v2_crt_inv_file_data",
+        "total number of SMBv2 create request packets ignored due to error in getting file name" },
+    { CountType::SUM, "v2_crt_inv_str_sz",
+        "total number of SMBv2 create packets seen with invalid structure size" },
+    { CountType::SUM, "v2_crt_resp_hdr_err",
+        "total number of SMBv2 create response packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_crt_req_hdr_err",
+        "total number of SMBv2 create request packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_crt_rtrkr_misng",
+        "total number of SMBv2 create response packets ignored due to missing create request tracker" },
+    { CountType::SUM, "v2_crt_req_ipc",
+        "total number of SMBv2 create request packets ignored as share type is IPC" },
+    { CountType::SUM, "v2_crt_tree_trkr_misng",
+        "total number of SMBv2 create response packets ignored due to missing tree tracker" },
+    { CountType::SUM, "v2_wrt", "total number of SMBv2 write packets seen" },
+    { CountType::SUM, "v2_wrt_err_resp", "total number of SMBv2 write error response packets seen" },
+    { CountType::SUM, "v2_wrt_ignored",
+        "total number of SMBv2 write packets ignored due to missing trackers or invalid share type" },
+    { CountType::SUM, "v2_wrt_inv_str_sz",
+        "total number of SMBv2 write packets seen with invalid structure size" },
+    { CountType::SUM, "v2_wrt_req_hdr_err",
+        "total number of SMBv2 write request packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_read", "total number of SMBv2 read packets seen" },
+    { CountType::SUM, "v2_read_err_resp", "total number of SMBv2 read error response packets seen" },
+    { CountType::SUM, "v2_read_ignored",
+        "total number of SMBv2 write packets ignored due to missing trackers or invalid share type" },
+    { CountType::SUM, "v2_read_inv_str_sz",
+        "total number of SMBv2 read packets seen with invalid structure size" },
+    { CountType::SUM, "v2_read_rtrkr_misng",
+        "total number of SMBv2 read response packets ignored due to missing read request tracker" },
+    { CountType::SUM, "v2_read_resp_hdr_err",
+        "total number of SMBv2 read response packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_read_req_hdr_err",
+        "total number of SMBv2 read request packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_stinf", "total number of SMBv2 set info packets seen" },
+    { CountType::SUM, "v2_stinf_err_resp", "total number of SMBv2 set info error response packets seen" },
+    { CountType::SUM, "v2_stinf_ignored",
+        "total number of SMBv2 set info packets ignored due to missing trackers or invalid share type" },
+    { CountType::SUM, "v2_stinf_inv_str_sz",
+        "total number of SMBv2 set info packets seen with invalid structure size" },
+    { CountType::SUM, "v2_stinf_req_ftrkr_misng",
+        "total number of SMBv2 set info request packets ignored due to missing file tracker" },
+    { CountType::SUM, "v2_stinf_req_hdr_err",
+        "total number of SMBv2 set info request packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_cls", "total number of SMBv2 close packets seen" },
+    { CountType::SUM, "v2_cls_err_resp", "total number of SMBv2 close error response packets seen" },
+    { CountType::SUM, "v2_cls_ignored",
+        "total number of SMBv2 close packets ignored due to missing trackers or invalid share type" },
+    { CountType::SUM, "v2_cls_inv_str_sz",
+        "total number of SMBv2 close packets seen with invalid structure size" },
+    { CountType::SUM, "v2_cls_req_ftrkr_misng",
+        "total number of SMBv2 close request packets ignored due to missing file tracker" },
+    { CountType::SUM, "v2_cls_req_hdr_err",
+        "total number of SMBv2 close request packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_tree_discn",
         "total number of SMBv2 tree disconnect packets seen" },
-    { CountType::SUM, "smbv2_close", "total number of SMBv2 close packets seen" },
+    { CountType::SUM, "v2_tree_discn_ignored",
+        "total number of SMBv2 tree disconnect packets ignored due to missing trackers or invalid share type" },
+    { CountType::SUM, "v2_tree_discn_inv_str_sz",
+        "total number of SMBv2 tree disconnect packets seen with invalid structure size" },
+    { CountType::SUM, "v2_tree_discn_req_hdr_err",
+        "total number of SMBv2 tree disconnect request packets ignored due to corrupted header" },
+    { CountType::SUM, "v2_logoff", "total number of SMBv2 logoff" },
+    { CountType::SUM, "v2_logoff_inv_str_sz",
+        "total number of SMBv2 logoff packets seen with invalid structure size" },
+    { CountType::SUM, "v2_hdr_err", "total number of SMBv2 packets seen with corrupted hdr" },
+    { CountType::SUM, "v2_bad_next_cmd_offset",
+        "total number of SMBv2 packets seen with invalid next command offset" },
+    { CountType::SUM, "v2_extra_file_data_err",
+        "total number of SMBv2 packets seen with where file data beyond file size is observed" },
+    { CountType::SUM, "v2_inv_file_ctx_err",
+        "total number of times null file context are seen resulting in not being able to set file size" },
+    { CountType::SUM, "v2_msgs_uninspected",
+        "total number of SMBv2 packets seen where command is not being inspected" },
+    { CountType::SUM, "v2_cmpnd_req_lt_crossed",
+        "total number of SMBv2 packets seen where compound requests exceed the smb_max_compound limit" },
     { CountType::NOW, "concurrent_sessions", "total concurrent sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent sessions" },
     { CountType::END, nullptr, nullptr }
 };
 
 static const char* dce2SmbFingerprintPolicyStrings[] =
-{ "Disabled", "Client","Server", "Client and Server" };
+{ "disabled", "client", "server", "client and server" };
 
 static const Parameter s_params[] =
 {
+    { "limit_alerts", Parameter::PT_BOOL, nullptr, "true",
+      "limit DCE alert to at most one per signature per flow" },
+
     { "disable_defrag", Parameter::PT_BOOL, nullptr, "false",
-      " Disable DCE/RPC defragmentation" },
+      "disable DCE/RPC defragmentation" },
+
     { "max_frag_len", Parameter::PT_INT, "1514:65535", "65535",
-      " Maximum fragment size for defragmentation" },
+      "maximum fragment size for defragmentation" },
+
     { "reassemble_threshold", Parameter::PT_INT, "0:65535", "0",
-      " Minimum bytes received before performing reassembly" },
-    { "smb_fingerprint_policy", Parameter::PT_ENUM,
-      "none | client |  server | both ", "none",
-      " Target based SMB policy to use" },
+      "minimum bytes received before performing reassembly" },
+
+    { "smb_fingerprint_policy", Parameter::PT_ENUM, "none | client |  server | both ", "none",
+      "target based SMB policy to use" },
+
     { "policy", Parameter::PT_ENUM,
-      "Win2000 |  WinXP | WinVista | Win2003 | Win2008 | Win7 | Samba | Samba-3.0.37 | Samba-3.0.22 | Samba-3.0.20",
-      "WinXP",
-      " Target based policy to use" },
+      "Win2000 |  WinXP | WinVista | Win2003 | Win2008 | Win7 | Samba | Samba-3.0.37 | "
+      "Samba-3.0.22 | Samba-3.0.20", "WinXP",
+      "target based policy to use" },
+
     { "smb_max_chain", Parameter::PT_INT, "0:255", "3",
-      " SMB max chain size" },
+      "SMB max chain size" },
+
     { "smb_max_compound", Parameter::PT_INT, "0:255", "3",
-      " SMB max compound size" },
-    { "valid_smb_versions", Parameter::PT_MULTI,
-      "v1 | v2 | all", "all",
-      " Valid SMB versions" },
-    { "smb_file_inspection", Parameter::PT_ENUM,
-      "off | on | only", "off",
-      " SMB file inspection" },
-    { "smb_file_depth", Parameter::PT_INT, "-1:", "16384",
-      " SMB file depth for file data" },
+      "SMB max compound size" },
+
+    { "valid_smb_versions", Parameter::PT_MULTI, "v1 | v2 | all", "all",
+      "valid SMB versions" },
+
+    { "smb_file_inspection", Parameter::PT_ENUM, "off | on | only", nullptr,
+      "deprecated (not used): file inspection controlled by smb_file_depth" },
+
+    { "smb_file_depth", Parameter::PT_INT, "-1:32767", "16384",
+      "SMB file depth for file data (-1 = disabled, 0 = unlimited)" },
+
     { "smb_invalid_shares", Parameter::PT_STRING, nullptr, nullptr,
       "SMB shares to alert on " },
+
     { "smb_legacy_mode", Parameter::PT_BOOL, nullptr, "false",
       "inspect only SMBv1" },
+
+    { "smb_max_credit", Parameter::PT_INT, "1:65536", "8192",
+      "Maximum number of outstanding request" },
+
+    { "memcap", Parameter::PT_INT, "512:maxSZ", "8388608",
+      "Memory utilization limit on smb" },
+
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -143,6 +247,7 @@ static const RuleMap dce2_smb_rules[] =
     { DCE2_SMB_BAD_OFF, DCE2_SMB_BAD_OFF_STR },
     { DCE2_SMB_TDCNT_ZE, DCE2_SMB_TDCNT_ZE_STR },
     { DCE2_SMB_NB_LT_SMBHDR, DCE2_SMB_NB_LT_SMBHDR_STR },
+    { DCE2_SMB_NB_LT_COM, DCE2_SMB_NB_LT_COM_STR },
     { DCE2_SMB_NB_LT_BCC, DCE2_SMB_NB_LT_BCC_STR },
     { DCE2_SMB_NB_LT_DSIZE, DCE2_SMB_NB_LT_DSIZE_STR },
     { DCE2_SMB_TDCNT_LT_DSIZE, DCE2_SMB_TDCNT_LT_DSIZE_STR },
@@ -177,7 +282,30 @@ static const RuleMap dce2_smb_rules[] =
     { 0, nullptr }
 };
 
-Dce2SmbModule::Dce2SmbModule() : Module(DCE2_SMB_NAME, DCE2_SMB_HELP, s_params, false, &TRACE_NAME(dce_smb))
+static std::string get_shares(DCE2_List* shares)
+{
+    std::string cmds;
+
+    if ( shares )
+    {
+        for (dce2SmbShare* share = (dce2SmbShare*)DCE2_ListFirst(shares);
+            share;
+            share = (dce2SmbShare*)DCE2_ListNext(shares))
+        {
+            cmds += share->ascii_str;
+            cmds += " ";
+        }
+    }
+
+    if ( !cmds.empty() )
+        cmds.pop_back();
+    else
+        cmds += "none";
+
+    return cmds;
+}
+
+Dce2SmbModule::Dce2SmbModule() : Module(DCE2_SMB_NAME, DCE2_SMB_HELP, s_params)
 {
     memset(&config, 0, sizeof(config));
 }
@@ -188,6 +316,15 @@ Dce2SmbModule::~Dce2SmbModule()
     {
         DCE2_ListDestroy(config.smb_invalid_shares);
     }
+}
+
+void Dce2SmbModule::set_trace(const Trace* trace) const
+{ dce_smb_trace = trace; }
+
+const TraceOption* Dce2SmbModule::get_trace_options() const
+{
+    static const TraceOption dce_smb_trace_options(nullptr, 0, nullptr);
+    return &dce_smb_trace_options;
 }
 
 const RuleMap* Dce2SmbModule::get_rules() const
@@ -205,108 +342,9 @@ PegCount* Dce2SmbModule::get_counts() const
     return (PegCount*)&dce2_smb_stats;
 }
 
-ProfileStats* Dce2SmbModule::get_profile(
-    unsigned index, const char*& name, const char*& parent) const
+ProfileStats* Dce2SmbModule::get_profile() const
 {
-    switch ( index )
-    {
-    case 0:
-        name = "dce_smb_main";
-        parent = nullptr;
-        return &dce2_smb_pstat_main;
-
-    case 1:
-        name = "dce_smb_session";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_session;
-
-    case 2:
-        name = "dce_smb_new_session";
-        parent = "dce_smb_session";
-
-        return &dce2_smb_pstat_new_session;
-
-    case 3:
-        name = "dce_smb_detect";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_detect;
-
-    case 4:
-        name = "dce_smb_log";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_log;
-
-    case 5:
-        name = "dce_smb_co_segment";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_seg;
-
-    case 6:
-        name = "dce_smb_co_fragment";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_frag;
-
-    case 7:
-        name = "dce_smb_co_reassembly";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_reass;
-
-    case 8:
-        name = "dce_smb_co_context";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_ctx;
-
-    case 9:
-        name = "dce_smb_segment";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_seg;
-
-    case 10:
-        name = "dce_smb_request";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_req;
-
-    case 11:
-        name = "dce_smb_uid";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_uid;
-
-    case 12:
-        name = "dce_smb_tid";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_tid;
-
-    case 13:
-        name = "dce_smb_fid";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_fid;
-
-    case 14:
-        name = "dce_smb_file";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_file;
-
-    case 15:
-        name = "dce_smb_file_detect";
-        parent = "dce_smb_file";
-        return &dce2_smb_pstat_smb_file_detect;
-
-    case 16:
-        name = "dce_smb_file_api";
-        parent = "dce_smb_file";
-        return &dce2_smb_pstat_smb_file_api;
-
-    case 17:
-        name = "dce_smb_fingerprint";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_fingerprint;
-
-    case 18:
-        name = "dce_smb_negotiate";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_negotiate;
-    }
-    return nullptr;
+    return &dce2_smb_pstat_main;
 }
 
 static int smb_invalid_share_compare(const void* a, const void* b)
@@ -356,6 +394,19 @@ static void set_smb_versions_mask(dce2SmbProtoConf& config, const char* s)
     {
         config.smb_valid_versions_mask = DCE2_VALID_SMB_VERSION_FLAG_V1;
         config.smb_valid_versions_mask |= DCE2_VALID_SMB_VERSION_FLAG_V2;
+    }
+}
+
+static const char* get_smb_versions(uint16_t mask)
+{
+    switch (mask)
+    {
+    case DCE2_VALID_SMB_VERSION_FLAG_V1:
+        return "v1";
+    case DCE2_VALID_SMB_VERSION_FLAG_V2:
+        return "v2";
+    default:
+        return "all";
     }
 }
 
@@ -426,28 +477,41 @@ static bool set_smb_invalid_shares(dce2SmbProtoConf& config, Value& v)
     return(true);
 }
 
-bool Dce2SmbModule::set(const char* fqn, snort::Value& v, snort::SnortConfig* c)
+bool Dce2SmbModule::set(const char*, Value& v, SnortConfig*)
 {
     if (dce2_set_co_config(v,config.common))
         return true;
+
     else if ( v.is("smb_fingerprint_policy") )
-        config.smb_fingerprint_policy = (dce2SmbFingerprintPolicy)v.get_long();
+        config.smb_fingerprint_policy = (dce2SmbFingerprintPolicy)v.get_uint8();
+
     else if ( v.is("smb_max_chain") )
-        config.smb_max_chain = v.get_long();
+        config.smb_max_chain = v.get_uint8();
+
     else if ( v.is("smb_max_compound") )
-        config.smb_max_compound = v.get_long();
+        config.smb_max_compound = v.get_uint8();
+
     else if ( v.is("valid_smb_versions") )
         set_smb_versions_mask(config,v.get_string());
+
     else if ( v.is("smb_file_inspection") )
-        config.smb_file_inspection = (dce2SmbFileInspection)v.get_long();
+        ParseWarning(WARN_CONF, "smb_file_inspection is deprecated (not used): use smb_file_depth");
+
     else if ( v.is("smb_file_depth") )
-        config.smb_file_depth = v.get_long();
+        config.smb_file_depth = v.get_int16();
+
     else if ( v.is("smb_invalid_shares") )
         return(set_smb_invalid_shares(config,v));
+
     else if ( v.is("smb_legacy_mode"))
         config.legacy_mode = v.get_bool();
-    else
-        return Module::set(fqn, v, c);
+
+    else if ( v.is("smb_max_credit") )
+        config.smb_max_credit = v.get_uint16();
+
+    else if ( v.is("memcap") )
+        config.memcap = v.get_size();
+
     return true;
 }
 
@@ -457,73 +521,21 @@ void Dce2SmbModule::get_data(dce2SmbProtoConf& dce2_smb_config)
     config.smb_invalid_shares = nullptr;
 }
 
-void print_dce2_smb_conf(dce2SmbProtoConf& config)
+void print_dce2_smb_conf(const dce2SmbProtoConf& config)
 {
-    LogMessage("DCE SMB config: \n");
-
     print_dce2_co_config(config.common);
-    LogMessage("    SMB fingerprint policy : %s\n",
+
+    ConfigLogger::log_value("smb_fingerprint_policy",
         dce2SmbFingerprintPolicyStrings[config.smb_fingerprint_policy]);
+    ConfigLogger::log_limit("smb_max_chain", config.smb_max_chain, 0, 1);
+    ConfigLogger::log_limit("smb_max_compound", config.smb_max_compound, 0, 1);
+    ConfigLogger::log_value("valid_smb_versions",
+        get_smb_versions(config.smb_valid_versions_mask));
+    ConfigLogger::log_limit("smb_file_depth", config.smb_file_depth, 0, -1);
+    ConfigLogger::log_list("smb_invalid_shares",
+        get_shares(config.smb_invalid_shares).c_str());
+    ConfigLogger::log_flag("smb_legacy_mode", config.legacy_mode);
+    ConfigLogger::log_limit("smb_max_credit", config.smb_max_credit, 0, 1);
 
-    if (config.smb_max_chain == 0)
-        LogMessage("    Maximum SMB command chaining: Unlimited\n");
-    else if (config.smb_max_chain == 1)
-        LogMessage("    Maximum SMB command chaining: No chaining allowed\n");
-    else
-        LogMessage("    Maximum SMB command chaining: %u\n", config.smb_max_chain);
-
-    if (config.smb_max_compound == 0)
-        LogMessage("    Maximum SMB compounded requests: Unlimited\n");
-    else if (config.smb_max_compound == 1)
-        LogMessage("    Maximum SMB compounded requests: No compounding allowed\n");
-    else
-        LogMessage("    Maximum SMB compounded requests: %u\n", config.smb_max_compound);
-
-    if (config.smb_file_inspection == DCE2_SMB_FILE_INSPECTION_OFF)
-    {
-        LogMessage("    SMB file inspection: Disabled\n");
-    }
-    else
-    {
-        if (config.smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ONLY)
-            LogMessage("    SMB file inspection: Only\n");
-        else
-            LogMessage("    SMB file inspection: Enabled\n");
-
-        if (config.smb_file_depth == -1)
-            LogMessage("    SMB file depth: Disabled\n");
-        else if (config.smb_file_depth == 0)
-            LogMessage("    SMB file depth: Unlimited\n");
-        else
-            LogMessage("    SMB file depth: %d\n",config.smb_file_depth);
-    }
-
-    if (config.smb_valid_versions_mask  == DCE2_VALID_SMB_VERSION_FLAG_V1)
-    {
-        LogMessage("    SMB valid versions : v1\n");
-    }
-    else if (config.smb_valid_versions_mask  == DCE2_VALID_SMB_VERSION_FLAG_V2)
-    {
-        LogMessage("    SMB valid versions : v2\n");
-    }
-    else
-    {
-        LogMessage("    SMB valid versions : all\n");
-    }
-    if (config.smb_invalid_shares != nullptr)
-    {
-        dce2SmbShare* share;
-
-        LogMessage("    Invalid SMB shares:\n");
-
-        for (share = (dce2SmbShare*)DCE2_ListFirst(config.smb_invalid_shares);
-            share != nullptr;
-            share = (dce2SmbShare*)DCE2_ListNext(config.smb_invalid_shares))
-        {
-            LogMessage("    %s\n",share->ascii_str);
-        }
-    }
-    if (config.legacy_mode)
-        LogMessage("    SMB legacy mode enabled\n");
 }
 

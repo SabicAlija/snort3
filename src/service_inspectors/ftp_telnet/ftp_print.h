@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,10 +27,8 @@
 
 #include "ftpp_ui_config.h"
 
-int PrintConfOpt(bool on, const char* Option);
-// FIXIT-L orphan code until FTP client inspector acquires a show() method
-// int PrintFTPClientConf(FTP_CLIENT_PROTO_CONF*);
-int PrintFTPServerConf(FTP_SERVER_PROTO_CONF*);
+void print_conf_client(FTP_CLIENT_PROTO_CONF*);
+void print_conf_server(FTP_SERVER_PROTO_CONF*);
 
 #endif
 

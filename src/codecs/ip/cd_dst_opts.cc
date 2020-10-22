@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -60,7 +60,7 @@ bool Ipv6DSTOptsCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
         return false;
     }
 
-    if ( SnortConfig::get_conf()->hit_ip6_maxopts(codec.ip6_extension_count) )
+    if ( codec.conf->hit_ip6_maxopts(codec.ip6_extension_count) )
         codec_event(codec, DECODE_IP6_EXCESS_EXT_HDR);
 
     if (dsthdr->ip6dest_nxt == IpProtocol::ROUTING)
@@ -88,7 +88,7 @@ bool Ipv6DSTOptsCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 }
 
 void Ipv6DSTOptsCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::DSTOPTS); }
+{ v.emplace_back(ProtocolId::DSTOPTS); }
 
 //-------------------------------------------------------------------------
 // api

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -146,6 +146,20 @@ void TableApi::open_table(bool one_line)
         t->set_one_line(one_line);
         open_tables.push(t);
     }
+}
+
+void TableApi::open_associative_table(const char* name, const char* key)
+{
+    if ( should_delegate(name) )
+    {
+        delegate->open_associative_table(name, key);
+        delegating++;
+        return;
+    }
+
+    Table* t = new Table(name, key, 0);
+    tables.push_back(t);
+    open_tables.push(t);
 }
 
 void TableApi::close_table()

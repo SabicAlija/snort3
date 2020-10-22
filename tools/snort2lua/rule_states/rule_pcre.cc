@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,8 +22,8 @@
 
 #include "conversion_state.h"
 #include "helpers/converter.h"
-#include "rule_states/rule_api.h"
 #include "helpers/s2l_util.h"
+#include "rule_api.h"
 
 namespace rules
 {
@@ -39,7 +39,6 @@ public:
 
 bool Pcre::convert(std::istringstream& data_stream)
 {
-    std::string keyword;
     bool sticky_buffer_set = false;
     std::string buffer = "pkt_data";
 
@@ -83,7 +82,6 @@ bool Pcre::convert(std::istringstream& data_stream)
     pattern += pcre_str.substr(0, pattern_end + 1);
     options = pcre_str.substr(pattern_end + 1, std::string::npos);
     new_opts = "";
-    bool relative = false;
 
     for (char c : options )
     {
@@ -93,8 +91,8 @@ bool Pcre::convert(std::istringstream& data_stream)
         {
         case 'B': sticky_buffer = "pkt_data"; break;
         case 'U': sticky_buffer = "http_uri"; break;
-        case 'P': sticky_buffer = "http_client_body"; break;
-        case 'H': sticky_buffer = "http_header"; break;
+        case 'P': sticky_buffer = "pcre_P_option_body"; break;
+        case 'H': sticky_buffer = "pcre_H_option_header"; break;
         case 'M': sticky_buffer = "http_method"; break;
         case 'C': sticky_buffer = "http_cookie"; break;
         case 'I': sticky_buffer = "http_raw_uri"; break;
@@ -110,11 +108,8 @@ bool Pcre::convert(std::istringstream& data_stream)
         case 'E':
         case 'G':
         case 'O':
-        case '"':     // end of reg_ex
-            new_opts += c;
-            break;
         case 'R':
-            relative = true;
+        case '"':     // end of reg_ex
             new_opts += c;
             break;
         default:
@@ -141,8 +136,7 @@ bool Pcre::convert(std::istringstream& data_stream)
 
     rule_api.add_option("pcre", pattern + new_opts);
 
-    if ( !relative )
-        rule_api.set_curr_options_buffer(buffer);
+    rule_api.set_curr_options_buffer(buffer);
 
     return set_next_rule_state(data_stream);
 }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,7 @@
 #define APPID_DNS_SESSION_H
 
 #include <string>
+#include "pub_sub/appid_events.h"
 
 #define DNS_GOT_QUERY    0x01
 #define DNS_GOT_RESPONSE 0x02
@@ -34,7 +35,7 @@ public:
 
     void reset()
     {
-        host.clear();;
+        host.clear();
         state = 0;
         response_type = 0;
         id = 0;
@@ -76,8 +77,11 @@ public:
     const char* get_host() const
     { return host.c_str(); }
 
-    void set_host(char* host)
-    { this->host = host; }
+    void set_host(char* host, AppidChangeBits& change_bits)
+    {
+        this->host = host;
+        change_bits.set(APPID_DNS_HOST_BIT);
+    }
 
     uint32_t get_host_len() const
     { return host.size(); }

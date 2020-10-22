@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,7 +20,7 @@
 #ifndef DCE_CONTEXT_DATA_H
 #define DCE_CONTEXT_DATA_H
 
-#include "detection/ips_context.h"
+#include "detection/ips_context_data.h"
 #include "dce_utils.h"
 
 struct DCE2_Roptions;

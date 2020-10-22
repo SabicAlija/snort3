@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,7 +36,7 @@
 
 using namespace snort;
 
-THREAD_LOCAL SimpleStats spstats;
+THREAD_LOCAL PsPegStats spstats;
 THREAD_LOCAL ProfileStats psPerfStats;
 
 static void make_port_scan_info(Packet* p, PS_PROTO* proto)
@@ -102,7 +102,7 @@ static void make_open_port_info(Packet* p, PS_PROTO* proto)
 static void make_open_port_info(Packet* p, uint16_t port)
 {
     DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
-    
+
     SfIpString ip_str;
 
     buf.len = safe_snprintf((char*)buf.data, sizeof(buf.data),
@@ -290,117 +290,120 @@ static void PortscanAlert(PS_PKT* ps_pkt, PS_PROTO* proto, int proto_type)
     }
 }
 
-static void PrintIPPortSet(IP_PORT* p)
+static std::string get_protos(int ds)
 {
-    char output_str[80];
+    std::string protos;
 
-    SfIpString ip_str;
-    p->ip.get_addr()->ntop(ip_str);
+    if ( !ds )
+        return "none";
+    if ( (ds & PS_PROTO_ALL) == PS_PROTO_ALL )
+        return "all";
+    if ( ds & PS_PROTO_TCP )
+        protos += "tcp ";
+    if ( ds & PS_PROTO_UDP )
+        protos += "udp ";
+    if ( ds & PS_PROTO_ICMP )
+        protos += "icmp ";
+    if ( ds & PS_PROTO_IP )
+        protos += "ip ";
 
-    if (p->notflag)
-        SnortSnprintf(output_str, sizeof(output_str), "        !%s", ip_str);
-    else
-        SnortSnprintf(output_str, sizeof(output_str), "        %s", ip_str);
+    protos.pop_back();
 
-    if (((p->ip.get_family() == AF_INET6) and (p->ip.get_bits() != 128)) ||
-        ((p->ip.get_family() == AF_INET ) and (p->ip.get_bits() != 32 )))
-        SnortSnprintfAppend(output_str, sizeof(output_str), "/%d", p->ip.get_bits());
-
-    SF_LNODE* cursor;
-    PORTRANGE* pr =(PORTRANGE*)sflist_first(&p->portset.port_list, &cursor);
-
-    if ( pr and pr->port_lo != 0 )
-        SnortSnprintfAppend(output_str, sizeof(output_str), " : ");
-
-    for (; pr != nullptr;
-        pr=(PORTRANGE*)sflist_next(&cursor) )
-    {
-        if ( pr->port_lo != 0)
-        {
-            SnortSnprintfAppend(output_str, sizeof(output_str), "%u", pr->port_lo);
-            if ( pr->port_hi != pr->port_lo )
-            {
-                SnortSnprintfAppend(output_str, sizeof(output_str), "-%u", pr->port_hi);
-            }
-            SnortSnprintfAppend(output_str, sizeof(output_str), " ");
-        }
-    }
-    LogMessage("%s\n", output_str);
+    return protos;
 }
 
-static void PrintPortscanConf(PortscanConfig* config)
+static std::string get_types(int dst)
 {
-    char buf[STD_BUF + 1];
+    std::string types;
 
-    LogMessage("Portscan Detection Config:\n");
-    SnortSnprintf(buf, sizeof(buf), "    Detect Protocols:  ");
+    if ( !dst )
+        return "none";
+    if ( (dst & PS_TYPE_ALL) == PS_TYPE_ALL )
+        return "all";
+    if ( dst & PS_TYPE_PORTSCAN )
+        types += "portscan ";
+    if ( dst & PS_TYPE_PORTSWEEP )
+        types += "portsweep ";
+    if ( dst & PS_TYPE_DECOYSCAN )
+        types += "decoy_portscan ";
+    if ( dst & PS_TYPE_DISTPORTSCAN )
+        types += "distributed_portscan ";
 
-    if ( config->detect_scans & PS_PROTO_TCP )
-        sfsnprintfappend(buf, sizeof(buf)-1, "TCP ");
+    types.pop_back();
 
-    if ( config->detect_scans & PS_PROTO_UDP )
-        sfsnprintfappend(buf, sizeof(buf)-1, "UDP ");
+    return types;
+}
 
-    if ( config->detect_scans & PS_PROTO_ICMP )
-        sfsnprintfappend(buf, sizeof(buf)-1, "ICMP ");
+static std::string to_string(const IPSET* list)
+{
+    SF_LNODE* cursor;
+    std::string ipset;
 
-    if ( config->detect_scans & PS_PROTO_IP )
-        sfsnprintfappend(buf, sizeof(buf)-1, "IP");
-
-    LogMessage("%s\n", buf);
-    SnortSnprintf(buf, sizeof(buf), "    Detect Scan Type:  ");
-
-    if (config->detect_scan_type & PS_TYPE_PORTSCAN)
-        sfsnprintfappend(buf, sizeof(buf)-1, "portscan ");
-
-    if (config->detect_scan_type & PS_TYPE_PORTSWEEP)
-        sfsnprintfappend(buf, sizeof(buf)-1, "portsweep ");
-
-    if (config->detect_scan_type & PS_TYPE_DECOYSCAN)
-        sfsnprintfappend(buf, sizeof(buf)-1, "decoy_portscan ");
-
-    if (config->detect_scan_type & PS_TYPE_DISTPORTSCAN)
-        sfsnprintfappend(buf, sizeof(buf)-1, "distributed_portscan");
-
-    LogMessage("%s\n", buf);
-    LogMessage("    Memcap (in bytes): %lu\n", config->memcap);
-    LogMessage("    Number of Nodes:   %ld\n", config->memcap / ps_node_size());
-
-    if ( config->logfile )
-        LogMessage("    Logfile:           %s\n", "yes");
-
-    if (config->ignore_scanners)
+    for (auto p = (const IP_PORT*)sflist_first(&list->ip_list, &cursor); p;
+        p = (const IP_PORT*)sflist_next(&cursor))
     {
-        LogMessage("    Ignore Scanner IP List:\n");
-        SF_LNODE* cursor;
+        SfIpString ip_str;
 
-        IP_PORT* p = (IP_PORT*)sflist_first(&config->ignore_scanners->ip_list, &cursor);
+        p->ip.get_addr()->ntop(ip_str);
 
-        for ( ; p; p = (IP_PORT*)sflist_next(&cursor) )
-            PrintIPPortSet(p);
+        if ( p->notflag )
+            ipset += "!";
+
+        ipset += std::string(ip_str);
+
+        if ( ((p->ip.get_family() == AF_INET6) and (p->ip.get_bits() != 128)) or
+            ((p->ip.get_family() == AF_INET ) and (p->ip.get_bits() != 32 )) )
+            ipset += "/" + std::to_string(p->ip.get_bits());
+
+        SF_LNODE* pr_cursor;
+        auto pr =(const PORTRANGE*)sflist_first(&p->portset.port_list, &pr_cursor);
+
+        if ( pr and pr->port_lo )
+            ipset += " : ";
+
+        for (; pr; pr = (const PORTRANGE*)sflist_next(&pr_cursor))
+        {
+            if ( pr->port_lo )
+            {
+                ipset += std::to_string(pr->port_lo);
+                if ( pr->port_hi != pr->port_lo )
+                    ipset += "-" + std::to_string(pr->port_hi);
+                ipset += " ";
+            }
+        }
+        ipset += ", ";
     }
 
-    if (config->ignore_scanned)
-    {
-        LogMessage("    Ignore Scanned IP List:\n");
-        SF_LNODE* cursor;
+    if ( ipset.empty() )
+        return "none";
 
-        IP_PORT* p = (IP_PORT*)sflist_first(&config->ignore_scanned->ip_list, &cursor);
+    ipset.erase(ipset.end() - 2);
 
-        for ( ; p; p = (IP_PORT*)sflist_next(&cursor) )
-            PrintIPPortSet(p);
-    }
+    return ipset;
+}
 
-    if (config->watch_ip)
-    {
-        LogMessage("    Watch IP List:\n");
-        SF_LNODE* cursor;
+static void portscan_config_show(const PortscanConfig* config)
+{
+    ConfigLogger::log_value("memcap", config->memcap);
+    ConfigLogger::log_value("protos", get_protos(config->detect_scans).c_str());
+    ConfigLogger::log_value("scan_types", get_types(config->detect_scan_type).c_str());
 
-        IP_PORT* p = (IP_PORT*)sflist_first(&config->watch_ip->ip_list, &cursor);
+    if ( config->watch_ip )
+        ConfigLogger::log_list("watch_ip", to_string(config->watch_ip).c_str());
 
-        for ( ; p; p = (IP_PORT*)sflist_next(&cursor) )
-            PrintIPPortSet(p);
-    }
+    if ( config->ignore_scanners )
+        ConfigLogger::log_list("ignore_scanners", to_string(config->ignore_scanners).c_str());
+
+    if ( config->ignore_scanned )
+        ConfigLogger::log_list("ignore_scanned", to_string(config->ignore_scanned).c_str());
+
+    ConfigLogger::log_flag("alert_all", config->alert_all);
+    ConfigLogger::log_flag("include_midstream", config->include_midstream);
+
+    ConfigLogger::log_value("tcp_window", config->tcp_window);
+    ConfigLogger::log_value("udp_window", config->udp_window);
+    ConfigLogger::log_value("ip_window", config->ip_window);
+    ConfigLogger::log_value("icmp_window", config->icmp_window);
 }
 
 //-------------------------------------------------------------------------
@@ -408,9 +411,7 @@ static void PrintPortscanConf(PortscanConfig* config)
 //-------------------------------------------------------------------------
 
 PortScan::PortScan(PortScanModule* mod)
-{
-    config = mod->get_data();
-}
+{ config = mod->get_data(); }
 
 PortScan::~PortScan()
 {
@@ -419,18 +420,15 @@ PortScan::~PortScan()
 }
 
 void PortScan::tinit()
-{
-    ps_init_hash(config->memcap);
-}
+{ ps_init_hash(config->memcap); }
 
 void PortScan::tterm()
-{
-    ps_cleanup();
-}
+{ ps_cleanup(); }
 
-void PortScan::show(SnortConfig*)
+void PortScan::show(const SnortConfig*) const
 {
-    PrintPortscanConf(config);
+    if ( config )
+        portscan_config_show(config);
 }
 
 void PortScan::eval(Packet* p)
@@ -441,7 +439,7 @@ void PortScan::eval(Packet* p)
     if ( p->packet_flags & PKT_REBUILT_STREAM )
         return;
 
-    ++spstats.total_packets;
+    ++spstats.packets;
     PS_PKT ps_pkt(p);
 
     ps_detect(&ps_pkt);
@@ -462,6 +460,12 @@ void PortScan::eval(Packet* p)
 //-------------------------------------------------------------------------
 // api stuff
 //-------------------------------------------------------------------------
+
+static void port_scan_tinit()
+{ }
+
+static void port_scan_tterm()
+{ ps_cleanup(); }
 
 static Module* mod_ctor()
 { return new PortScanModule; }
@@ -498,8 +502,8 @@ static const InspectApi sp_api =
     nullptr, // service
     nullptr, // pinit
     nullptr, // pterm
-    nullptr, // tinit
-    nullptr, // tterm
+    port_scan_tinit, // tinit
+    port_scan_tterm, // tterm
     sp_ctor,
     sp_dtor,
     nullptr, // ssn

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,6 +28,7 @@
 
 class DataApi;
 class RuleApi;
+class StateApi;
 class TableApi;
 
 class ConversionState
@@ -37,7 +38,8 @@ public:
         // FIXIT-L these should be removed and accessed through cv
         data_api(c.get_data_api()),
         table_api(c.get_table_api()),
-        rule_api(c.get_rule_api())
+        rule_api(c.get_rule_api()),
+        state_api(c.get_state_api())
     { }
     virtual ~ConversionState() = default;
     virtual bool convert(std::istringstream& data)=0;
@@ -47,6 +49,7 @@ protected:
     DataApi& data_api;
     TableApi& table_api;
     RuleApi& rule_api;
+    StateApi& state_api;
 
     inline bool eat_option(std::istringstream& stream)
     {
@@ -75,6 +78,50 @@ protected:
         return false;
     }
 
+    inline bool parse_path_option(const std::string& opt_name,
+        std::istringstream& stream)
+    {
+        std::string val;
+
+        if (stream >> val)
+        {
+            std::size_t prev_pos = 0;
+            while (true)
+            {
+                auto env_start = val.find('$', prev_pos);
+                if (env_start == std::string::npos)
+                {
+                    if (prev_pos)
+                        val.push_back('\'');
+                    break;
+                }
+
+                if (env_start)
+                {
+                    if (!prev_pos)
+                    {
+                        val.insert(prev_pos, "$\'");
+                        env_start += 2;
+                    }
+                    val.replace(env_start, 1, "\' .. ");
+                }
+
+                auto env_end = val.find('/', env_start + 1);
+                if (env_end == std::string::npos)
+                    break;
+
+                val.replace(env_end, 1, " .. \'/");
+                prev_pos = env_end + 5;
+            }
+
+            table_api.add_option(opt_name, val);
+            return true;
+        }
+
+        table_api.add_comment("snort.conf missing argument for: " + opt_name + " <string>");
+        return false;
+    }
+
     inline bool parse_int_option(const std::string& opt_name,
         std::istringstream& stream, bool append)
     {
@@ -82,6 +129,31 @@ protected:
 
         if (stream >> val)
         {
+            if (append)
+                table_api.append_option(opt_name, val);
+            else
+                table_api.add_option(opt_name, val);
+            return true;
+        }
+
+        table_api.add_comment("snort.conf missing argument for: " + opt_name + " <int>");
+        return false;
+    }
+
+    // Reduces int value to max value if value > max value
+    inline bool parse_max_int_option(const std::string& opt_name,
+        std::istringstream& stream, int max, bool append)
+    {
+        int val;
+
+        if (stream >> val)
+        {
+            if (val > max)
+            {
+                table_api.add_comment("option value reduced to maximum: '" + opt_name + "'");
+                val = max;
+            }
+
             if (append)
                 table_api.append_option(opt_name, val);
             else

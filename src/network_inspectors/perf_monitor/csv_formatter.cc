@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,23 +26,13 @@
 
 #include <sstream>
 
-#ifdef UNIT_TEST
-#include <cstdio>
-#include <cstring>
-
-#include "catch/snort_catch.h"
-#include "utils/util.h"
-#endif
-
-using namespace std;
-
 void CSVFormatter::finalize_fields()
 {
     header = "#timestamp";
 
     for( unsigned i = 0; i < section_names.size(); i++ )
     {
-        string section = section_names[i];
+        std::string section = section_names[i];
 
         for( auto& field : field_names[i] )
         {
@@ -105,7 +95,11 @@ void CSVFormatter::write(FILE* fh, time_t timestamp)
     fflush(fh);
 }
 
-#ifdef UNIT_TEST
+#ifdef CATCH_TEST_BUILD
+
+#include <cstring>
+
+#include "catch/catch.hpp"
 
 TEST_CASE("csv output", "[CSVFormatter]")
 {
@@ -116,7 +110,7 @@ TEST_CASE("csv output", "[CSVFormatter]")
     const char* cooked =
         "#timestamp,name.one,name.two,other.three,other.five,other.kvp\n"
         "1234567890,0,1,2,hellothere,3,50,60,70\n"
-        "2345678901,0,0,0,,0\n";
+        "2145678903,0,0,0,,0\n";
 
     FILE* fh = tmpfile();
     CSVFormatter f("csv_formatter");
@@ -131,9 +125,9 @@ TEST_CASE("csv output", "[CSVFormatter]")
     f.finalize_fields();
     f.init_output(fh);
 
-    kvp.push_back(50);
-    kvp.push_back(60);
-    kvp.push_back(70);
+    kvp.emplace_back(50);
+    kvp.emplace_back(60);
+    kvp.emplace_back(70);
 
     f.write(fh, (time_t)1234567890);
 
@@ -141,10 +135,10 @@ TEST_CASE("csv output", "[CSVFormatter]")
     three = 0;
     five[0] = '\0';
     kvp.clear();
-    f.write(fh, (time_t)2345678901);
+    f.write(fh, (time_t)2145678903);
 
     auto size = ftell(fh);
-    char* fake_file = (char*)snort_alloc(size + 1);
+    char* fake_file = new char[size + 1];
 
     rewind(fh);
     fread(fake_file, size, 1, fh);
@@ -152,7 +146,7 @@ TEST_CASE("csv output", "[CSVFormatter]")
 
     CHECK( !strcmp(cooked, fake_file) );
 
-    snort_free(fake_file);
+    delete[] fake_file;
     fclose(fh);
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,75 +23,63 @@
 
 #include <vector>
 #include <string>
+#include "main/thread.h"
 #include "tp_appid_types.h"
 
-#define THIRD_PARTY_APP_ID_API_VERSION 1
+#define THIRD_PARTY_APPID_API_VERSION 6
 
 class ThirdPartyConfig
 {
 public:
-    unsigned chp_body_collection_max;
-    unsigned ftp_userid_disabled : 1;
-    unsigned chp_body_collection_disabled : 1;
-    unsigned tp_allow_probes : 1;
-    unsigned http_upgrade_reporting_enabled : 1;
-    unsigned http_response_version_enabled : 1;
+    uint32_t chp_body_collection_max = 0;
+    bool ftp_userid_disabled = false;
+    bool chp_body_collection_disabled = false;
+    bool tp_allow_probes = false;
     std::string tp_appid_config;
-    std::vector<std::string> xff_fields;
-    std::vector<std::string> old_xff_fields;
-
-    ThirdPartyConfig()
-    {
-        getXffFields();
-    }
-
-    void getXffFields()
-    {
-        xff_fields.clear();
-        xff_fields.push_back(HTTP_XFF_FIELD_X_FORWARDED_FOR);
-        xff_fields.push_back(HTTP_XFF_FIELD_TRUE_CLIENT_IP);
-    }
+    bool tp_appid_stats_enable = false;
+    bool tp_appid_config_dump = false;
 };
 
-class ThirdPartyAppIDModule
+class ThirdPartyAppIdContext
 {
 public:
+    ThirdPartyAppIdContext(uint32_t ver, const char* mname, ThirdPartyConfig& config)
+        : api_version(ver), name(mname), cfg(config)
+    {
+        version = next_version++;
+    }
 
-    /* ThirdPartyAppIdConfig tpac; */
+    uint32_t get_version() const
+    {
+        return version;
+    }
 
-    ThirdPartyAppIDModule(uint32_t ver, const char* mname)
-        : version(ver), name(mname) { }
+    virtual ~ThirdPartyAppIdContext() { }
 
-    virtual ~ThirdPartyAppIDModule() { }
-
-    uint32_t api_version() const { return version; }
+    uint32_t get_api_version() const { return api_version; }
     const std::string& module_name() const { return name; }
 
-    virtual int pinit(ThirdPartyConfig&) = 0;
-    virtual int pfini() = 0;
-
     virtual int tinit() = 0;
-    virtual int tfini() = 0;
+    virtual bool tfini(bool reload = false, bool is_idling = false) = 0;
 
-    virtual int reconfigure(const ThirdPartyConfig&) = 0;
-    virtual int print_stats() = 0;
-    virtual int reset_stats() = 0;
+    virtual const ThirdPartyConfig& get_config() const { return cfg; }
+
+    void set_tp_reload_in_progress(bool value) { tp_reload_in_progress = value; }
+    bool get_tp_reload_in_progress() { return tp_reload_in_progress; }
+
+protected:
+    const uint32_t api_version;
+    const std::string name;
+    ThirdPartyConfig cfg;
 
 private:
-
     // No implicit constructor as derived classes need to provide
     // version and name.
-    ThirdPartyAppIDModule() : version(0), name("") { }
-
-    const uint32_t version;
-    const std::string name;
+    ThirdPartyAppIdContext() : api_version(0), name(""), version(0) { }
+    uint32_t version;
+    static THREAD_LOCAL bool tp_reload_in_progress;
+    // Increments when a new third-party context is loaded
+    SO_PUBLIC static uint32_t next_version;
 };
 
-// Function pointer to object factory that returns a pointer to a newly
-// created object of a derived class.
-// This needs to be exported (SO_PUBLIC) by any third party .so library.
-// Must return NULL if it fails to create the object.
-typedef ThirdPartyAppIDModule* (* CreateThirdPartyAppIDModule_t)();
-
 #endif
-

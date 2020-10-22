@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,128 +23,118 @@
 #include "config.h"
 #endif
 
-#include "host_tracker/host_tracker.h"
+#include <cstring>
+
+#include "host_tracker/host_cache.h"
+#include "host_tracker/host_cache_allocator.cc"
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
 
 using namespace snort;
+using namespace std;
 
+static time_t test_time = 0;
 namespace snort
 {
 // Fake snort_strdup() because sfutil dependencies suck
 char* snort_strdup(const char* str)
 { return strdup(str); }
+time_t packet_time() { return test_time; }
 }
+
+// There always needs to be a HostCacheIp associated with HostTracker,
+// because any allocation / deallocation into the HostTracker will take up
+// memory managed by the cache.
+HostCacheIp host_cache(1024);
 
 TEST_GROUP(host_tracker)
 {
 };
 
-//  Test HostTracker ipaddr get/set functions.
-TEST(host_tracker, ipaddr_test)
-{
-    HostTracker ht;
-    SfIp zeroed_sfip;
-    SfIp expected_ip_addr;
-    SfIp actual_ip_addr;
-
-    //  Test IP prior to set.
-    memset(&zeroed_sfip, 0, sizeof(zeroed_sfip));
-    actual_ip_addr = ht.get_ip_addr();
-    CHECK(0 == memcmp(&zeroed_sfip, &actual_ip_addr, sizeof(zeroed_sfip)));
-
-    expected_ip_addr.pton(AF_INET6, "beef:abcd:ef01:2300::");
-    ht.set_ip_addr(expected_ip_addr);
-    actual_ip_addr = ht.get_ip_addr();
-    CHECK(0 == memcmp(&expected_ip_addr, &actual_ip_addr, sizeof(expected_ip_addr)));
-}
-
-//  Test HostTracker policy get/set functions.
-TEST(host_tracker, policy_test)
-{
-    HostTracker ht;
-    Policy expected_policy = 23;
-    Policy actual_policy;
-
-    actual_policy = ht.get_stream_policy();
-    CHECK(0 == actual_policy);
-
-    actual_policy = ht.get_frag_policy();
-    CHECK(0 == actual_policy);
-
-    ht.set_stream_policy(expected_policy);
-    actual_policy = ht.get_stream_policy();
-    CHECK(expected_policy == actual_policy);
-
-    expected_policy = 77;
-    ht.set_frag_policy(expected_policy);
-    actual_policy = ht.get_frag_policy();
-    CHECK(expected_policy == actual_policy);
-}
-
-//  Test HostTracker add and find service functions.
+//  Test HostTracker find appid and add service functions.
 TEST(host_tracker, add_find_service_test)
 {
-    bool ret;
+    // Having standalone host tracker objects works, but it should be avoided
+    // because they take up memory from the host cache. OK for testing.
     HostTracker ht;
-    HostApplicationEntry actual_entry;
-    HostApplicationEntry app_entry1(6, 2112, 3);
-    HostApplicationEntry app_entry2(17, 7777, 10);
 
     //  Try a find on an empty list.
-    ret = ht.find_service(3,1000, actual_entry);
-    CHECK(false == ret);
+    CHECK(APP_ID_NONE == ht.get_appid(80, IpProtocol::TCP));
 
     //  Test add and find.
-    ret = ht.add_service(app_entry1);
-    CHECK(true == ret);
+    CHECK(true == ht.add_service(80, IpProtocol::TCP, 676, true));
+    CHECK(true == ht.add_service(443, IpProtocol::TCP, 1122));
+    CHECK(676 == ht.get_appid(80, IpProtocol::TCP));
+    CHECK(1122 == ht.get_appid(443, IpProtocol::TCP));
 
-    ret = ht.find_service(6, 2112, actual_entry);
-    CHECK(true == ret);
-    CHECK(actual_entry.port == 2112);
-    CHECK(actual_entry.ipproto == 6);
-    CHECK(actual_entry.snort_protocol_id == 3);
+    //  Try adding an entry that exists already and update appid
+    CHECK(true == ht.add_service(443, IpProtocol::TCP, 847));
+    CHECK(847 == ht.get_appid(443, IpProtocol::TCP));
 
-    ht.add_service(app_entry2);
-    ret = ht.find_service(6, 2112, actual_entry);
-    CHECK(true == ret);
-    CHECK(actual_entry.port == 2112);
-    CHECK(actual_entry.ipproto == 6);
-    CHECK(actual_entry.snort_protocol_id == 3);
+    // Try a find appid on a port that isn't in the list.
+    CHECK(APP_ID_NONE == ht.get_appid(8080, IpProtocol::UDP));
+}
 
-    ret = ht.find_service(17, 7777, actual_entry);
-    CHECK(true == ret);
-    CHECK(actual_entry.port == 7777);
-    CHECK(actual_entry.ipproto == 17);
-    CHECK(actual_entry.snort_protocol_id == 10);
+//  Test copying data and deleting copied list
+TEST(host_tracker, copy_data_test)
+{
+    test_time = 1562198400;
+    HostTracker ht;
+    uint8_t mac[6] = {254, 237, 222, 173, 190, 239};
+    ht.add_mac(mac, 50, 1);
 
-    //  Try adding an entry that exists already.
-    ret = ht.add_service(app_entry1);
-    CHECK(false == ret);
+    uint8_t p_hops = 0;
+    uint32_t p_last_seen = 0;
+    list<HostMac>* p_macs = nullptr;
+    ht.copy_data(p_hops, p_last_seen, p_macs);
 
-    // Try a find on a port that isn't in the list.
-    ret = ht.find_service(6, 100, actual_entry);
-    CHECK(false == ret);
+    CHECK(p_hops == 255);
+    CHECK(p_last_seen == 1562198400);
+    CHECK(p_macs != nullptr);
+    CHECK(p_macs->size() == 1);
+    const auto& copied_data = p_macs->front();
+    CHECK(copied_data.ttl == 50);
+    CHECK(copied_data.primary == 1);
+    CHECK(copied_data.last_seen == 1562198400);
+    CHECK(memcmp(copied_data.mac, mac, MAC_SIZE) == 0);
 
-    // Try a find on an ipproto that isn't in the list.
-    ret = ht.find_service(17, 2112, actual_entry);
-    CHECK(false == ret);
+    delete p_macs;
+}
 
-    //  Try to remove an entry that's not in the list.
-    ret = ht.remove_service(6,100);
-    CHECK(false == ret);
+TEST(host_tracker, stringify)
+{
+    test_time = 1562198400; // this time will be updated and should not be seen in stringify
+    HostTracker ht;
 
-    ret = ht.remove_service(17,2112);
-    CHECK(false == ret);
+    uint8_t mac1[6] = {254, 237, 222, 173, 190, 239};
+    uint8_t mac2[6] = {202, 254, 192, 255, 238, 0};
+    test_time = 1562198404; // this time should be the time of the first mac address
+    ht.update_last_seen();
+    ht.add_mac(mac1, 9, 0);
+    test_time = 1562198407; // this time should be the time of the second mac address
+    ht.update_last_seen();
+    ht.add_mac(mac2, 3, 1); // this primary mac should go to the back of the list
 
-    //  Actually remove an entry.
-    ret = ht.remove_service(6,2112);
-    CHECK(true == ret);
+    ht.add_service(80, IpProtocol::TCP, 676, true);
+    test_time = 1562198409; // this time should be the last seen time of the host
+    ht.update_last_seen();
+    ht.add_service(443, IpProtocol::TCP, 1122);
+
+    string host_tracker_string;
+    ht.stringify(host_tracker_string);
+
+    STRCMP_EQUAL(host_tracker_string.c_str(),
+        "\n    type: Host, ttl: 0, hops: 255, time: 2019-07-04 00:00:09"
+        "\nmacs size: 2"
+        "\n    mac: FE:ED:DE:AD:BE:EF, ttl: 9, primary: 0, time: 2019-07-04 00:00:04"
+        "\n    mac: CA:FE:C0:FF:EE:00, ttl: 3, primary: 1, time: 2019-07-04 00:00:07"
+        "\nservices size: 2"
+        "\n    port: 80, proto: 6, appid: 676, inferred"
+        "\n    port: 443, proto: 6, appid: 1122");
 }
 
 int main(int argc, char** argv)
 {
     return CommandLineTestRunner::RunAllTests(argc, argv);
 }
-

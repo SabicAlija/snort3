@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,16 +27,18 @@
 
 #include <netdb.h>
 
-#if defined(__FreeBSD__) || defined(__OpenBSD__)
+#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(USE_TIRPC)
 #include <rpc/rpc.h>
 #elif defined(__sun)
 #include <rpc/rpcent.h>
 #endif
 
-#include "appid_inspector.h"
-#include "app_info_table.h"
+#include "detection/ips_context.h"
 #include "log/messages.h"
 #include "protocols/packet.h"
+
+#include "appid_inspector.h"
+#include "app_info_table.h"
 
 using namespace snort;
 
@@ -190,7 +192,7 @@ RpcServiceDetector::RpcServiceDetector(ServiceDiscovery* sd)
         {
             if (rpc->r_name)
             {
-                // FIXIT-M - the memory allocate here may not be freed...
+                // FIXIT-RC - the memory allocated here may not be freed...
                 prog = (RPCProgram*)snort_calloc(sizeof(RPCProgram));
                 prog->program = rpc->r_number;
                 prog->next = rpc_programs;
@@ -250,6 +252,7 @@ RpcServiceDetector::~RpcServiceDetector()
             snort_free(toast->name);
         snort_free(toast);
     }
+    rpc_programs = nullptr;
 }
 
 int RpcServiceDetector::validate(AppIdDiscoveryArgs& args)
@@ -283,8 +286,6 @@ int RpcServiceDetector::validate_packet(const uint8_t* data, uint16_t size, Appi
     uint32_t val = 0;
     const uint8_t* end = nullptr;
     const RPCProgram* rprog = nullptr;
-    //FIXIT-M - Avoid thread locals
-    static THREAD_LOCAL SnortProtocolId sunrpc_snort_protocol_id = UNKNOWN_PROTOCOL_ID;
 
     if (!size)
         return APPID_INPROCESS;
@@ -401,17 +402,15 @@ int RpcServiceDetector::validate_packet(const uint8_t* data, uint16_t size, Appi
                     pmr = (const ServiceRPCPortmapReply*)data;
                     if (pmr->port)
                     {
-                        if(sunrpc_snort_protocol_id == UNKNOWN_PROTOCOL_ID)
-                            sunrpc_snort_protocol_id = SnortConfig::get_conf()->proto_ref->find("sunrpc");
-
                         const SfIp* dip = pkt->ptrs.ip_api.get_dst();
                         const SfIp* sip = pkt->ptrs.ip_api.get_src();
                         tmp = ntohl(pmr->port);
 
                         AppIdSession* pf = AppIdSession::create_future_session(
                             pkt, dip, 0, sip, (uint16_t)tmp,
-                            (IpProtocol)ntohl((uint32_t)rd->proto), sunrpc_snort_protocol_id, 0,
-                            handler->get_inspector());
+                            (IpProtocol)ntohl((uint32_t)rd->proto),
+                            asd.config.snort_proto_ids[PROTO_INDEX_SUNRPC]);
+
                         if (pf)
                         {
                             pf->add_flow_data_id((uint16_t)tmp, this);
@@ -498,21 +497,20 @@ done:
         {
             if (pname && *pname)
             {
-                memset(&sub, 0, sizeof(sub));
                 sub.service = pname;
                 subtype = &sub;
             }
             else if (program)
             {
                 snprintf(subname, sizeof(subname), "(%u)", program);
-                memset(&sub, 0, sizeof(sub));
                 sub.service = subname;
                 subtype = &sub;
             }
             else
                 subtype = nullptr;
 
-            add_service(args.asd, pkt, dir, APP_ID_SUN_RPC, nullptr, nullptr, subtype);
+            add_service(args.change_bits, args.asd, pkt, dir, APP_ID_SUN_RPC,
+                nullptr, nullptr, subtype);
         }
         args.asd.set_session_flags(APPID_SESSION_CONTINUE);
         return APPID_SUCCESS;
@@ -844,20 +842,19 @@ inprocess:
         {
             if (pname && *pname)
             {
-                memset(&sub, 0, sizeof(sub));
                 sub.service = pname;
                 subtype = &sub;
             }
             else if (program)
             {
                 sprintf(subname, "(%u)", program);
-                memset(&sub, 0, sizeof(sub));
                 sub.service = subname;
                 subtype = &sub;
             }
             else
                 subtype = nullptr;
-            add_service(args.asd, pkt, dir, APP_ID_SUN_RPC, nullptr, nullptr, subtype);
+            add_service(args.change_bits, args.asd, pkt, dir, APP_ID_SUN_RPC,
+                nullptr, nullptr, subtype);
         }
         args.asd.set_session_flags(APPID_SESSION_CONTINUE);
         return APPID_SUCCESS;

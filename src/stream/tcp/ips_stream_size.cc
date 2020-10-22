@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 #include "framework/ips_option.h"
 #include "framework/module.h"
 #include "framework/range.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler_defs.h"
 
 #include "tcp_session.h"
@@ -64,17 +64,16 @@ private:
 
 uint32_t SizeOption::hash() const
 {
-    uint32_t a,b,c;
-
-    a = ssod.op;
-    b = ssod.min;
-    c = ssod.max;
+    uint32_t a = ssod.op;
+    uint32_t b = ssod.min;
+    uint32_t c = ssod.max;
 
     mix(a,b,c);
 
     a = direction;
+    b += IpsOption::hash();
 
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -82,7 +81,7 @@ uint32_t SizeOption::hash() const
 
 bool SizeOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const SizeOption& rhs = (const SizeOption&)ips;
@@ -95,7 +94,7 @@ bool SizeOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus SizeOption::eval(Cursor&, Packet* pkt)
 {
-    DeepProfile profile(streamSizePerfStats);
+    RuleProfile profile(streamSizePerfStats);
 
     if ( !pkt->flow || pkt->flow->pkt_type != PktType::TCP )
         return NO_MATCH;
@@ -206,11 +205,11 @@ bool SizeModule::set(const char*, Value& v, SnortConfig*)
         return ssod.validate(v.get_string(), RANGE);
 
     else if ( v.is("~direction") )
-        direction = v.get_long();
+        direction = v.get_uint8();
 
     else
         return false;
-    
+
     return true;
 }
 
@@ -219,14 +218,10 @@ bool SizeModule::set(const char*, Value& v, SnortConfig*)
 //-------------------------------------------------------------------------
 
 static Module* size_mod_ctor()
-{
-    return new SizeModule;
-}
+{ return new SizeModule; }
 
 static void mod_dtor(Module* m)
-{
-    delete m;
-}
+{  delete m; }
 
 static IpsOption* size_ctor(Module* p, OptTreeNode*)
 {
@@ -235,9 +230,7 @@ static IpsOption* size_ctor(Module* p, OptTreeNode*)
 }
 
 static void opt_dtor(IpsOption* p)
-{
-    delete p;
-}
+{ delete p; }
 
 static const IpsApi size_api =
 {

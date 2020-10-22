@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
 #define PARSELEN      10
 #define MAX_BYTES_TO_GRAB 4
 
-#define NUM_IPS_OPTIONS_VARS 3
+#define NUM_IPS_OPTIONS_VARS 2
 #define IPS_OPTIONS_NO_VAR (-1)
 #define INVALID_VAR_ERR_STR "%s uses an undefined rule option variable (%s)"
 

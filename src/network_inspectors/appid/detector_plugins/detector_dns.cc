@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,6 +29,10 @@
 #include "appid_dns_session.h"
 #include "app_info_table.h"
 #include "application_ids.h"
+
+using namespace snort;
+
+#define MAX_DNS_HOST_NAME_LEN 253
 
 #define MAX_OPCODE     5
 #define INVALID_OPCODE 3
@@ -135,79 +139,6 @@ struct ServiceDNSData
     uint16_t id;
 };
 
-// DNS host pattern structure
-struct DNSHostPattern
-{
-    uint8_t type;
-    AppId appId;
-    uint8_t* pattern;
-    int pattern_size;
-};
-
-struct DetectorDNSHostPattern
-{
-    DNSHostPattern* dpattern;
-    DetectorDNSHostPattern* next;
-};
-
-struct MatchedDNSPatterns
-{
-    DNSHostPattern* mpattern;
-    MatchedDNSPatterns* next;
-};
-
-struct ServiceDnsConfig
-{
-    DetectorDNSHostPattern* DetectorDNSHostPatternList;
-    snort::SearchTool* dns_host_host_matcher;
-};
-static ServiceDnsConfig serviceDnsConfig;      // DNS service configuration
-
-static int dns_host_pattern_match(void* id, void*, int, void* data, void*)
-{
-    MatchedDNSPatterns* cm;
-    MatchedDNSPatterns** matches = (MatchedDNSPatterns**)data;
-    DNSHostPattern* target = (DNSHostPattern*)id;
-
-    cm = (MatchedDNSPatterns*)snort_calloc(sizeof(MatchedDNSPatterns));
-    cm->mpattern = target;
-    cm->next = *matches;
-    *matches = cm;
-
-    return 0;
-}
-
-static int dns_host_detector_create_matcher(DetectorDNSHostPattern* list)
-{
-    DetectorDNSHostPattern* element = nullptr;
-
-    if (serviceDnsConfig.dns_host_host_matcher)
-        delete serviceDnsConfig.dns_host_host_matcher;
-
-    serviceDnsConfig.dns_host_host_matcher = new snort::SearchTool("ac_full", true);
-    if (!serviceDnsConfig.dns_host_host_matcher)
-        return 0;
-
-    /* Add patterns from Lua API */
-    for (element = list; element; element = element->next)
-    {
-        serviceDnsConfig.dns_host_host_matcher->add((char*)element->dpattern->pattern,
-            element->dpattern->pattern_size, element->dpattern, true);
-    }
-
-    serviceDnsConfig.dns_host_host_matcher->prep();
-
-    return 1;
-}
-
-int dns_host_detector_process_patterns()
-{
-    int retVal = 1;
-    if (!dns_host_detector_create_matcher(serviceDnsConfig.DetectorDNSHostPatternList))
-        retVal = 0;
-    return retVal;
-}
-
 DnsTcpServiceDetector::DnsTcpServiceDetector(ServiceDiscovery* sd)
 {
     handler = sd;
@@ -253,112 +184,133 @@ DnsUdpServiceDetector::DnsUdpServiceDetector(ServiceDiscovery* sd)
 }
 
 
-void DnsValidator::add_dns_query_info(AppIdSession& asd, uint16_t id, const uint8_t* host, uint8_t
-    host_len, uint16_t host_offset, uint16_t record_type)
+APPID_STATUS_CODE DnsValidator::add_dns_query_info(AppIdSession& asd, uint16_t id,
+    const uint8_t* host, uint8_t host_len, uint16_t host_offset, uint16_t record_type,
+    AppidChangeBits& change_bits)
 {
     AppIdDnsSession* dsession = asd.get_dns_session();
+    if (!dsession)
+        dsession = asd.create_dns_session();
     if ( ( dsession->get_state() != 0 ) && ( dsession->get_id() != id ) )
         dsession->reset();
 
     if (dsession->get_state() & DNS_GOT_QUERY)
-        return;
+        return APPID_SUCCESS;
     dsession->set_state(dsession->get_state() | DNS_GOT_QUERY);
 
     dsession->set_id(id);
     dsession->set_record_type(record_type);
 
-    if (!dsession->get_host())
+    if (!dsession->get_host_len())
     {
         if ((host != nullptr) && (host_len > 0) && (host_offset > 0))
         {
             char* new_host = dns_parse_host(host, host_len);
-            dsession->set_host(new_host);
+            if (!new_host)
+                return APPID_NOMATCH;
+            dsession->set_host(new_host, change_bits);
             dsession->set_host_offset(host_offset);
+            snort_free(new_host);
        }
     }
+
+    return APPID_SUCCESS;
 }
 
-void DnsValidator::add_dns_response_info(AppIdSession& asd, uint16_t id, const uint8_t* host,
-    uint8_t host_len, uint16_t host_offset, uint8_t response_type, uint32_t ttl)
+APPID_STATUS_CODE DnsValidator::add_dns_response_info(AppIdSession& asd, uint16_t id,
+    const uint8_t* host, uint8_t host_len, uint16_t host_offset, uint8_t response_type, uint32_t ttl,
+    AppidChangeBits& change_bits)
 {
     AppIdDnsSession* dsession = asd.get_dns_session();
-        if ( ( dsession->get_state() != 0 ) && ( dsession->get_id() != id ) )
-            dsession->reset();
+    if (!dsession)
+        dsession = asd.create_dns_session();
+    if ( ( dsession->get_state() != 0 ) && ( dsession->get_id() != id ) )
+        dsession->reset();
 
     if (dsession->get_state() & DNS_GOT_RESPONSE)
-        return;
+        return APPID_SUCCESS;
     dsession->set_state(dsession->get_state() | DNS_GOT_RESPONSE);
 
     dsession->set_id(id);
     dsession->set_ttl(ttl);
     dsession->set_response_type(response_type);
 
-    if (!dsession->get_host())
+    if (!dsession->get_host_len())
     {
         if ((host != nullptr) && (host_len > 0) && (host_offset > 0))
         {
             char* new_host = dns_parse_host(host, host_len);
-            dsession->set_host(new_host);
+            if (!new_host)
+                return APPID_NOMATCH;
+            dsession->set_host(new_host, change_bits);
             dsession->set_host_offset(host_offset);
+            snort_free(new_host);
         }
     }
+
+    return APPID_SUCCESS;
 }
 
-int DnsValidator::dns_validate_label(const uint8_t* data, uint16_t* offset, uint16_t size,
-    uint8_t* len, unsigned* len_valid)
+APPID_STATUS_CODE DnsValidator::dns_validate_label(const uint8_t* data, uint16_t& offset, uint16_t size,
+    uint8_t& len, bool& len_valid)
 {
     const DNSLabelPtr* lbl_ptr;
     const DNSLabelBitfield* lbl_bit;
     uint16_t tmp;
 
-    *len = 0;
-    *len_valid = 1;
+    len = 0;
+    len_valid = true;
 
-    while ((size > *offset) && (size-(*offset)) >= (int)offsetof(DNSLabel, name))
+    while ((size > offset) and (size - offset) >= (int)offsetof(DNSLabel, name))
     {
-        const DNSLabel* lbl = (const DNSLabel*)(data + (*offset));
+        const DNSLabel* lbl = (const DNSLabel*)(data + offset);
 
         switch (lbl->len & DNS_LENGTH_FLAGS)
         {
         case 0xC0:
-            *len_valid = 0;
+            len_valid = false;
             lbl_ptr = (const DNSLabelPtr*)lbl;
-            *offset += offsetof(DNSLabelPtr, data);
-            if (*offset >= size)
+            offset += offsetof(DNSLabelPtr, data);
+            if (offset > size)
                 return APPID_NOMATCH;
             tmp = (uint16_t)(ntohs(lbl_ptr->position) & 0x3FFF);
             if (tmp > size - offsetof(DNSLabel, name))
                 return APPID_NOMATCH;
             return APPID_SUCCESS;
         case 0x00:
-            *offset += offsetof(DNSLabel, name);
+            offset += offsetof(DNSLabel, name);
             if (!lbl->len)
             {
-                (*len)--;    // take off the extra '.' at the end
+                len--;    // take off the extra '.' at the end
                 return APPID_SUCCESS;
             }
-            *offset += lbl->len;
-            *len += lbl->len + 1;    // add 1 for '.'
+            offset += lbl->len;
+            if ((len + lbl->len + 1) > MAX_DNS_HOST_NAME_LEN)
+            {
+                len_valid = false;
+                return APPID_NOMATCH;
+            }
+            len += lbl->len + 1;    // add 1 for '.'
             break;
         case 0x40:
-            *len_valid = 0;
+            len_valid = false;
             if (lbl->len != 0x41)
                 return APPID_NOMATCH;
-            *offset += offsetof(DNSLabelBitfield, data);
-            if (*offset >= size)
+            offset += offsetof(DNSLabelBitfield, data);
+            if (offset >= size)
                 return APPID_NOMATCH;
             lbl_bit = (const DNSLabelBitfield*)lbl;
             if (lbl_bit->len)
             {
-                *offset += ((lbl_bit->len - 1) / 8) + 1;
+                offset += ((lbl_bit->len - 1) / 8) + 1;
             }
             else
             {
-                *offset += 32;
+                offset += 32;
             }
             break;
         default:
-            *len_valid = 0;
+            len_valid = false;
             return APPID_NOMATCH;
         }
     }
@@ -366,17 +318,17 @@ int DnsValidator::dns_validate_label(const uint8_t* data, uint16_t* offset, uint
 }
 
 int DnsValidator::dns_validate_query(const uint8_t* data, uint16_t* offset, uint16_t size,
-    uint16_t id, bool host_reporting, AppIdSession& asd)
+    uint16_t id, bool host_reporting, AppIdSession& asd, AppidChangeBits& change_bits)
 {
     int ret;
     const uint8_t* host;
     uint8_t host_len;
-    unsigned host_len_valid;
+    bool host_len_valid;
     uint16_t host_offset;
 
     host = data + *offset;
     host_offset = *offset;
-    ret = dns_validate_label(data, offset, size, &host_len, &host_len_valid);
+    ret = dns_validate_label(data, *offset, size, host_len, host_len_valid);
 
     if (ret == APPID_SUCCESS)
     {
@@ -403,10 +355,10 @@ int DnsValidator::dns_validate_query(const uint8_t* data, uint16_t* offset, uint
             case PATTERN_MX_REC:
             case PATTERN_SOA_REC:
             case PATTERN_NS_REC:
-                add_dns_query_info(asd, id, host, host_len, host_offset, record_type);
+                ret = add_dns_query_info(asd, id, host, host_len, host_offset, record_type, change_bits);
                 break;
             case PATTERN_PTR_REC:
-                add_dns_query_info(asd, id, nullptr, 0, 0, record_type);
+                ret = add_dns_query_info(asd, id, nullptr, 0, 0, record_type, change_bits);
                 break;
             default:
                 break;
@@ -417,21 +369,20 @@ int DnsValidator::dns_validate_query(const uint8_t* data, uint16_t* offset, uint
 }
 
 int DnsValidator::dns_validate_answer(const uint8_t* data, uint16_t* offset, uint16_t size,
-    uint16_t id, uint8_t rcode, bool host_reporting, AppIdSession& asd)
+    uint16_t id, uint8_t rcode, bool host_reporting, AppIdSession& asd, AppidChangeBits& change_bits)
 {
     int ret;
     uint8_t host_len;
-    unsigned host_len_valid;
-    uint16_t r_data_offset;
+    bool host_len_valid;
 
-    ret = dns_validate_label(data, offset, size, &host_len, &host_len_valid);
+    ret = dns_validate_label(data, *offset, size, host_len, host_len_valid);
     if (ret == APPID_SUCCESS)
     {
         const DNSAnswerData* ad = (const DNSAnswerData*)(data + (*offset));
         *offset += sizeof(DNSAnswerData);
         if (*offset > size)
             return APPID_NOMATCH;
-        r_data_offset = *offset;
+        uint16_t r_data_offset = *offset;
         *offset += ntohs(ad->r_len);
         if (*offset > size)
             return APPID_NOMATCH;
@@ -450,7 +401,7 @@ int DnsValidator::dns_validate_answer(const uint8_t* data, uint16_t* offset, uin
             case PATTERN_MX_REC:
             case PATTERN_SOA_REC:
             case PATTERN_NS_REC:
-                add_dns_response_info(asd, id, nullptr, 0, 0, rcode, ttl);
+                ret = add_dns_response_info(asd, id, nullptr, 0, 0, rcode, ttl, change_bits);
                 break;
             case PATTERN_PTR_REC:
                 {
@@ -458,7 +409,10 @@ int DnsValidator::dns_validate_answer(const uint8_t* data, uint16_t* offset, uin
                     uint16_t host_offset = r_data_offset;
 
                     ret = dns_validate_label(
-                        data, &r_data_offset, size, &host_len, &host_len_valid);
+                        data, r_data_offset, size, host_len, host_len_valid);
+
+                    if (ret != APPID_SUCCESS)
+                        return ret;
 
                     if ((host_len == 0) || (!host_len_valid))
                     {
@@ -466,8 +420,8 @@ int DnsValidator::dns_validate_answer(const uint8_t* data, uint16_t* offset, uin
                         host_len = 0;
                         host_offset = 0;
                     }
-                    add_dns_response_info(
-                        asd, id, host, host_len, host_offset, rcode, ttl);
+                    ret = add_dns_response_info(
+                        asd, id, host, host_len, host_offset, rcode, ttl, change_bits);
                 }
                 break;
             default:
@@ -478,8 +432,8 @@ int DnsValidator::dns_validate_answer(const uint8_t* data, uint16_t* offset, uin
     return ret;
 }
 
-int DnsValidator::dns_validate_header(const AppidSessionDirection dir, const DNSHeader* hdr,
-    bool host_reporting, AppIdSession& asd)
+int DnsValidator::dns_validate_header(AppidSessionDirection dir, const DNSHeader* hdr,
+    bool host_reporting, const AppIdSession& asd)
 {
     if (hdr->Opcode > MAX_OPCODE || hdr->Opcode == INVALID_OPCODE)
         return APPID_NOMATCH;
@@ -490,7 +444,11 @@ int DnsValidator::dns_validate_header(const AppidSessionDirection dir, const DNS
     else if (!hdr->QR)        // Query.
     {
         if (host_reporting)
-            asd.get_dns_session()->reset();
+        {
+            AppIdDnsSession* dsession = asd.get_dns_session();
+            if (dsession)
+                dsession->reset();
+        }
         return dir == APP_ID_FROM_INITIATOR ? APPID_SUCCESS : APPID_REVERSED;
     }
     else     // Response.
@@ -498,7 +456,7 @@ int DnsValidator::dns_validate_header(const AppidSessionDirection dir, const DNS
 }
 
 int DnsValidator::validate_packet(const uint8_t* data, uint16_t size, const int,
-    bool host_reporting, AppIdSession& asd)
+    bool host_reporting, AppIdSession& asd, AppidChangeBits& change_bits)
 {
     uint16_t i;
     uint16_t count;
@@ -515,7 +473,7 @@ int DnsValidator::validate_packet(const uint8_t* data, uint16_t size, const int,
         count = ntohs(hdr->QDCount);
         for (i=0; i<count; i++)
         {
-            if (dns_validate_query(data, &offset, size, ntohs(hdr->id), host_reporting, asd) !=
+            if (dns_validate_query(data, &offset, size, ntohs(hdr->id), host_reporting, asd, change_bits) !=
                 APPID_SUCCESS)
             {
                 return APPID_NOMATCH;
@@ -529,7 +487,7 @@ int DnsValidator::validate_packet(const uint8_t* data, uint16_t size, const int,
         for (i=0; i<count; i++)
         {
             if (dns_validate_answer(data, &offset, size, ntohs(hdr->id), hdr->RCODE,
-                host_reporting, asd) != APPID_SUCCESS)
+                host_reporting, asd, change_bits) != APPID_SUCCESS)
             {
                 return APPID_NOMATCH;
             }
@@ -542,7 +500,7 @@ int DnsValidator::validate_packet(const uint8_t* data, uint16_t size, const int,
         for (i=0; i<count; i++)
         {
             if (dns_validate_answer(data, &offset, size, ntohs(hdr->id), hdr->RCODE,
-                host_reporting, asd) != APPID_SUCCESS)
+                host_reporting, asd, change_bits) != APPID_SUCCESS)
             {
                 return APPID_NOMATCH;
             }
@@ -555,7 +513,7 @@ int DnsValidator::validate_packet(const uint8_t* data, uint16_t size, const int,
         for (i=0; i<count; i++)
         {
             if (dns_validate_answer(data, &offset, size, ntohs(hdr->id), hdr->RCODE,
-                host_reporting, asd) != APPID_SUCCESS)
+                host_reporting, asd, change_bits) != APPID_SUCCESS)
             {
                 return APPID_NOMATCH;
             }
@@ -563,7 +521,7 @@ int DnsValidator::validate_packet(const uint8_t* data, uint16_t size, const int,
     }
 
     if (hdr->QR && (hdr->RCODE != 0))    // error response
-        add_dns_response_info(asd, ntohs(hdr->id), nullptr, 0, 0, hdr->RCODE, 0);
+        return add_dns_response_info(asd, ntohs(hdr->id), nullptr, 0, 0, hdr->RCODE, 0, change_bits);
 
     return APPID_SUCCESS;
 }
@@ -581,7 +539,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
         goto udp_done;
     }
     if ((rval = dns_validate_header(args.dir, (const DNSHeader*)args.data,
-        args.config->mod_config->dns_host_reporting, args.asd)) != APPID_SUCCESS)
+        args.asd.get_odp_ctxt().dns_host_reporting, args.asd)) != APPID_SUCCESS)
     {
         if (rval == APPID_REVERSED)
         {
@@ -592,7 +550,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
                     // To get here, we missed the initial query, got a
                     // response, and now we've got another query.
                     rval = validate_packet(args.data, args.size, args.dir,
-                        args.config->mod_config->dns_host_reporting, args.asd);
+                        args.asd.get_odp_ctxt().dns_host_reporting, args.asd, args.change_bits);
                     if (rval == APPID_SUCCESS)
                         goto inprocess;
                 }
@@ -603,7 +561,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
                 // To get here, we missed the initial query, but now we've got
                 // a response.
                 rval = validate_packet(args.data, args.size, args.dir,
-                    args.config->mod_config->dns_host_reporting, args.asd);
+                    args.asd.get_odp_ctxt().dns_host_reporting, args.asd, args.change_bits);
                 if (rval == APPID_SUCCESS)
                 {
                     args.asd.set_session_flags(APPID_SESSION_UDP_REVERSED);
@@ -617,7 +575,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
     }
 
     rval = validate_packet(args.data, args.size, args.dir,
-        args.config->mod_config->dns_host_reporting, args.asd);
+        args.asd.get_odp_ctxt().dns_host_reporting, args.asd, args.change_bits);
     if ((rval == APPID_SUCCESS) && (args.dir == APP_ID_FROM_INITIATOR))
         goto inprocess;
 
@@ -627,7 +585,7 @@ udp_done:
     case APPID_SUCCESS:
 success:
         args.asd.set_session_flags(APPID_SESSION_CONTINUE);
-        return add_service(args.asd, args.pkt, args.dir, APP_ID_DNS);
+        return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_DNS);
 
     case APPID_INVALID_CLIENT:
 invalid:
@@ -641,7 +599,7 @@ nomatch:
 
     case APPID_INPROCESS:
 inprocess:
-        add_app(args.asd, APP_ID_NONE, APP_ID_DNS, nullptr);
+        add_app(args.asd, APP_ID_NONE, APP_ID_DNS, nullptr, args.change_bits);
         service_inprocess(args.asd, args.pkt, args.dir);
         return APPID_INPROCESS;
 
@@ -669,7 +627,7 @@ int DnsTcpServiceDetector::validate(AppIdDiscoveryArgs& args)
         uint16_t size = args.size - sizeof(DNSTCPHeader);
         uint16_t tmp = ntohs(hdr->length);
         if (tmp < sizeof(DNSHeader) || dns_validate_header(args.dir, (const DNSHeader*)data,
-            args.config->mod_config->dns_host_reporting, args.asd))
+            args.asd.get_odp_ctxt().dns_host_reporting, args.asd))
         {
             if (args.dir == APP_ID_FROM_INITIATOR)
                 goto not_compatible;
@@ -680,7 +638,7 @@ int DnsTcpServiceDetector::validate(AppIdDiscoveryArgs& args)
         if (tmp > size)
             goto not_compatible;
         rval = validate_packet(data, size, args.dir,
-            args.config->mod_config->dns_host_reporting, args.asd);
+            args.asd.get_odp_ctxt().dns_host_reporting, args.asd, args.change_bits);
         if (rval != APPID_SUCCESS)
             goto tcp_done;
 
@@ -723,7 +681,7 @@ tcp_done:
 
 success:
     args.asd.set_session_flags(APPID_SESSION_CONTINUE);
-    return add_service(args.asd, args.pkt, args.dir, APP_ID_DNS);
+    return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_DNS);
 
 not_compatible:
     incompatible_data(args.asd, args.pkt, args.dir);
@@ -734,124 +692,9 @@ fail:
     return APPID_NOMATCH;
 
 inprocess:
-    add_app(args.asd, APP_ID_NONE, APP_ID_DNS, nullptr);
+    add_app(args.asd, APP_ID_NONE, APP_ID_DNS, nullptr, args.change_bits);
     service_inprocess(args.asd, args.pkt, args.dir);
     return APPID_INPROCESS;
-}
-
-static int dns_host_scan_patterns(snort::SearchTool* matcher, const uint8_t* pattern, size_t size,
-    AppId* ClientAppId, AppId* payloadId)
-{
-    MatchedDNSPatterns* mp = nullptr;
-    MatchedDNSPatterns* tmpMp;
-    DNSHostPattern* best_match;
-
-    if (!matcher)
-        return 0;
-
-    matcher->find_all((const char*)pattern, size, dns_host_pattern_match, false, &mp);
-
-    if (!mp)
-        return 0;
-
-    best_match = mp->mpattern;
-    tmpMp = mp->next;
-    snort_free(mp);
-
-    while ((mp = tmpMp))
-    {
-        tmpMp = mp->next;
-        if (mp->mpattern->pattern_size > best_match->pattern_size)
-        {
-            best_match = mp->mpattern;
-        }
-        snort_free(mp);
-    }
-
-    switch (best_match->type)
-    {
-    // type 0 means WEB APP
-    case 0:
-        *ClientAppId = APP_ID_DNS;
-        *payloadId = best_match->appId;
-        break;
-    // type 1 means CLIENT
-    case 1:
-        *ClientAppId = best_match->appId;
-        *payloadId = 0;
-        break;
-    default:
-        return 0;
-    }
-
-    return 1;
-}
-
-int dns_host_scan_hostname(const uint8_t* pattern, size_t size, AppId* ClientAppId,
-    AppId* payloadId)
-{
-    return dns_host_scan_patterns(serviceDnsConfig.dns_host_host_matcher, pattern, size,
-        ClientAppId, payloadId);
-}
-
-void service_dns_host_clean()
-{
-    dns_detector_free_patterns();
-
-    if (serviceDnsConfig.dns_host_host_matcher )
-    {
-        delete serviceDnsConfig.dns_host_host_matcher;
-        serviceDnsConfig.dns_host_host_matcher = nullptr;
-    }
-}
-
-static int dns_add_pattern(DetectorDNSHostPattern** list, uint8_t* pattern_str, size_t
-    pattern_size, uint8_t type, AppId app_id)
-{
-    DetectorDNSHostPattern* new_dns_host_pattern;
-
-    new_dns_host_pattern = static_cast<DetectorDNSHostPattern*>(snort_calloc(
-        sizeof(DetectorDNSHostPattern)));
-    new_dns_host_pattern->dpattern = static_cast<DNSHostPattern*>(snort_calloc(
-        sizeof(DNSHostPattern)));
-
-    new_dns_host_pattern->dpattern->type = type;
-    new_dns_host_pattern->dpattern->appId = app_id;
-    new_dns_host_pattern->dpattern->pattern = pattern_str;
-    new_dns_host_pattern->dpattern->pattern_size = pattern_size;
-
-    new_dns_host_pattern->next = *list;
-    *list = new_dns_host_pattern;
-
-    return 1;
-}
-
-int dns_add_host_pattern(uint8_t* pattern_str, size_t pattern_size, uint8_t type, AppId app_id)
-{
-    return dns_add_pattern(&serviceDnsConfig.DetectorDNSHostPatternList, pattern_str, pattern_size,
-        type, app_id);
-}
-
-static void dns_patterns_free(DetectorDNSHostPattern** list)
-{
-    DetectorDNSHostPattern* tmp_pattern;
-
-    while ((tmp_pattern = *list))
-    {
-        *list = tmp_pattern->next;
-        if (tmp_pattern->dpattern)
-        {
-            if (tmp_pattern->dpattern->pattern)
-                snort_free(tmp_pattern->dpattern->pattern);
-            snort_free (tmp_pattern->dpattern);
-        }
-        snort_free(tmp_pattern);
-    }
-}
-
-void dns_detector_free_patterns()
-{
-    dns_patterns_free(&serviceDnsConfig.DetectorDNSHostPatternList);
 }
 
 char* dns_parse_host(const uint8_t* host, uint8_t host_len)
@@ -884,4 +727,3 @@ char* dns_parse_host(const uint8_t* host, uint8_t host_len)
     str[host_len] = '\0';    // nullptr term
     return str;
 }
-

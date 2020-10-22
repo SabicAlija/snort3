@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -44,6 +44,7 @@
 #define SMTP_UU_DECODING_FAILED     13
 #define SMTP_AUTH_ABORT_AUTH        14
 #define SMTP_AUTH_COMMAND_OVERFLOW  15
+#define SMTP_FILE_DECOMP_FAILED     16
 
 #define SMTP_NAME "smtp"
 #define SMTP_HELP "smtp inspection"
@@ -70,8 +71,8 @@ struct SmtpCmd
     uint32_t flags;
     unsigned number;
 
-    SmtpCmd(std::string&, uint32_t, int);
-    SmtpCmd(std::string&, int);
+    SmtpCmd(const std::string&, uint32_t, int);
+    SmtpCmd(const std::string&, int);
 };
 
 class SmtpModule : public snort::Module
@@ -92,17 +93,20 @@ public:
     PegCount* get_counts() const override;
     snort::ProfileStats* get_profile() const override;
 
-    SMTP_PROTO_CONF* get_data();
+    SmtpProtoConf* get_data();
     const SmtpCmd* get_cmd(unsigned idx);
 
     Usage get_usage() const override
     { return INSPECT; }
 
+    bool is_bindable() const override
+    { return true; }
+
 private:
     void add_commands(snort::Value&, uint32_t flags);
 
 private:
-    SMTP_PROTO_CONF* config;
+    SmtpProtoConf* config;
     std::vector<SmtpCmd*> cmds;
     std::string names;
     int number;

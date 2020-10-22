@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,16 +23,25 @@
 
 #include "http_msg_header.h"
 
+#include <cassert>
+
 #include "decompress/file_decomp.h"
 #include "file_api/file_flows.h"
 #include "file_api/file_service.h"
-#include "http_api.h"
-#include "http_msg_request.h"
-#include "http_msg_body.h"
+#include "hash/hash_key_operations.h"
 #include "pub_sub/http_events.h"
+#include "service_inspectors/http2_inspect/http2_flow_data.h"
 #include "sfip/sf_ip.h"
 
+#include "http_api.h"
+#include "http_common.h"
+#include "http_enum.h"
+#include "http_inspect.h"
+#include "http_msg_request.h"
+#include "http_msg_body.h"
+
 using namespace snort;
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 HttpMsgHeader::HttpMsgHeader(const uint8_t* buffer, const uint16_t buf_size,
@@ -41,14 +50,17 @@ HttpMsgHeader::HttpMsgHeader(const uint8_t* buffer, const uint16_t buf_size,
     HttpMsgHeadShared(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_)
 {
     transaction->set_header(this, source_id);
+    get_related_sections();
 }
 
 void HttpMsgHeader::publish()
 {
-    HttpEvent http_event(this);
+    const uint32_t stream_id = get_h2_stream_id(source_id);
+
+    HttpEvent http_event(this, session_data->for_http2, stream_id);
 
     const char* key = (source_id == SRC_CLIENT) ?
-        HTTP_REQUEST_HEADER_EVENT_KEY : HTTP_RESPONSE_HEADER_EVENT_KEY; 
+        HTTP_REQUEST_HEADER_EVENT_KEY : HTTP_RESPONSE_HEADER_EVENT_KEY;
 
     DataBus::publish(key, http_event, flow);
 }
@@ -58,20 +70,22 @@ const Field& HttpMsgHeader::get_true_ip()
     if (true_ip.length() != STAT_NOT_COMPUTE)
         return true_ip;
 
-    const Field* header_to_use;
-    const Field& xff = get_header_value_norm(HEAD_X_FORWARDED_FOR);
-    if (xff.length() > 0)
-        header_to_use = &xff;
-    else
+    const Field* header_to_use = nullptr;
+
+    for (int idx = 0; params->xff_headers[idx].code; idx++)
     {
-        const Field& tcip = get_header_value_norm(HEAD_TRUE_CLIENT_IP);
-        if (tcip.length() > 0)
-            header_to_use = &tcip;
-        else
+        const Field& xff = get_header_value_norm((HeaderId)params->xff_headers[idx].code);
+        if (xff.length() > 0)
         {
-            true_ip.set(STAT_NOT_PRESENT);
-            return true_ip;
+            header_to_use = &xff;
+            break;
         }
+    }
+
+    if (!header_to_use)
+    {
+        true_ip.set(STAT_NOT_PRESENT);
+        return true_ip;
     }
 
     // This is potentially a comma-separated list of IP addresses. Take the last one in the list.
@@ -124,7 +138,7 @@ const Field& HttpMsgHeader::get_true_ip_addr()
 void HttpMsgHeader::gen_events()
 {
     if ((get_header_count(HEAD_CONTENT_LENGTH) > 0) &&
-        (get_header_count(HEAD_TRANSFER_ENCODING) > 0))
+        (get_header_count(HEAD_TRANSFER_ENCODING) > 0) && !session_data->for_http2)
     {
         add_infraction(INF_BOTH_CL_AND_TE);
         create_event(EVENT_BOTH_CL_AND_TE);
@@ -140,8 +154,6 @@ void HttpMsgHeader::gen_events()
 
 void HttpMsgHeader::update_flow()
 {
-    session_data->section_type[source_id] = SEC__NOT_COMPUTE;
-
     // The following logic to determine body type is by no means the last word on this topic.
     if (tcp_close)
     {
@@ -150,7 +162,58 @@ void HttpMsgHeader::update_flow()
         return;
     }
 
-    if ((source_id == SRC_SERVER) && ((status_code_num <= 199) || (status_code_num == 204) ||
+    if ((source_id == SRC_SERVER) && request && (request->get_method_id() == METH_CONNECT) &&
+        !session_data->for_http2)
+    {
+        // Successful CONNECT responses (2XX) switch to tunneled traffic immediately following the
+        // header. Transfer-Encoding and Content-Length headers are not allowed in successful
+        // responses by the RFC.
+        if((trans_num > session_data->last_connect_trans_w_early_traffic) &&
+            ((status_code_num >= 200) && (status_code_num < 300)))
+        {
+            if ((get_header_count(HEAD_TRANSFER_ENCODING) > 0))
+            {
+                add_infraction(INF_200_CONNECT_RESP_WITH_TE);
+                create_event(EVENT_200_CONNECT_RESP_WITH_TE);
+            }
+            if (get_header_count(HEAD_CONTENT_LENGTH) > 0)
+            {
+                add_infraction(INF_200_CONNECT_RESP_WITH_CL);
+                create_event(EVENT_200_CONNECT_RESP_WITH_CL);
+            }
+
+            // FIXIT-E This case addresses the scenario where Snort sees a success response to a
+            // CONNECT request before the request message is complete. Currently this will trigger
+            // an alert then proceed to cutover as usual, meaning the remaining request message will
+            // be processed as part of the tunnel session. There may be a better solution.
+            if (session_data->type_expected[SRC_CLIENT] != SEC_REQUEST)
+            {
+                add_infraction(INF_EARLY_CONNECT_RESPONSE);
+                create_event(EVENT_EARLY_CONNECT_RESPONSE);
+            }
+            session_data->cutover_on_clear = true;
+            HttpModule::increment_peg_counts(PEG_CUTOVERS);
+            if (session_data->ssl_search_abandoned)
+                HttpModule::increment_peg_counts(PEG_SSL_SEARCH_ABND_EARLY);
+#ifdef REG_TEST
+            if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP))
+            {
+                fprintf(HttpTestManager::get_output_file(), "2XX CONNECT response triggered flow "
+                    "cutover to wizard\n");
+            }
+#endif
+
+            return;
+        }
+        if ((status_code_num >= 100) && (status_code_num < 200))
+        {
+            add_infraction(INF_100_CONNECT_RESP);
+            create_event(EVENT_100_CONNECT_RESP);
+        }
+    }
+
+    if ((source_id == SRC_SERVER) &&
+        ((100 <= status_code_num && status_code_num <= 199) || (status_code_num == 204) ||
         (status_code_num == 304)))
     {
         // No body allowed by RFC for these response codes. The message is over regardless of the
@@ -172,8 +235,8 @@ void HttpMsgHeader::update_flow()
         return;
     }
 
-    if ((source_id == SRC_SERVER) && (transaction->get_request() != nullptr) &&
-        (transaction->get_request()->get_method_id() == METH_HEAD))
+    if ((source_id == SRC_SERVER) && (request != nullptr) &&
+        (request->get_method_id() == METH_HEAD))
     {
         // No body allowed by RFC for response to HEAD method
         session_data->half_reset(SRC_SERVER);
@@ -181,6 +244,34 @@ void HttpMsgHeader::update_flow()
     }
 
     const Field& te_header = get_header_value_norm(HEAD_TRANSFER_ENCODING);
+
+    if (session_data->for_http2)
+    {
+        // The only transfer-encoding header we should see for HTTP/2 traffic is "identity"
+        const int IDENTITY_SIZE = 8;
+        if ((te_header.length() > 0) && ( (te_header.length() != IDENTITY_SIZE) ||
+            memcmp(te_header.start(), "identity", IDENTITY_SIZE) != 0))
+        {
+            add_infraction(INF_H2_NON_IDENTITY_TE);
+            create_event(EVENT_H2_NON_IDENTITY_TE);
+        }
+        if (get_header_value_norm(HEAD_CONTENT_LENGTH).length() > 0)
+        {
+            const int64_t content_length =
+                norm_decimal_integer(get_header_value_norm(HEAD_CONTENT_LENGTH));
+            if (content_length >= 0)
+                session_data->data_length[source_id] = content_length;
+            else
+            {
+                add_infraction(INF_BAD_CONTENT_LENGTH);
+                create_event(EVENT_BAD_CONTENT_LENGTH);
+            }
+        }
+        session_data->type_expected[source_id] = SEC_BODY_H2;
+        prepare_body();
+        return;
+    }
+
     if ((te_header.length() > 0) && (version_id == VERS_1_0))
     {
         // HTTP 1.0 should not be chunked and many browsers will ignore the TE header
@@ -293,71 +384,80 @@ void HttpMsgHeader::prepare_body()
     const int64_t& depth = (source_id == SRC_CLIENT) ? params->request_depth :
         params->response_depth;
     session_data->detect_depth_remaining[source_id] = (depth != -1) ? depth : INT64_MAX;
-    if (session_data->detect_depth_remaining[source_id] > 0)
-    {
-        // Depth must be positive because first body section must actually go to detection in order
-        // to be the detection section
-        detection_section = false;
-    }
     setup_file_processing();
     setup_encoding_decompression();
     setup_utf_decoding();
-    setup_pdf_swf_decompression();
+    setup_file_decompression();
     update_depth();
+
+    if (source_id == SRC_SERVER)
+    {
+        if (params->script_detection)
+            session_data->accelerated_blocking[source_id] = AB_INSPECT;
+        else if (params->detained_inspection)
+            session_data->accelerated_blocking[source_id] = AB_DETAIN;
+    }
+
     if (source_id == SRC_CLIENT)
     {
         HttpModule::increment_peg_counts(PEG_REQUEST_BODY);
+
+        // Message bodies for CONNECT requests have no defined semantics
+        if ((method_id == METH_CONNECT) && !session_data->for_http2)
+        {
+            add_infraction(INF_CONNECT_REQUEST_BODY);
+            create_event(EVENT_CONNECT_REQUEST_BODY);
+        }
     }
 }
 
 void HttpMsgHeader::setup_file_processing()
 {
-    // FIXIT-M Bidirectional file processing is problematic so we don't do it. When the library
-    // fully supports it remove the outer if statement that prevents it from being done.
-    if (session_data->file_depth_remaining[1-source_id] <= 0)
-    {
-        if ((session_data->file_depth_remaining[source_id] = FileService::get_max_file_depth())
-             < 0)
-        {
-           session_data->file_depth_remaining[source_id] = 0;
-           return;
-        }
+    session_data->file_octets[source_id] = 0;
 
-        // Do we meet all the conditions for MIME file processing?
-        if (source_id == SRC_CLIENT)
-        {
-            const Field& content_type = get_header_value_raw(HEAD_CONTENT_TYPE);
-            if (content_type.length() > 0)
-            {
-                if (boundary_present(content_type))
-                {
-                    session_data->mime_state[source_id] =
-                        new MimeSession(&decode_conf, &mime_conf);
-                    // Show file processing the Content-Type header as if it were regular data.
-                    // This will enable it to find the boundary string.
-                    // FIXIT-L develop a proper interface for passing the boundary string.
-                    // This interface is a leftover from when OHI pushed whole messages through
-                    // this interface.
-                    session_data->mime_state[source_id]->process_mime_data(flow,
-                        content_type.start(), content_type.length(), true,
-                        SNORT_FILE_POSITION_UNKNOWN);
-                    session_data->mime_state[source_id]->process_mime_data(flow,
-                        (const uint8_t*)"\r\n", 2, true, SNORT_FILE_POSITION_UNKNOWN);
-                }
-            }
-        }
-
-        // Otherwise do regular file processing
-        if (session_data->mime_state[source_id] == nullptr)
-        {
-            FileFlows* file_flows = FileFlows::get_file_flows(flow);
-            if (!file_flows)
-                session_data->file_depth_remaining[source_id] = 0;
-        }
-    }
-    else
+    const int64_t max_file_depth = FileService::get_max_file_depth();
+    if (max_file_depth <= 0)
     {
         session_data->file_depth_remaining[source_id] = 0;
+        return;
+    }
+
+    // Generate the unique file id for multi file processing
+    set_multi_file_processing_id(get_transaction_id(), get_h2_stream_id(source_id));
+
+    // Do we meet all the conditions for MIME file processing?
+    if (source_id == SRC_CLIENT)
+    {
+        const Field& content_type = get_header_value_raw(HEAD_CONTENT_TYPE);
+        if (content_type.length() > 0)
+        {
+            if (boundary_present(content_type))
+            {
+                session_data->mime_state[source_id] = new MimeSession(&FileService::decode_conf,
+                    &mime_conf, get_multi_file_processing_id(), true);
+                // Show file processing the Content-Type header as if it were regular data.
+                // This will enable it to find the boundary string.
+                // FIXIT-L develop a proper interface for passing the boundary string.
+                // This interface is a leftover from when OHI pushed whole messages through
+                // this interface.
+                Packet* p = DetectionEngine::get_current_packet();
+                session_data->mime_state[source_id]->process_mime_data(p,
+                    content_type.start(), content_type.length(), true,
+                    SNORT_FILE_POSITION_UNKNOWN);
+                session_data->mime_state[source_id]->process_mime_data(p,
+                    (const uint8_t*)"\r\n", 2, true, SNORT_FILE_POSITION_UNKNOWN);
+                session_data->file_depth_remaining[source_id] = INT64_MAX;
+            }
+        }
+    }
+
+    // Otherwise do regular file processing
+    if (session_data->mime_state[source_id] == nullptr)
+    {
+        session_data->file_depth_remaining[source_id] = max_file_depth;
+        FileFlows* file_flows = FileFlows::get_file_flows(flow);
+        if (!file_flows)
+            session_data->file_depth_remaining[source_id] = 0;
     }
 }
 
@@ -424,6 +524,7 @@ void HttpMsgHeader::setup_encoding_decompression()
     const int window_bits = (compression == CMP_GZIP) ? GZIP_WINDOW_BITS : DEFLATE_WINDOW_BITS;
     if (inflateInit2(session_data->compress_stream[source_id], window_bits) != Z_OK)
     {
+        assert(false);
         session_data->compression[source_id] = CMP_NONE;
         delete session_data->compress_stream[source_id];
         session_data->compress_stream[source_id] = nullptr;
@@ -479,21 +580,39 @@ void HttpMsgHeader::setup_utf_decoding()
     session_data->utf_state->set_decode_utf_state_charset(charset_code);
 }
 
-void HttpMsgHeader::setup_pdf_swf_decompression()
+void HttpMsgHeader::setup_file_decompression()
 {
-    if (source_id == SRC_CLIENT || (!params->decompress_pdf && !params->decompress_swf))
+    if (source_id == SRC_CLIENT ||
+       (!params->decompress_pdf && !params->decompress_swf && !params->decompress_zip))
         return;
 
     session_data->fd_state = File_Decomp_New();
     session_data->fd_state->Modes =
         (params->decompress_pdf ? FILE_PDF_DEFL_BIT : 0) |
-        (params->decompress_swf ? (FILE_SWF_ZLIB_BIT | FILE_SWF_LZMA_BIT) : 0);
+        (params->decompress_swf ? (FILE_SWF_ZLIB_BIT | FILE_SWF_LZMA_BIT) : 0) |
+        (params->decompress_zip ? FILE_ZIP_DEFL_BIT : 0);
     session_data->fd_state->Alert_Callback = HttpMsgBody::fd_event_callback;
     session_data->fd_state->Alert_Context = &session_data->fd_alert_context;
     session_data->fd_state->Compr_Depth = 0;
     session_data->fd_state->Decompr_Depth = 0;
 
     (void)File_Decomp_Init(session_data->fd_state);
+}
+
+// Each file processed has a unique id per flow: hash(source_id, transaction_id, h2_stream_id)
+// If this is an HTTP/1 flow, h2_stream_id is 0
+void HttpMsgHeader::set_multi_file_processing_id(const uint64_t transaction_id,
+    const uint32_t stream_id)
+{
+    const int data_len = sizeof(source_id) + sizeof(transaction_id) + sizeof(stream_id);
+    uint8_t data[data_len];
+    memcpy(data, (void*)&source_id, sizeof(source_id));
+    uint32_t offset = sizeof(source_id);
+    memcpy(data + offset, (void*)&transaction_id, sizeof(transaction_id));
+    offset += sizeof(transaction_id);
+    memcpy(data + offset, (void*)&stream_id, sizeof(stream_id));
+
+    multi_file_processing_id = str_to_hash(data, data_len);
 }
 
 #ifdef REG_TEST
@@ -517,4 +636,3 @@ void HttpMsgHeader::print_section(FILE* output)
     HttpMsgSection::print_section_wrapup(output);
 }
 #endif
-

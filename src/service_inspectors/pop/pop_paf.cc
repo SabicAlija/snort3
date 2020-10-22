@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -390,7 +390,7 @@ PopSplitter::PopSplitter(bool c2s) : StreamSplitter(c2s)
 */
 
 StreamSplitter::Status PopSplitter::scan(
-    Flow* ssn, const uint8_t* data, uint32_t len,
+    Packet* pkt, const uint8_t* data, uint32_t len,
     uint32_t flags, uint32_t* fp)
 {
     PopPafData* pfdata = &state;
@@ -398,7 +398,7 @@ StreamSplitter::Status PopSplitter::scan(
     if (flags & PKT_FROM_SERVER)
         return pop_paf_server(pfdata, data, len, fp);
     else
-        return pop_paf_client(ssn, pfdata, data, len, fp);
+        return pop_paf_client(pkt->flow, pfdata, data, len, fp);
 }
 
 bool pop_is_data_end(Flow* ssn)

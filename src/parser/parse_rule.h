@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 namespace snort
 {
 struct SnortConfig;
+SO_PUBLIC int get_rule_count();
 }
 struct OptFpList;
 struct OptTreeNode;
@@ -34,6 +35,8 @@ struct RuleTreeNode;
 void parse_rule_init();
 void parse_rule_term();
 void parse_rule_print();
+int get_policy_loaded_rule_count();
+int get_policy_shared_rule_count();
 
 void parse_rule_type(snort::SnortConfig*, const char*, RuleTreeNode&);
 void parse_rule_proto(snort::SnortConfig*, const char*, RuleTreeNode&);
@@ -41,13 +44,11 @@ void parse_rule_nets(snort::SnortConfig*, const char*, bool src, RuleTreeNode&);
 void parse_rule_ports(snort::SnortConfig*, const char*, bool src, RuleTreeNode&);
 void parse_rule_dir(snort::SnortConfig*, const char*, RuleTreeNode&);
 void parse_rule_opt_begin(snort::SnortConfig*, const char* key);
-void parse_rule_opt_set(
-    snort::SnortConfig*, const char* key, const char* opt, const char* val);
+void parse_rule_opt_set(snort::SnortConfig*, const char* key, const char* opt, const char* val);
 void parse_rule_opt_end(snort::SnortConfig*, const char* key, OptTreeNode*);
-OptTreeNode* parse_rule_open(snort::SnortConfig*, RuleTreeNode&, bool stub = false);
-const char* parse_rule_close(snort::SnortConfig*, RuleTreeNode&, OptTreeNode*);
 
-int get_rule_count();
+OptTreeNode* parse_rule_open(snort::SnortConfig*, RuleTreeNode&, bool stub = false);
+void parse_rule_close(snort::SnortConfig*, RuleTreeNode&, OptTreeNode*);
 
 #endif
 

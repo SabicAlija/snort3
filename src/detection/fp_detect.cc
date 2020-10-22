@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -39,6 +39,8 @@
 
 #include "fp_detect.h"
 
+#include <vector>
+
 #include "events/event.h"
 #include "filters/rate_filter.h"
 #include "filters/sfthreshold.h"
@@ -47,11 +49,11 @@
 #include "latency/packet_latency.h"
 #include "latency/rule_latency.h"
 #include "log/messages.h"
-#include "main/modules.h"
 #include "main/snort.h"
 #include "main/snort_config.h"
 #include "main/snort_debug.h"
 #include "managers/action_manager.h"
+#include "packet_io/active.h"
 #include "packet_tracer/packet_tracer.h"
 #include "parser/parser.h"
 #include "profiler/profiler_defs.h"
@@ -68,6 +70,7 @@
 #include "detect_trace.h"
 #include "detection_util.h"
 #include "detection_engine.h"
+#include "detection_module.h"
 #include "detection_options.h"
 #include "fp_config.h"
 #include "fp_create.h"
@@ -81,22 +84,24 @@
 
 using namespace snort;
 
-THREAD_LOCAL ProfileStats rulePerfStats;
-THREAD_LOCAL ProfileStats ruleRTNEvalPerfStats;
-THREAD_LOCAL ProfileStats ruleOTNEvalPerfStats;
-THREAD_LOCAL ProfileStats ruleNFPEvalPerfStats;
-
-// Initialize the OtnxMatchData structure.  We do this for
-// every packet so this only sets the necessary counters to
-// zero which saves us time.
-
-static inline void init_match_info(OtnxMatchData* o, bool do_fp)
+enum FPTask : uint8_t
 {
-    for ( int i = 0; i < o->iMatchInfoArraySize; i++ )
-        o->matchInfo[i].iMatchCount = 0;
+    FP = 1,
+    NON_FP = 2
+};
 
-    o->have_match = false;
-    o->do_fp = do_fp;
+THREAD_LOCAL ProfileStats mpsePerfStats;
+THREAD_LOCAL ProfileStats rulePerfStats;
+
+static void fp_immediate(Packet*);
+static void fp_immediate(MpseGroup*, Packet*, const uint8_t*, unsigned);
+
+static inline void init_match_info(const IpsContext* c)
+{
+    for ( unsigned i = 0; i < c->conf->num_rule_types; i++ )
+        c->otnx->matchInfo[i].iMatchCount = 0;
+
+    c->otnx->have_match = false;
 }
 
 // called by fpLogEvent(), which does the filtering etc.
@@ -104,7 +109,7 @@ static inline void init_match_info(OtnxMatchData* o, bool do_fp)
 static inline void fpLogOther(
     Packet* p, const RuleTreeNode* rtn, const OptTreeNode* otn, int action)
 {
-    if ( EventTrace_IsEnabled() )
+    if ( EventTrace_IsEnabled(p->context->conf) )
         EventTrace_Log(p, otn, action);
 
     if ( PacketTracer::is_active() )
@@ -113,13 +118,18 @@ static inline void fpLogOther(
             otn->sigInfo.gid, otn->sigInfo.sid,
             otn->sigInfo.rev, Actions::get_string((Actions::Type)action));
     }
-    
+
     // rule option actions are queued here (eg replace)
     otn_trigger_actions(otn, p);
 
     // rule actions are queued here (eg reject)
-    if ( rtn->listhead->action )
-        ActionManager::queue(rtn->listhead->action);
+    if ( rtn->listhead->is_plugin_action )
+    {
+        Actions::Type idx = rtn->listhead->ruleListNode->mode;
+        ActiveAction * act = get_ips_policy()->action[idx];
+        if ( act )
+            Active::queue(act, p);
+    }
 }
 
 /*
@@ -133,10 +143,10 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
     int action = -1, rateAction = -1;
     int override, filterEvent = 0;
 
-    if ( Actions::is_pass(rtn->type) )
+    if ( Actions::is_pass(rtn->action) )
         p->packet_flags |= PKT_PASS_RULE;
 
-    if ( otn->stateless )
+    if ( otn->stateless() )
     {
         /* Stateless rule, set the stateless bit */
         p->packet_flags |= PKT_STATELESS;
@@ -150,14 +160,14 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
     }
 
     if ((p->packet_flags & PKT_STREAM_UNEST_UNI) &&
-        SnortConfig::assure_established() &&
+        p->context->conf->assure_established() &&
         (!(p->packet_flags & PKT_REBUILT_STREAM)) &&
-        (otn->stateless == 0))
+        !otn->stateless() )
     {
         // We still want to drop packets that are drop rules.
         // We just don't want to see the alert.
-        Actions::apply(rtn->type, p);
-        fpLogOther(p, rtn, otn, rtn->type);
+        Actions::apply(rtn->action, p);
+        fpLogOther(p, rtn, otn, rtn->action);
         return 1;
     }
 
@@ -172,7 +182,7 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
     {
         return 1;
     }
-    action = (rateAction < 0) ? (int)rtn->type : rateAction;
+    action = (rateAction < 0) ? (int)rtn->action : rateAction;
 
     // When rate filters kick in, event filters are still processed.
     // perform event filtering tests - impacts logging
@@ -181,7 +191,7 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
         filterEvent = sfthreshold_test(
             otn->sigInfo.gid, otn->sigInfo.sid,
             p->ptrs.ip_api.get_src(), p->ptrs.ip_api.get_dst(),
-            p->pkth->ts.tv_sec);
+            p->pkth->ts.tv_sec, get_network_policy()->policy_id);
     }
     else
     {
@@ -190,7 +200,7 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
 
         filterEvent = sfthreshold_test(
             otn->sigInfo.gid, otn->sigInfo.sid,
-            &cleared, &cleared, p->pkth->ts.tv_sec);
+            &cleared, &cleared, p->pkth->ts.tv_sec, get_network_policy()->policy_id);
     }
 
     if ( (filterEvent < 0) || (filterEvent > 0 && !override) )
@@ -209,10 +219,12 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
      * check the decoder/preprocessor events (they have been added to Event queue already).
      * If its order is lower than 'pass', it should have been passed.
      * This is consistent with other detection rules */
-    if ( (p->packet_flags & PKT_PASS_RULE)
-        &&(SnortConfig::get_eval_index(rtn->type) > SnortConfig::get_eval_index(Actions::PASS)))
+    const SnortConfig* sc = p->context->conf;
+
+    if ( (p->packet_flags & PKT_PASS_RULE) &&
+        (sc->get_eval_index(rtn->action) > sc->get_eval_index(Actions::PASS)) )
     {
-        fpLogOther(p, rtn, otn, rtn->type);
+        fpLogOther(p, rtn, otn, rtn->action);
         return 1;
     }
 
@@ -227,7 +239,7 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
 
 /*
 **  DESCRIPTION
-**    Add and Event to the appropriate Match Queue: Alert, Pass, or Log.
+**    Add an Event to the appropriate Match Queue: Alert, Pass, or Log.
 **    This allows us to find multiple events per packet and pick the 'best'
 **    one.  This function also allows us to change the order of alert,
 **    pass, and log signatures by caching them for decision later.
@@ -241,31 +253,32 @@ int fpLogEvent(const RuleTreeNode* rtn, const OptTreeNode* otn, Packet* p)
 **
 **  FORMAL INPUTS
 **    OtnxMatchData    * - the omd to add the event to.
-**    int pLen             - length of pattern that matched, 0 for no content
 **    OptTreeNode        * - the otn to add.
 **
 **  FORMAL OUTPUTS
 **    int - 1 max_events variable hit, 0 successful.
 **
 */
-int fpAddMatch(OtnxMatchData* omd_local, int /*pLen*/, const OptTreeNode* otn)
+int fpAddMatch(OtnxMatchData* omd, const OptTreeNode* otn)
 {
     RuleTreeNode* rtn = getRuntimeRtnFromOtn(otn);
-    int evalIndex = rtn->listhead->ruleListNode->evalIndex;
+    unsigned evalIndex = rtn->listhead->ruleListNode->evalIndex;
+
+    const SnortConfig* sc = SnortConfig::get_conf();
 
     /* bounds check index */
-    if ( evalIndex >= omd_local->iMatchInfoArraySize )
+    if ( evalIndex >= sc->num_rule_types )
     {
         pc.match_limit++;
         return 1;
     }
-    MatchInfo* pmi = &omd_local->matchInfo[evalIndex];
+    MatchInfo* pmi = &omd->matchInfo[evalIndex];
 
     /*
     **  If we hit the max number of unique events for any rule type alert,
     **  log or pass, then we don't add it to the list.
     */
-    if ( pmi->iMatchCount >= (int)SnortConfig::get_conf()->fast_pattern_config->get_max_queue_events() ||
+    if ( pmi->iMatchCount >= sc->fast_pattern_config->get_max_queue_events() ||
         pmi->iMatchCount >= MAX_EVENT_MATCH)
     {
         pc.match_limit++;
@@ -273,70 +286,53 @@ int fpAddMatch(OtnxMatchData* omd_local, int /*pLen*/, const OptTreeNode* otn)
     }
 
     // don't store the same otn again
-    for ( int i=0; i< pmi->iMatchCount; i++ )
+    for ( unsigned i = 0; i < pmi->iMatchCount; i++ )
     {
-        if ( pmi->MatchArray[ i  ] == otn )
+        if ( pmi->MatchArray[i] == otn )
             return 0;
     }
 
     //  add the event to the appropriate list
     pmi->MatchArray[ pmi->iMatchCount ] = otn;
-
     pmi->iMatchCount++;
-    omd_local->have_match = true;
+    omd->have_match = true;
     return 0;
 }
 
-/*
-**  DESCRIPTION
-**    Evaluates an RTN against a packet.  We can probably get rid of
-**    the check_ports variable, but it's in there for good luck.  :)
-**
-**  FORMAL INPUTS
-**    RuleTreeNode * - RTN to check packet against.
-**    Packet       * - Packet to evaluate
-**    int            - whether to do a quick enhancement against ports.
-**
-**  FORMAL OUTPUT
-**    int - 1 if match, 0 if match failed.
-*/
-int fpEvalRTN(RuleTreeNode* rtn, Packet* p, int check_ports)
+bool fp_eval_rtn(RuleTreeNode* rtn, Packet* p, int check_ports)
 {
-    Profile rule_profile(rulePerfStats);
-    Profile rule_rtn_eval_profile(ruleRTNEvalPerfStats);
+    if ( !rtn or !rtn->enabled() )
+        return false;
 
-    if ( !rtn )
-        return 0;
-
-    // FIXIT-L maybe add a port test here ...
+    if ( rtn->user_mode() )
+        check_ports = 1;
 
     if (!rtn->rule_func->RuleHeadFunc(p, rtn, rtn->rule_func, check_ports))
-    {
-        return 0;
-    }
+        return false;
 
-    /*
-    **  Return that there is a rule match and log the event outside
-    **  of this routine.
-    */
-    return 1;
+    return true;
+}
+
+int fp_eval_option(void* v, Cursor& c, Packet* p)
+{
+    IpsOption* opt = (IpsOption*)v;
+    return opt->eval(c, p);
 }
 
 static int detection_option_tree_evaluate(detection_option_tree_root_t* root,
-    detection_option_eval_data_t* eval_data)
+    detection_option_eval_data_t& eval_data)
 {
-    if ( !root )
-        return 0;
+    assert(root);
 
-    RuleLatency::Context rule_latency_ctx(root, eval_data->p);
+    RuleLatency::Context rule_latency_ctx(root, eval_data.p);
 
     if ( RuleLatency::suspended() )
         return 0;
 
-    Cursor c(eval_data->p);
+    Cursor c(eval_data.p);
     int rval = 0;
 
-    trace_log(detection, TRACE_RULE_EVAL, "Starting tree eval\n");
+    debug_log(detection_trace, TRACE_RULE_EVAL, nullptr, "Starting tree eval\n");
 
     for ( int i = 0; i < root->num_children; ++i )
     {
@@ -348,26 +344,23 @@ static int detection_option_tree_evaluate(detection_option_tree_root_t* root,
     return rval;
 }
 
-static int rule_tree_match(
-    void* user, void* tree, int index, void* context, void* neg_list)
+static void rule_tree_match(
+    IpsContext* context, void* user, void* tree, int index, void* neg_list)
 {
     PMX* pmx = (PMX*)user;
-    OtnxMatchData* pomd = (OtnxMatchData*)context;
 
     detection_option_tree_root_t* root = (detection_option_tree_root_t*)tree;
     detection_option_eval_data_t eval_data;
     NCListNode* ncl;
 
-    eval_data.pomd = pomd;
-    eval_data.p = pomd->p;
+    eval_data.p = context->packet;
     eval_data.pmd = pmx->pmd;
     eval_data.flowbit_failed = 0;
     eval_data.flowbit_noalert = 0;
 
-    print_pattern(pmx->pmd);
+    print_pattern(pmx->pmd, eval_data.p);
 
     {
-        Profile rule_profile(rulePerfStats);
         /* NOTE: The otn will be the first one in the match state. If there are
          * multiple rules associated with a match state, mucking with the otn
          * may muck with an unintended rule */
@@ -384,15 +377,11 @@ static int rule_tree_match(
             last_check->ts.tv_sec = eval_data.p->pkth->ts.tv_sec;
             last_check->ts.tv_usec = eval_data.p->pkth->ts.tv_usec;
             last_check->run_num = get_run_num();
-            last_check->context_num = eval_data.p->context->context_num;
+            last_check->context_num = context->context_num;
             last_check->rebuild_flag = (eval_data.p->packet_flags & PKT_REBUILT_STREAM);
         }
 
-        int ret = 0;
-        {
-            Profile rule_otn_eval_profile(ruleOTNEvalPerfStats);
-            ret = detection_option_tree_evaluate(root, &eval_data);
-        }
+        int ret = detection_option_tree_evaluate(root, eval_data);
 
         if ( ret )
             pmqs.qualified_events++;
@@ -401,7 +390,7 @@ static int rule_tree_match(
     }
 
     if (eval_data.flowbit_failed)
-        return -1;
+        return;
 
     /* If this is for an IP rule set, evaluate the rules from
      * the inner IP offset as well */
@@ -428,12 +417,10 @@ static int rule_tree_match(
                 eval_data.p->dsize = eval_data.p->ptrs.ip_api.pay_len();
 
                 /* Recurse, and evaluate with the inner IP */
-                rule_tree_match(user, tree, index, context, nullptr);
+                rule_tree_match(context, user, tree, index, nullptr);
             }
             while (layer::set_inner_ip_api(eval_data.p,
-                eval_data.p->ptrs.ip_api,
-                curr_layer) &&
-                (eval_data.p->ptrs.ip_api != tmp_api));
+                eval_data.p->ptrs.ip_api, curr_layer) && (eval_data.p->ptrs.ip_api != tmp_api));
 
             /*  cleanup restore original data & dsize */
             eval_data.p->packet_flags &= ~PKT_IP_RULE_2ND;
@@ -443,7 +430,6 @@ static int rule_tree_match(
             eval_data.p->dsize = tmp_dsize;
         }
     }
-    return 0;
 }
 
 static int sortOrderByPriority(const void* e1, const void* e2)
@@ -594,8 +580,8 @@ static inline int fpSessionAlerted(Packet* p, const OptTreeNode* otn)
 **    event.  Otherwise if the ordering has it that pass rule events are
 **    processed after a drop or alert you will see the drops and alerts,
 **    and the pass event just causes us to stop processing any more events
-**    on the packet, but the packet does not pass.  Also, the --alert-on-drop
-**    flag causes any drop/sdrop/reject rules to be loaded as alert rules.
+**    on the packet, but the packet does not pass.  Also, the --treat-drop-as-alert
+**    flag causes any drop/block/reset rules to be loaded as alert rules.
 **    The default has been to ignore them on parsing.
 **
 **    If this is less than clear, here's the $.02 version:
@@ -607,7 +593,7 @@ static inline int fpSessionAlerted(Packet* p, const OptTreeNode* otn)
 **    the max_events and log fields are reduced to only needing the log
 **    events field. max_fields is harmless.
 **    ( drop rules may be honored as alerts in IDS mode (no -Q) by using
-**    the --alert-on-drop flag )
+**    the --treat-drop-as-alert)
 **
 **  FORMAL INPUTS
 **    OtnxMatchData * - omd to select event from.
@@ -616,27 +602,25 @@ static inline int fpSessionAlerted(Packet* p, const OptTreeNode* otn)
 **  FORMAL OUTPUT
 **    int - return 0 if no match, 1 if match.
 */
-static inline int fpFinalSelectEvent(OtnxMatchData* o, Packet* p)
+static inline int fpFinalSelectEvent(OtnxMatchData* omd, Packet* p)
 {
-    if ( !o->have_match )
+    if ( !omd->have_match )
         return 0;
 
-    int i;
-    int j;
-    int k;
-    const OptTreeNode* otn;
-    int tcnt = 0;
-    EventQueueConfig* eq = SnortConfig::get_conf()->event_queue_config;
-    RuleTreeNode* rtn;
+    unsigned tcnt = 0;
+    EventQueueConfig* eq = p->context->conf->event_queue_config;
+    int (*compar)(const void *, const void *);
+    compar = ( eq->order == SNORT_EVENTQ_PRIORITY )
+        ? &sortOrderByPriority : sortOrderByContentLength;
 
-    for ( i = 0; i < o->iMatchInfoArraySize; i++ )
+    for ( unsigned i = 0; i < p->context->conf->num_rule_types; i++ )
     {
         /* bail if were not dumping events in all the action groups,
          * and we've already got some events */
-        if (!SnortConfig::process_all_events() && (tcnt > 0))
+        if (!p->context->conf->process_all_events() && (tcnt > 0))
             return 1;
 
-        if (o->matchInfo[i].iMatchCount)
+        if ( omd->matchInfo[i].iMatchCount )
         {
             /*
              * We must always sort so if we que 8 and log 3 and they are
@@ -646,32 +630,20 @@ static inline int fpFinalSelectEvent(OtnxMatchData* o, Packet* p)
              * order is 'drop alert', and we log 3 for drop alerts do not
              * get logged.  IF order is 'alert drop', and we log 3 for
              * alert, then no drops are logged.  So, there should be a
-             * built in drop/sdrop/reject comes before alert/pass/log as
+             * built in drop/block/reset comes before alert/pass/log as
              * part of the natural ordering....Jan '06..
              */
             /* Sort the rules in this action group */
-            if (eq->order == SNORT_EVENTQ_PRIORITY)
-            {
-                qsort(o->matchInfo[i].MatchArray, o->matchInfo[i].iMatchCount,
-                    sizeof(void*), sortOrderByPriority);
-            }
-            else if (eq->order == SNORT_EVENTQ_CONTENT_LEN)
-            {
-                qsort(o->matchInfo[i].MatchArray, o->matchInfo[i].iMatchCount,
-                    sizeof(void*), sortOrderByContentLength);
-            }
-            else
-            {
-                FatalError("fpdetect: Order function for event queue is invalid.\n");
-            }
+            qsort(omd->matchInfo[i].MatchArray, omd->matchInfo[i].iMatchCount,
+                sizeof(void*), compar);
 
             /* Process each event in the action (alert,drop,log,...) groups */
-            for (j=0; j < o->matchInfo[i].iMatchCount; j++)
+            for (unsigned j = 0; j < omd->matchInfo[i].iMatchCount; j++)
             {
-                otn = o->matchInfo[i].MatchArray[j];
-                rtn = getRtnFromOtn(otn);
+                const OptTreeNode* otn = omd->matchInfo[i].MatchArray[j];
+                RuleTreeNode* rtn = getRtnFromOtn(otn);
 
-                if (otn && rtn && Actions::is_pass(rtn->type))
+                if ( otn && rtn && Actions::is_pass(rtn->action) )
                 {
                     /* Already acted on rules, so just don't act on anymore */
                     if ( tcnt > 0 )
@@ -679,9 +651,9 @@ static inline int fpFinalSelectEvent(OtnxMatchData* o, Packet* p)
                 }
 
                 //  Loop here so we don't log the same event multiple times.
-                for (k = 0; k < j; k++)
+                for (unsigned k = 0; k < j; k++)
                 {
-                    if (o->matchInfo[i].MatchArray[k] == otn)
+                    if ( omd->matchInfo[i].MatchArray[k] == otn )
                     {
                         otn = nullptr;
                         break;
@@ -699,20 +671,20 @@ static inline int fpFinalSelectEvent(OtnxMatchData* o, Packet* p)
                     pc.alert_limit++;
 
                 /* Only count it if we're going to log it */
-                if (tcnt <= eq->log_events)
+                if ( tcnt <= eq->log_events )
                 {
                     if ( p->flow )
                         fpAddSessionAlert(p, otn);
                 }
 
-                if (tcnt >= eq->max_events)
+                if ( tcnt >= eq->max_events )
                 {
                     pc.queue_limit++;
                     return 1;
                 }
 
                 /* only log/count one pass */
-                if ( otn && rtn && Actions::is_pass(rtn->type))
+                if ( otn && rtn && Actions::is_pass(rtn->action) )
                 {
                     p->packet_flags |= PKT_PASS_RULE;
                     return 1;
@@ -727,117 +699,117 @@ static inline int fpFinalSelectEvent(OtnxMatchData* o, Packet* p)
 class MpseStash
 {
 public:
-    // FIXIT-H use max = n * k, at most k per group
-    // need n >= 4 for src+dst+gen+svc
-    static const unsigned max = 32;
-
-    void init()
-    {
-        if ( enable )
-            count = flushed = 0;
-    }
-
-    // this is done in the offload thread
-    bool push(void* user, void* tree, int index, void* list);
-
-    // this is done in the packet thread
-    bool process(MpseMatch, void*);
-
-    void disable_process()
-    { enable = false; }
-
-    void enable_process()
-    { enable = true; }
-
-private:
-    bool enable;
-    unsigned count;
-    unsigned flushed;
-
-    struct Node
+    struct MatchData
     {
         void* user;
         void* tree;
         void* list;
         int index;
-    } queue[max];
+    };
+
+    using MatchStore = std::vector<MatchData>;
+
+public:
+    MpseStash(unsigned limit) : max(limit) { }
+
+    // this is done in the offload thread
+    bool push(void* user, void* tree, int index, void* context, void* list);
+
+    // this is done in the packet thread
+    void process(IpsContext*);
+
+private:
+    void process(IpsContext*, MatchStore&);
+
+private:
+    // balance insertion vs search cache
+    static constexpr unsigned qmax = 128;
+
+    unsigned inserts = 0;
+    unsigned max;
+
+    MatchStore queue;
+    MatchStore defer;
 };
 
-// uniquely insert into q, should splay elements for performance
-// return true if maxed out to trigger a flush
-bool MpseStash::push(void* user, void* tree, int index, void* list)
+bool MpseStash::push(void* user, void* tree, int index, void* context, void* list)
 {
-    pmqs.tot_inq_inserts++;
+    detection_option_tree_root_t* root = (detection_option_tree_root_t*)tree;
+    bool checker = root->otn->checks_flowbits();
+    MatchStore& store = checker ? defer : queue;
 
-    for ( int i = (int)(count) - 1; i >= 0; --i )
+    for ( auto it = store.rbegin(); it != store.rend(); it++ )
     {
-        if ( tree == queue[i].tree )
-            return false;
-    }
-
-    if ( count < max )
-    {
-        Node& node = queue[count++];
-        node.user = user;
-        node.tree = tree;
-        node.index = index;
-        node.list = list;
-        pmqs.tot_inq_uinserts++;
-    }
-
-    if ( count == max )
-    {
-        flushed++;
-        return true;
-    }
-
-    return false;
-}
-
-bool MpseStash::process(MpseMatch match, void* context)
-{
-    if ( !enable )
-        return true;  // maxed out - quit, FIXIT-H count this condition
-
-    if ( count > pmqs.max_inq )
-        pmqs.max_inq = count;
-
-    pmqs.tot_inq_flush += flushed;
-
-#ifdef DEBUG_MSGS
-    if (count == 0)
-        trace_log(detection, TRACE_RULE_EVAL, "Fast pattern processing - no matches found\n");
-#endif
-
-    for ( unsigned i = 0; i < count; ++i )
-    {
-        Node& node = queue[i];
-
-        // process a pattern - case is handled by otn processing
-        trace_logf(detection, TRACE_RULE_EVAL,"Processing pattern match #%d\n", i+1);
-        int res = match(node.user, node.tree, node.index, context, node.list);
-
-        if ( res > 0 )
+        if ( tree == (*it).tree )
         {
-            /* terminate matching */
-            count = 0;
+            inserts++;
             return true;
         }
     }
-    count = 0;
-    return false;
+
+    if ( max and inserts == max )
+    {
+        pmqs.tot_inq_overruns++;
+        return false;
+    }
+
+    if ( !checker and qmax == queue.size() )
+    {
+        Profile rule_profile(rulePerfStats);
+        process((IpsContext*)context, queue);
+    }
+
+    store.push_back({ user, tree, list, index });
+
+    pmqs.tot_inq_uinserts++;
+    inserts++;
+
+    return true;
+}
+
+void MpseStash::process(IpsContext* context)
+{
+    if ( !inserts )
+    {
+        debug_log(detection_trace, TRACE_RULE_EVAL,
+            static_cast<snort::IpsContext*>(context)->packet,
+            "Fast pattern processing - no matches found\n");
+        return;
+    }
+
+    process(context, queue);
+    process(context, defer);
+
+    if ( inserts > pmqs.max_inq )
+        pmqs.max_inq = inserts;
+
+    pmqs.tot_inq_inserts += inserts;
+    inserts = 0;
+}
+
+void MpseStash::process(IpsContext* context, MatchStore& store)
+{
+#ifdef DEBUG_MSGS
+    unsigned i = 0;
+#endif
+
+    for ( auto it : store )
+    {
+        debug_logf(detection_trace, TRACE_RULE_EVAL,
+            static_cast<snort::IpsContext*>(context)->packet, "Processing pattern match #%d\n", ++i);
+
+        rule_tree_match(context, it.user, it.tree, it.index, it.list);
+    }
+    pmqs.tot_inq_flush += store.size();
+    store.clear();
 }
 
 void fp_set_context(IpsContext& c)
 {
-    c.stash = new MpseStash;
-
+    FastPatternConfig* fp = c.conf->fast_pattern_config;
+    c.stash = new MpseStash(fp->get_queue_limit());
     c.otnx = (OtnxMatchData*)snort_calloc(sizeof(OtnxMatchData));
-    c.otnx->iMatchInfoArraySize = SnortConfig::get_conf()->num_rule_types;
-
-    c.otnx->matchInfo = (MatchInfo*)snort_calloc(
-        SnortConfig::get_conf()->num_rule_types, sizeof(MatchInfo));
-
+    c.otnx->matchInfo = (MatchInfo*)snort_calloc(MAX_NUM_RULE_TYPES, sizeof(MatchInfo));
     c.context_num = 0;
 }
 
@@ -848,109 +820,124 @@ void fp_clear_context(IpsContext& c)
     snort_free(c.otnx);
 }
 
-// rule_tree_match() could be used instead to bypass the queuing
 static int rule_tree_queue(
     void* user, void* tree, int index, void* context, void* list)
 {
-    OtnxMatchData* pomd = (OtnxMatchData*)context;
-    MpseStash* stash = pomd->p->context->stash;
-
-    if ( stash->push(user, tree, index, list) )
-    {
-        if ( stash->process(rule_tree_match, context) )
-            return 1;
-    }
+    MpseStash* stash = ((IpsContext*)context)->stash;
+    if ( !stash->push(user, tree, index, context, list) )
+        return 1;
     return 0;
 }
 
-static inline int search_data(
-    Mpse* so, OtnxMatchData* omd, const uint8_t* buf, unsigned len, PegCount& cnt)
+static inline int batch_search(
+    MpseGroup* so, Packet* p, const uint8_t* buf, unsigned len, PegCount& cnt)
 {
-    assert(so->get_pattern_count() > 0);
-    int start_state = 0;
+    assert(so->get_normal_mpse()->get_pattern_count() > 0);
     cnt++;
-    omd->data = buf; omd->size = len;
-    MpseStash* stash = omd->p->context->stash;
-    stash->init();
-    dump_buffer(buf, len, omd->p);
-    so->search(buf, len, rule_tree_queue, omd, &start_state);
-    stash->process(rule_tree_match, omd);
+
+    // FIXIT-P Batch outer UDP payload searches for teredo set and the outer header
+    // during any signature evaluation
+    if ( p->is_udp_tunneled() )
+    {
+        fp_immediate(so, p, buf, len);
+    }
+    else
+    {
+        MpseBatchKey<> key = MpseBatchKey<>(buf, len);
+        p->context->searches.items[key].so.push_back(so);
+    }
+
+    dump_buffer(buf, len, p);
+
     if ( PacketLatency::fastpath() )
         return 1;
     return 0;
 }
 
-static inline int search_buffer(
-    Inspector* gadget, OtnxMatchData* omd, InspectionBuffer& buf,
-    InspectionBuffer::Type ibt, PmType pmt, PegCount& cnt)
+static inline void search_buffer(
+    Inspector* gadget, InspectionBuffer& buf, InspectionBuffer::Type ibt,
+    Packet* p, PortGroup* pg, PmType pmt, PegCount& cnt)
 {
-    if ( gadget->get_fp_buf(ibt, omd->p, buf) )
+    if ( MpseGroup* so = pg->mpsegrp[pmt] )
     {
-        if ( Mpse* so = omd->pg->mpse[pmt] )
+        if ( gadget->get_fp_buf(ibt, p, buf) )
         {
-            // FIXIT-H get the context packet number
-            trace_logf(detection, TRACE_FP_SEARCH, "%" PRIu64 " fp %s.%s[%d]\n",
-                omd->p->context->packet_number, gadget->get_name(), pm_type_strings[pmt], buf.len);
+            debug_logf(detection_trace, TRACE_FP_SEARCH, p,
+                "%" PRIu64 " fp %s.%s[%d]\n", p->context->packet_number,
+                gadget->get_name(), pm_type_strings[pmt], buf.len);
 
-            search_data(so, omd, buf.data, buf.len, cnt);
+            batch_search(so, p, buf.data, buf.len, cnt);
         }
     }
-    return 0;
 }
 
-static int fp_search(
-    PortGroup* port_group, Packet* p, int check_ports, int type, OtnxMatchData* omd)
+static int fp_search(PortGroup* port_group, Packet* p, bool srvc)
 {
     Inspector* gadget = p->flow ? p->flow->gadget : nullptr;
     InspectionBuffer buf;
 
-    omd->pg = port_group;
-    omd->p = p;
-    omd->check_ports = check_ports;
+    debug_log(detection_trace, TRACE_RULE_EVAL, p, "Fast pattern search\n");
 
-    bool user_mode = SnortConfig::get_conf()->sopgTable->user_mode;
-
-    trace_log(detection, TRACE_RULE_EVAL, "Fast pattern search\n");
-
-    if ( (!user_mode or type < 2) and p->data and p->dsize )
+    // ports search raw packet only
+    if ( p->dsize )
     {
-        // ports search raw packet only
-        if ( Mpse* so = port_group->mpse[PM_TYPE_PKT] )
+        assert(p->data);
+
+        if ( MpseGroup* so = port_group->mpsegrp[PM_TYPE_PKT] )
         {
             if ( uint16_t pattern_match_size = p->get_detect_limit() )
             {
-                trace_logf(detection, TRACE_FP_SEARCH, "%" PRIu64 " fp %s[%u]\n",
-                    p->context->packet_number, pm_type_strings[PM_TYPE_PKT], pattern_match_size);
+                debug_logf(detection_trace, TRACE_FP_SEARCH, p,
+                    "%" PRIu64 " fp %s[%u]\n", p->context->packet_number,
+                    pm_type_strings[PM_TYPE_PKT], pattern_match_size);
 
-                search_data(so, omd, p->data, pattern_match_size, pc.pkt_searches);
+                batch_search(so, p, p->data, pattern_match_size, pc.pkt_searches);
                 p->is_cooked() ?  pc.cooked_searches++ : pc.raw_searches++;
             }
         }
     }
 
-    if ( (!user_mode or type == 1) and gadget )
+    if ( gadget )
     {
-        // service searches PDU buffers and file
-        if ( search_buffer(gadget, omd, buf, buf.IBT_KEY, PM_TYPE_KEY, pc.key_searches) )
-            return 1;
-
-        if ( search_buffer(gadget, omd, buf, buf.IBT_HEADER, PM_TYPE_HEADER, pc.header_searches) )
-            return 1;
-
-        if ( search_buffer(gadget, omd, buf, buf.IBT_BODY, PM_TYPE_BODY, pc.body_searches) )
-            return 1;
-
         // FIXIT-L PM_TYPE_ALT will never be set unless we add
         // norm_data keyword or telnet, rpc_decode, smtp keywords
         // until then we must use the standard packet mpse
-        if ( search_buffer(gadget, omd, buf, buf.IBT_ALT, PM_TYPE_PKT, pc.alt_searches) )
-            return 1;
+        search_buffer(gadget, buf, buf.IBT_ALT, p, port_group, PM_TYPE_PKT, pc.alt_searches);
     }
 
-    if ( !user_mode or type > 0 )
+    if ( !srvc )
+        return 0;
+
+    // service searches PDU buffers and file
+    if ( gadget )
+    {
+        search_buffer(gadget, buf, buf.IBT_KEY, p, port_group, PM_TYPE_KEY, pc.key_searches);
+
+        search_buffer(gadget, buf, buf.IBT_HEADER, p, port_group, PM_TYPE_HEADER, pc.header_searches);
+
+        search_buffer(gadget, buf, buf.IBT_BODY, p, port_group, PM_TYPE_BODY, pc.body_searches);
+
+        search_buffer(
+            gadget, buf, buf.IBT_RAW_KEY, p, port_group, PM_TYPE_RAW_KEY, pc.raw_key_searches);
+
+        search_buffer(
+            gadget, buf, buf.IBT_RAW_HEADER, p, port_group, PM_TYPE_RAW_HEADER, pc.raw_header_searches);
+
+        search_buffer(
+            gadget, buf, buf.IBT_METHOD, p, port_group, PM_TYPE_METHOD, pc.method_searches);
+
+        search_buffer(
+            gadget, buf, buf.IBT_STAT_CODE, p, port_group, PM_TYPE_STAT_CODE, pc.stat_code_searches);
+
+        search_buffer(
+            gadget, buf, buf.IBT_STAT_MSG, p, port_group, PM_TYPE_STAT_MSG, pc.stat_msg_searches);
+
+        search_buffer(
+            gadget, buf, buf.IBT_COOKIE, p, port_group, PM_TYPE_COOKIE, pc.cookie_searches);
+    }
     {
         // file searches file only
-        if ( Mpse* so = port_group->mpse[PM_TYPE_FILE] )
+        if ( MpseGroup* so = port_group->mpsegrp[PM_TYPE_FILE] )
         {
             // FIXIT-M file data should be obtained from
             // inspector gadget as is done with search_buffer
@@ -958,33 +945,63 @@ static int fp_search(
 
             if ( file_data.len )
             {
-                trace_logf(detection, TRACE_FP_SEARCH, "%" PRIu64 " fp search %s[%d]\n",
-                    p->context->packet_number, pm_type_strings[PM_TYPE_FILE], file_data.len);
+                debug_logf(detection_trace, TRACE_FP_SEARCH, p,
+                    "%" PRIu64 " fp search %s[%d]\n", p->context->packet_number,
+                    pm_type_strings[PM_TYPE_FILE], file_data.len);
 
-                search_data(so, omd, file_data.data, file_data.len, pc.file_searches);
+                batch_search(so, p, file_data.data, file_data.len, pc.file_searches);
             }
         }
     }
     return 0;
 }
 
-//  This function does a set-wise match on content, and walks an otn list
-//  for non-content.  The otn list search will eventually be redone for
-//  for performance purposes.
-
-static inline int fpEvalHeaderSW(PortGroup* port_group, Packet* p,
-    int check_ports, char ip_rule, int type, OtnxMatchData* omd)
+static inline void eval_fp(
+    PortGroup* port_group, Packet* p, char ip_rule, bool srvc)
 {
-    if ( !p->is_detection_enabled(p->packet_flags & PKT_FROM_CLIENT) )
-        return 0;
+    const uint8_t* tmp_payload = nullptr;
+    uint16_t tmp_dsize = 0;
+
+    if ( !ip_rule )
+        p->packet_flags &= ~PKT_IP_RULE;
+
+    else
+    {
+        int8_t curr_ip_layer = 0;
+
+        tmp_payload = p->data;  // FIXIT-M restore even with offload
+        tmp_dsize = p->dsize;
+
+        if (layer::set_outer_ip_api(p, p->ptrs.ip_api, curr_ip_layer))
+        {
+            p->data = p->ptrs.ip_api.ip_data();
+            p->dsize = p->ptrs.ip_api.pay_len();
+            p->packet_flags |= PKT_IP_RULE;
+        }
+    }
+
+    if ( DetectionEngine::content_enabled(p) )
+    {
+        if ( fp_search(port_group, p, srvc) )
+            return;
+    }
+    if ( ip_rule )
+    {
+        p->data = tmp_payload;
+        p->dsize = tmp_dsize;
+    }
+}
+
+static inline void eval_nfp(
+    PortGroup* port_group, Packet* p, char ip_rule)
+{
+    bool repeat = false;
+    int8_t curr_ip_layer = 0;
 
     const uint8_t* tmp_payload = nullptr;
-    int8_t curr_ip_layer = 0;
-    bool repeat = false;
     uint16_t tmp_dsize = 0;
-    FastPatternConfig* fp = SnortConfig::get_conf()->fast_pattern_config;
 
-    print_pkt_info(p);
+    FastPatternConfig* fp = p->context->conf->fast_pattern_config;
 
     if (ip_rule)
     {
@@ -999,21 +1016,6 @@ static inline int fpEvalHeaderSW(PortGroup* port_group, Packet* p,
             repeat = true;
         }
     }
-    else
-    {
-        p->packet_flags &= ~PKT_IP_RULE;
-    }
-
-    if ( omd->do_fp and DetectionEngine::content_enabled(p) )
-    {
-        if ( fp->get_stream_insert() || !(p->packet_flags & PKT_STREAM_INSERT) )
-            if ( fp_search(port_group, p, check_ports, type, omd) )
-                return 0;
-    }
-
-    if ( DetectionEngine::offloaded(p) )
-        return 0;
-
     do
     {
         if (port_group->nfp_rule_count)
@@ -1024,7 +1026,6 @@ static inline int fpEvalHeaderSW(PortGroup* port_group, Packet* p,
 
             detection_option_eval_data_t eval_data;
 
-            eval_data.pomd = omd;
             eval_data.p = p;
             eval_data.pmd = nullptr;
             eval_data.flowbit_failed = 0;
@@ -1032,11 +1033,10 @@ static inline int fpEvalHeaderSW(PortGroup* port_group, Packet* p,
 
             int rval = 0;
             {
-                Profile rule_profile(rulePerfStats);
-                Profile rule_nfp_eval_profile(ruleNFPEvalPerfStats);
-                trace_log(detection, TRACE_RULE_EVAL, "Testing non-content rules\n");
+                debug_log(detection_trace, TRACE_RULE_EVAL, p,
+                    "Testing non-content rules\n");
                 rval = detection_option_tree_evaluate(
-                    (detection_option_tree_root_t*)port_group->nfp_tree, &eval_data);
+                    (detection_option_tree_root_t*)port_group->nfp_tree, eval_data);
             }
 
             if (rval)
@@ -1047,8 +1047,7 @@ static inline int fpEvalHeaderSW(PortGroup* port_group, Packet* p,
             pc.hard_evals++;
         }
 
-        // FIXIT-L need to eval all IP layers, etc.
-        // FIXIT-L why run only nfp rules?
+        // FIXIT-L should really be logging any events based on curr_ip_layer
         if (ip_rule)
         {
             /* Evaluate again with the next IP layer */
@@ -1069,109 +1068,111 @@ static inline int fpEvalHeaderSW(PortGroup* port_group, Packet* p,
         }
     }
     while (repeat);
-
-    return 0;
 }
 
-static inline void fpEvalHeaderIp(Packet* p, OtnxMatchData* omd)
+//  This function does a set-wise match on content, and walks an otn list
+//  for non-content.  The otn list search will eventually be redone for
+//  for performance purposes.
+
+static inline void fpEvalHeaderSW(
+    PortGroup* port_group, Packet* p, char ip_rule, FPTask task, bool srvc = false)
+{
+    if ( !p->is_detection_enabled(p->packet_flags & PKT_FROM_CLIENT) )
+        return;
+
+    if ( task & FPTask::FP )
+        eval_fp(port_group, p, ip_rule, srvc);
+
+    if ( task & FPTask::NON_FP )
+        eval_nfp(port_group, p, ip_rule);
+}
+
+static inline void fpEvalHeaderIp(Packet* p, FPTask task)
 {
     PortGroup* any = nullptr, * ip_group = nullptr;
 
-    if ( !prmFindRuleGroupIp(SnortConfig::get_conf()->prmIpRTNX, ANYPORT, &ip_group, &any) )
+    if ( !prmFindRuleGroupIp(p->context->conf->prmIpRTNX, ANYPORT, &ip_group, &any) )
         return;
 
-    if ( SnortConfig::get_conf()->fast_pattern_config->get_debug_print_nc_rules() )
+    if ( p->context->conf->fast_pattern_config->get_debug_print_nc_rules() )
         LogMessage("fpEvalHeaderIp: ip_group=%p, any=%p\n", (void*)ip_group, (void*)any);
 
     if ( ip_group )
-        fpEvalHeaderSW(ip_group, p, 0, 1, 0, omd);
+        fpEvalHeaderSW(ip_group, p, 1, task);
 
-    if (any )
-        fpEvalHeaderSW(any, p, 0, 1, 0, omd);
+    if ( any )
+        fpEvalHeaderSW(any, p, 1, task);
 }
 
-static inline void fpEvalHeaderIcmp(Packet* p, OtnxMatchData* omd)
+static inline void fpEvalHeaderIcmp(Packet* p, FPTask task)
 {
     PortGroup* any = nullptr, * type = nullptr;
 
-    if ( !prmFindRuleGroupIcmp(SnortConfig::get_conf()->prmIcmpRTNX, p->ptrs.icmph->type, &type, &any) )
+    if ( !prmFindRuleGroupIcmp(p->context->conf->prmIcmpRTNX, p->ptrs.icmph->type, &type, &any) )
         return;
 
     if ( type )
-        fpEvalHeaderSW(type, p, 0, 0, 0, omd);
+        fpEvalHeaderSW(type, p, 0, task);
 
     if ( any )
-        fpEvalHeaderSW(any, p, 0, 0, 0, omd);
+        fpEvalHeaderSW(any, p, 0, task);
 }
 
-static inline void fpEvalHeaderTcp(Packet* p, OtnxMatchData* omd)
+static inline void fpEvalHeaderTcp(Packet* p, FPTask task)
 {
+
     PortGroup* src = nullptr, * dst = nullptr, * any = nullptr;
 
-    if ( !prmFindRuleGroupTcp(SnortConfig::get_conf()->prmTcpRTNX, p->ptrs.dp, p->ptrs.sp, &src, &dst, &any) )
+    if ( !prmFindRuleGroupTcp(p->context->conf->prmTcpRTNX, p->ptrs.dp, p->ptrs.sp, &src, &dst, &any) )
         return;
 
     if ( dst )
-        fpEvalHeaderSW(dst, p, 1, 0, 0, omd);
+        fpEvalHeaderSW(dst, p, 0, task);
 
     if ( src )
-        fpEvalHeaderSW(src, p, 1, 0, 0, omd);
+        fpEvalHeaderSW(src, p, 0, task);
 
     if ( any )
-        fpEvalHeaderSW(any, p, 1, 0, 0, omd);
+        fpEvalHeaderSW(any, p, 0, task);
 }
 
-static inline void fpEvalHeaderUdp(Packet* p, OtnxMatchData* omd)
+static inline void fpEvalHeaderUdp(Packet* p, FPTask task)
 {
     PortGroup* src = nullptr, * dst = nullptr, * any = nullptr;
 
-    if ( !prmFindRuleGroupUdp(SnortConfig::get_conf()->prmUdpRTNX, p->ptrs.dp, p->ptrs.sp, &src, &dst, &any) )
+    if ( !prmFindRuleGroupUdp(p->context->conf->prmUdpRTNX, p->ptrs.dp, p->ptrs.sp, &src, &dst, &any) )
         return;
 
     if ( dst )
-        fpEvalHeaderSW(dst, p, 1, 0, 0, omd);
+        fpEvalHeaderSW(dst, p, 0, task);
 
     if ( src )
-        fpEvalHeaderSW(src, p, 1, 0, 0, omd);
+        fpEvalHeaderSW(src, p, 0, task);
 
     if ( any )
-        fpEvalHeaderSW(any, p, 1, 0, 0, omd);
+        fpEvalHeaderSW(any, p, 0, task);
 }
 
-static inline bool fpEvalHeaderSvc(Packet* p, OtnxMatchData* omd, SnortProtocolId proto_id)
+static inline void fpEvalHeaderSvc(Packet* p, FPTask task)
 {
-    PortGroup* svc = nullptr, * file = nullptr;
-
     SnortProtocolId snort_protocol_id = p->get_snort_protocol_id();
 
-    if (snort_protocol_id != UNKNOWN_PROTOCOL_ID and snort_protocol_id != INVALID_PROTOCOL_ID)
-    {
-        if (p->is_from_server()) /* to cli */
-        {
-            svc = SnortConfig::get_conf()->sopgTable->get_port_group(proto_id, false, snort_protocol_id);
-            file = SnortConfig::get_conf()->sopgTable->get_port_group(proto_id, false, SNORT_PROTO_FILE);
-        }
+    if (snort_protocol_id == UNKNOWN_PROTOCOL_ID or snort_protocol_id == INVALID_PROTOCOL_ID)
+        return;
 
-        if (p->is_from_client()) /* to srv */
-        {
-            svc = SnortConfig::get_conf()->sopgTable->get_port_group(proto_id, true, snort_protocol_id);
-            file = SnortConfig::get_conf()->sopgTable->get_port_group(proto_id, true, SNORT_PROTO_FILE);
-        }
-    }
-    // FIXIT-P put alert service rules with file data fp in alert file group and
-    // verify ports and service during rule eval to avoid searching file data 2x.
-    int check_ports = (proto_id == SNORT_PROTO_USER) ? 2 : 1;
+    PortGroup* svc = nullptr;
 
-    if ( file )
-        fpEvalHeaderSW(file, p, check_ports, 0, 2, omd);
+    if (p->is_from_application_server())
+        svc = p->context->conf->sopgTable->get_port_group(false, snort_protocol_id);
+
+    else if (p->is_from_application_client())
+        svc = p->context->conf->sopgTable->get_port_group(true, snort_protocol_id);
 
     if ( svc )
-        fpEvalHeaderSW(svc, p, check_ports, 0, 1, omd);
-
-    return svc != nullptr;
+        fpEvalHeaderSW(svc, p, 0, task, true);
 }
 
-static void fpEvalPacketUdp(Packet* p, OtnxMatchData* omd)
+static void fpEvalPacketUdp(Packet* p, FPTask task)
 {
     uint16_t tmp_sp = p->ptrs.sp;
     uint16_t tmp_dp = p->ptrs.dp;
@@ -1198,7 +1199,11 @@ static void fpEvalPacketUdp(Packet* p, OtnxMatchData* omd)
     if ( p->dsize )
         DetectionEngine::enable_content(p);
 
-    fpEvalHeaderUdp(p, omd);
+    fpEvalHeaderUdp(p, task);
+
+    // FIXIT-P Batch outer UDP payload searches for teredo set and the outer header
+    // during any signature evaluation
+    fp_immediate(p);
 
     p->ptrs.sp = tmp_sp;
     p->ptrs.dp = tmp_dp;
@@ -1209,106 +1214,140 @@ static void fpEvalPacketUdp(Packet* p, OtnxMatchData* omd)
     DetectionEngine::set_detects(p, save_detect);
 }
 
-/*
-**    the IP protocol is processed.  If it is TCP, UDP, or ICMP, we
-**    process the both that particular ruleset and the IP ruleset
-**    with in the fpEvalHeader for that protocol.  If the protocol
-**    is not TCP, UDP, or ICMP, we just process the packet against
-**    the IP rules at the end of the fpEvalPacket routine.  Since
-**    we are using a setwise methodology for snort rules, both the
-**    network layer rules and the transport layer rules are done
-**    at the same time.  While this is not the best for modularity,
-**    it is the best for performance, which is what we are working
-**    on currently.
-*/
-static int fpEvalPacket(Packet* p)
+static inline bool skip_raw_tcp(const Packet* p)
 {
-    OtnxMatchData* omd = p->context->otnx;
+    if ( !(p->packet_flags & PKT_STREAM_INSERT) )
+        return false;
 
-    /* Run UDP rules against the UDP header of Teredo packets */
+    if ( !p->flow or !p->flow->gadget )
+        return false;
+
+    if ( !p->context->conf->fast_pattern_config->get_stream_insert() )
+        return true;
+
+    return false;
+}
+
+// the IP protocol is processed.  If it is TCP, UDP, or ICMP, we
+// process the both that particular ruleset and the IP ruleset
+// with in the fpEvalHeader for that protocol.  If the protocol
+// is not TCP, UDP, or ICMP, we just process the packet against
+// the IP rules at the end of the fpEvalPacket routine.  Since
+// we are using a setwise methodology for snort rules, both the
+// network layer rules and the transport layer rules are done
+// at the same time.  While this is not the best for modularity,
+// it is the best for performance, which is what we are working
+// on currently.
+
+static void fpEvalPacket(Packet* p, FPTask task)
+{
+    // Run UDP rules against the UDP header of Teredo packets
     // FIXIT-L udph is always inner; need to check for outer
-    if ( p->ptrs.udph && (p->proto_bits & (PROTO_BIT__TEREDO | PROTO_BIT__GTP)) )
-        fpEvalPacketUdp(p, omd);
+    // FIXIT-M UDP tunnel not searching service groups
+
+    if ( p->is_udp_tunneled() )
+        fpEvalPacketUdp(p, task);
+
+    if ( skip_raw_tcp(p) )
+        return;
+
+    fpEvalHeaderSvc(p, task);
 
     switch (p->type())
     {
     case PktType::IP:
-        fpEvalHeaderIp(p, omd);
-        fpEvalHeaderSvc(p, omd, SNORT_PROTO_IP);
+        fpEvalHeaderIp(p, task);
         break;
 
     case PktType::ICMP:
-        fpEvalHeaderIcmp(p, omd);
-        fpEvalHeaderSvc(p, omd, SNORT_PROTO_ICMP);
+        fpEvalHeaderIcmp(p, task);
         break;
 
     case PktType::TCP:
-        fpEvalHeaderTcp(p, omd);
-        fpEvalHeaderSvc(p, omd, SNORT_PROTO_TCP);
+        fpEvalHeaderTcp(p, task);
         break;
 
     case PktType::UDP:
-        fpEvalHeaderUdp(p, omd);
-        fpEvalHeaderSvc(p, omd, SNORT_PROTO_UDP);
+        fpEvalHeaderUdp(p, task);
         break;
 
     case PktType::PDU:
-        if ( SnortConfig::get_conf()->sopgTable->user_mode )
-            fpEvalHeaderSvc(p, omd, SNORT_PROTO_USER);
+        if ( p->proto_bits & PROTO_BIT__TCP )
+            fpEvalHeaderTcp(p, task);
 
-        // use ports if we don't know service or don't have rules
-        else if ( p->proto_bits & PROTO_BIT__TCP )
-        {
-            if ( p->get_snort_protocol_id() == UNKNOWN_PROTOCOL_ID or !fpEvalHeaderSvc(p, omd, SNORT_PROTO_TCP) )
-                fpEvalHeaderTcp(p, omd);
-        }
         else if ( p->proto_bits & PROTO_BIT__UDP )
-        {
-            if ( p->get_snort_protocol_id() == UNKNOWN_PROTOCOL_ID or !fpEvalHeaderSvc(p, omd, SNORT_PROTO_UDP) )
-                fpEvalHeaderUdp(p, omd);
-        }
-        break;
-
-    case PktType::FILE:
-        fpEvalHeaderSvc(p, omd, SNORT_PROTO_USER);
+            fpEvalHeaderUdp(p, task);
         break;
 
     default:
         break;
     }
-
-    return 0;
 }
 
-void fp_local(Packet* p)
+void fp_partial(Packet* p)
+{
+    Profile mpse_profile(mpsePerfStats);
+    IpsContext* c = p->context;
+    init_match_info(c);
+    c->searches.mf = rule_tree_queue;
+    c->searches.context = c;
+    assert(!c->searches.items.size());
+    print_pkt_info(p, "fast-patterns");
+    fpEvalPacket(p, FPTask::FP);
+}
+
+void fp_complete(Packet* p, bool search)
 {
     IpsContext* c = p->context;
     MpseStash* stash = c->stash;
-    stash->enable_process();
-    stash->init();
-    init_match_info(c->otnx, true);
-    fpEvalPacket(p);
-    fpFinalSelectEvent(c->otnx, p);
+
+    if ( search )
+    {
+        Profile mpse_profile(mpsePerfStats);
+        c->searches.search_sync();
+    }
+    {
+        Profile rule_profile(rulePerfStats);
+        stash->process(c);
+        print_pkt_info(p, "non-fast-patterns");
+        fpEvalPacket(p, FPTask::NON_FP);
+        fpFinalSelectEvent(c->otnx, p);
+        c->searches.items.clear();
+    }
 }
 
-void fp_offload(Packet* p)
+void fp_full(Packet* p)
+{
+    fp_partial(p);
+    fp_complete(p, true);
+}
+
+static void fp_immediate(Packet* p)
 {
     IpsContext* c = p->context;
     MpseStash* stash = c->stash;
-    stash->enable_process();
-    stash->init();
-    stash->disable_process();
-    init_match_info(c->otnx, true);
-    fpEvalPacket(p);
+    {
+        Profile mpse_profile(mpsePerfStats);
+        c->searches.search_sync();
+    }
+    {
+        Profile rule_profile(rulePerfStats);
+        stash->process(c);
+        c->searches.items.clear();
+    }
 }
 
-void fp_onload(Packet* p)
+static void fp_immediate(MpseGroup* so, Packet* p, const uint8_t* buf, unsigned len)
 {
-    IpsContext* c = p->context;
-    MpseStash* stash = c->stash;
-    stash->enable_process();
-    stash->process(rule_tree_match, c->otnx);
-    fpEvalPacket(p);
-    fpFinalSelectEvent(c->otnx, p);
+    MpseStash* stash = p->context->stash;
+    {
+        Profile mpse_profile(mpsePerfStats);
+        int start_state = 0;
+        so->get_normal_mpse()->search(buf, len, rule_tree_queue, p->context, &start_state);
+    }
+    {
+        Profile rule_profile(rulePerfStats);
+        stash->process(p->context);
+    }
 }
 

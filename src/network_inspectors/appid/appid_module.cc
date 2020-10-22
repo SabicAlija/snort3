@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,60 +28,65 @@
 #include <climits>
 #include <lua.hpp>
 
+#include "host_tracker/host_cache.h"
 #include "log/messages.h"
+#include "main/analyzer.h"
 #include "main/analyzer_command.h"
+#include "main/snort.h"
+#include "main/swapper.h"
+#include "managers/inspector_manager.h"
 #include "profiler/profiler.h"
+#include "src/main.h"
+#include "target_based/host_attributes.h"
+#include "trace/trace.h"
 #include "utils/util.h"
 
 #include "app_info_table.h"
 #include "appid_debug.h"
+#include "appid_inspector.h"
 #include "appid_peg_counts.h"
+#include "service_state.h"
 
 using namespace snort;
 using namespace std;
 
-Trace TRACE_NAME(appid_module);
+THREAD_LOCAL const Trace* appid_trace = nullptr;
 
 //-------------------------------------------------------------------------
 // appid module
 //-------------------------------------------------------------------------
 
-THREAD_LOCAL ProfileStats appidPerfStats;
+THREAD_LOCAL ProfileStats appid_perf_stats;
 THREAD_LOCAL AppIdStats appid_stats;
+THREAD_LOCAL bool ThirdPartyAppIdContext::tp_reload_in_progress = false;
 
 static const Parameter s_params[] =
 {
-#ifdef USE_RNA_CONFIG
-    { "conf", Parameter::PT_STRING, nullptr, nullptr,
-      "RNA configuration file" },  // FIXIT-L eliminate reference to "RNA"
-#endif
     // FIXIT-L: DECRYPT_DEBUG - Move this to ssl-module
 #ifdef REG_TEST
-    { "first_decrypted_packet_debug", Parameter::PT_INT, "0:", "0",
+    { "first_decrypted_packet_debug", Parameter::PT_INT, "0:max32", "0",
       "the first packet of an already decrypted SSL flow (debug single session only)" },
 #endif
-    { "memcap", Parameter::PT_INT, "0:", "0",
-      "disregard - not implemented" },  // FIXIT-M implement or delete appid.memcap
+    { "memcap", Parameter::PT_INT, "1024:maxSZ", "1048576",
+      "max size of the service cache before we start pruning the cache" },
     { "log_stats", Parameter::PT_BOOL, nullptr, "false",
       "enable logging of appid statistics" },
-    { "app_stats_period", Parameter::PT_INT, "0:", "300",
+    { "app_stats_period", Parameter::PT_INT, "1:max32", "300",
       "time period for collecting and logging appid statistics" },
-    { "app_stats_rollover_size", Parameter::PT_INT, "0:", "20971520",
+    { "app_stats_rollover_size", Parameter::PT_INT, "0:max32", "20971520",
       "max file size for appid stats before rolling over the log file" },
-    { "app_stats_rollover_time", Parameter::PT_INT, "0:", "86400",
-      "max time period for collection appid stats before rolling over the log file" },
     { "app_detector_dir", Parameter::PT_STRING, nullptr, nullptr,
       "directory to load appid detectors from" },
-    { "instance_id", Parameter::PT_INT, "0:", "0",
-      "instance id - ignored" },
-    { "debug", Parameter::PT_BOOL, nullptr, "false",
-      "enable appid debug logging" },
-    { "dump_ports", Parameter::PT_BOOL, nullptr, "false",
-      "enable dump of appid port information" },
+    { "list_odp_detectors", Parameter::PT_BOOL, nullptr, "false",
+      "enable logging of odp detectors statistics" },
     { "tp_appid_path", Parameter::PT_STRING, nullptr, nullptr,
       "path to third party appid dynamic library" },
     { "tp_appid_config", Parameter::PT_STRING, nullptr, nullptr,
       "path to third party appid configuration file" },
+    { "tp_appid_stats_enable", Parameter::PT_BOOL, nullptr, nullptr,
+      "enable collection of stats and print stats on exit in third party module" },
+    { "tp_appid_config_dump", Parameter::PT_BOOL, nullptr, nullptr,
+      "print third party configuration on startup" },
     { "log_all_sessions", Parameter::PT_BOOL, nullptr, "false",
       "enable logging of all appid sessions" },
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -91,7 +96,7 @@ class AcAppIdDebug : public AnalyzerCommand
 {
 public:
     AcAppIdDebug(AppIdDebugSessionConstraints* cs);
-    void execute(Analyzer&) override;
+    bool execute(Analyzer&, void**) override;
     const char* stringify() override { return "APPID_DEBUG"; }
 
 private:
@@ -108,7 +113,7 @@ AcAppIdDebug::AcAppIdDebug(AppIdDebugSessionConstraints* cs)
     }
 }
 
-void AcAppIdDebug::execute(Analyzer&)
+bool AcAppIdDebug::execute(Analyzer&, void**)
 {
     if (appidDebug)
     {
@@ -118,6 +123,139 @@ void AcAppIdDebug::execute(Analyzer&)
             appidDebug->set_constraints("appid", nullptr);
     }
     // FIXIT-L Add a warning if command was called without appid configured?
+
+    return true;
+}
+
+class ACThirdPartyAppIdContextSwap : public AnalyzerCommand
+{
+public:
+    bool execute(Analyzer&, void**) override;
+    ACThirdPartyAppIdContextSwap(const AppIdInspector& inspector,
+        Request& current_request, bool from_shell): inspector(inspector),
+        request(current_request), from_shell(from_shell)
+    {
+        LogMessage("== swapping third-party configuration\n");
+        request.respond("== swapping third-party configuration\n", from_shell, true);
+    }
+
+    ~ACThirdPartyAppIdContextSwap() override;
+    const char* stringify() override { return "THIRD-PARTY_CONTEXT_SWAP"; }
+private:
+    const AppIdInspector& inspector;
+    Request& request;
+    bool from_shell;
+};
+
+bool ACThirdPartyAppIdContextSwap::execute(Analyzer&, void**)
+{
+    assert(!pkt_thread_tp_appid_ctxt);
+    pkt_thread_tp_appid_ctxt = inspector.get_ctxt().get_tp_appid_ctxt();
+    pkt_thread_tp_appid_ctxt->tinit();
+    pkt_thread_tp_appid_ctxt->set_tp_reload_in_progress(false);
+
+    return true;
+}
+
+ACThirdPartyAppIdContextSwap::~ACThirdPartyAppIdContextSwap()
+{
+    Swapper::set_reload_in_progress(false);
+    LogMessage("== reload third-party complete\n");
+    request.respond("== reload third-party complete\n", from_shell, true);
+}
+
+class ACThirdPartyAppIdContextUnload : public AnalyzerCommand
+{
+public:
+    bool execute(Analyzer&, void**) override;
+    ACThirdPartyAppIdContextUnload(const AppIdInspector& inspector, ThirdPartyAppIdContext* tp_ctxt,
+        Request& current_request, bool from_shell): inspector(inspector),
+        tp_ctxt(tp_ctxt), request(current_request), from_shell(from_shell) { }
+    ~ACThirdPartyAppIdContextUnload() override;
+    const char* stringify() override { return "THIRD-PARTY_CONTEXT_UNLOAD"; }
+private:
+    const AppIdInspector& inspector;
+    ThirdPartyAppIdContext* tp_ctxt =  nullptr;
+    Request& request;
+    bool from_shell;
+};
+
+bool ACThirdPartyAppIdContextUnload::execute(Analyzer& ac, void**)
+{
+    assert(pkt_thread_tp_appid_ctxt);
+    pkt_thread_tp_appid_ctxt->set_tp_reload_in_progress(true);
+    bool reload_in_progress;
+    if (ac.is_idling())
+        reload_in_progress = pkt_thread_tp_appid_ctxt->tfini(true, true);
+    else
+        reload_in_progress = pkt_thread_tp_appid_ctxt->tfini(true);
+    if (reload_in_progress)
+        return false;
+    pkt_thread_tp_appid_ctxt = nullptr;
+
+    return true;
+}
+
+ACThirdPartyAppIdContextUnload::~ACThirdPartyAppIdContextUnload()
+{
+    delete tp_ctxt;
+    AppIdContext& ctxt = inspector.get_ctxt();
+    ctxt.create_tp_appid_ctxt();
+    main_broadcast_command(new ACThirdPartyAppIdContextSwap(inspector,
+        request, from_shell), from_shell);
+}
+
+class ACOdpContextSwap : public AnalyzerCommand
+{
+public:
+    bool execute(Analyzer&, void**) override;
+    ACOdpContextSwap(const AppIdInspector& inspector, OdpContext& odp_ctxt,
+        Request& current_request, bool from_shell) : inspector(inspector),
+        odp_ctxt(odp_ctxt), request(current_request), from_shell(from_shell) { }
+    ~ACOdpContextSwap() override;
+    const char* stringify() override { return "ODP_CONTEXT_SWAP"; }
+private:
+    const AppIdInspector& inspector;
+    OdpContext& odp_ctxt;
+    Request& request;
+    bool from_shell;
+};
+
+bool ACOdpContextSwap::execute(Analyzer&, void**)
+{
+    AppIdContext& ctxt = inspector.get_ctxt();
+    OdpContext& current_odp_ctxt = ctxt.get_odp_ctxt();
+    assert(pkt_thread_odp_ctxt != &current_odp_ctxt);
+
+    HostAttributesManager::clear_appid_services();
+    AppIdServiceState::clean();
+    AppIdPegCounts::cleanup_pegs();
+    AppIdServiceState::initialize(ctxt.config.memcap);
+    AppIdPegCounts::init_pegs();
+
+    pkt_thread_odp_ctxt = &current_odp_ctxt;
+    assert(odp_thread_local_ctxt);
+    delete odp_thread_local_ctxt;
+    odp_thread_local_ctxt = new OdpThreadContext();
+    odp_thread_local_ctxt->initialize(ctxt, false, true);
+    return true;
+}
+
+ACOdpContextSwap::~ACOdpContextSwap()
+{
+    odp_ctxt.get_app_info_mgr().cleanup_appid_info_table();
+    delete &odp_ctxt;
+    AppIdContext& ctxt = inspector.get_ctxt();
+    if (ctxt.config.app_detector_dir)
+    {
+        std::string file_path = std::string(ctxt.config.app_detector_dir) + "/custom/userappid.conf";
+        if (access(file_path.c_str(), F_OK))
+            file_path = std::string(ctxt.config.app_detector_dir) + "/../userappid.conf";
+        ctxt.get_odp_ctxt().get_app_info_mgr().dump_appid_configurations(file_path);
+    }
+    LogMessage("== reload detectors complete\n");
+    request.respond("== reload detectors complete\n", from_shell, true);
+    Swapper::set_reload_in_progress(false);
 }
 
 static int enable_debug(lua_State* L)
@@ -162,6 +300,86 @@ static int disable_debug(lua_State*)
     return 0;
 }
 
+static int reload_third_party(lua_State* L)
+{
+    bool from_shell = ( L != nullptr );
+    Request& current_request = get_current_request();
+    if (Swapper::get_reload_in_progress())
+    {
+        current_request.respond("== reload pending; retry\n", from_shell);
+        return 0;
+    }
+    current_request.respond(".. reloading third-party\n", from_shell);
+    AppIdInspector* inspector = (AppIdInspector*) InspectorManager::get_inspector(MOD_NAME);
+    if (!inspector)
+    {
+        current_request.respond("== reload third-party failed - appid not enabled\n", from_shell);
+        return 0;
+    }
+    const AppIdContext& ctxt = inspector->get_ctxt();
+    ThirdPartyAppIdContext* old_ctxt = ctxt.get_tp_appid_ctxt();
+    if (!old_ctxt)
+    {
+        current_request.respond("== reload third-party failed - third-party module doesn't exist\n", from_shell);
+        return 0;
+    }
+    Swapper::set_reload_in_progress(true);
+    current_request.respond("== unloading old third-party configuration\n", from_shell);
+    main_broadcast_command(new ACThirdPartyAppIdContextUnload(*inspector, old_ctxt,
+        current_request, from_shell), from_shell);
+    return 0;
+}
+
+static void clear_dynamic_host_cache_services()
+{
+    auto hosts = host_cache.get_all_data();
+    for ( auto& h : hosts )
+    {
+        h.second->remove_inferred_services();
+    }
+}
+
+static int reload_detectors(lua_State* L)
+{
+    bool from_shell = ( L != nullptr );
+    Request& current_request = get_current_request();
+    if (Swapper::get_reload_in_progress())
+    {
+        current_request.respond("== reload pending; retry\n", from_shell);
+        return 0;
+    }
+    current_request.respond(".. reloading detectors\n", from_shell);
+    AppIdInspector* inspector = (AppIdInspector*) InspectorManager::get_inspector(MOD_NAME);
+    if (!inspector)
+    {
+        current_request.respond("== reload detectors failed - appid not enabled\n", from_shell);
+        return 0;
+    }
+    Swapper::set_reload_in_progress(true);
+
+    AppIdContext& ctxt = inspector->get_ctxt();
+    OdpContext& old_odp_ctxt = ctxt.get_odp_ctxt();
+    ServiceDiscovery::clear_ftp_service_state();
+    clear_dynamic_host_cache_services();
+    AppIdPegCounts::cleanup_peg_info();
+    LuaDetectorManager::clear_lua_detector_mgrs();
+    ctxt.create_odp_ctxt();
+    assert(odp_thread_local_ctxt);
+    delete odp_thread_local_ctxt;
+    odp_thread_local_ctxt = new OdpThreadContext(true);
+
+    OdpContext& odp_ctxt = ctxt.get_odp_ctxt();
+    odp_ctxt.get_client_disco_mgr().initialize();
+    odp_ctxt.get_service_disco_mgr().initialize();
+    odp_thread_local_ctxt->initialize(ctxt, true, true);
+    odp_ctxt.initialize();
+
+    current_request.respond("== swapping detectors configuration\n", from_shell);
+    main_broadcast_command(new ACOdpContextSwap(*inspector, old_odp_ctxt,
+        current_request, from_shell), from_shell);
+    return 0;
+}
+
 static const Parameter enable_debug_params[] =
 {
     { "proto", Parameter::PT_INT, nullptr, nullptr, "numerical IP protocol ID filter" },
@@ -177,17 +395,10 @@ static const Command appid_cmds[] =
 {
     { "enable_debug", enable_debug, enable_debug_params, "enable appid debugging"},
     { "disable_debug", disable_debug, nullptr, "disable appid debugging"},
+    { "reload_third_party", reload_third_party, nullptr, "reload appid third-party module" },
+    { "reload_detectors", reload_detectors, nullptr, "reload appid detectors" },
     { nullptr, nullptr, nullptr, nullptr }
 };
-
-//  FIXIT-M Add appid_rules back in once we start using it.
-#ifdef REMOVED_WHILE_NOT_IN_USE
-static const RuleMap appid_rules[] =
-{
-    { 0 /* rule id */, "description" },
-    { 0, nullptr }
-};
-#endif
 
 static const PegInfo appid_pegs[] =
 {
@@ -196,11 +407,15 @@ static const PegInfo appid_pegs[] =
     { CountType::SUM, "ignored_packets", "count of packets ignored" },
     { CountType::SUM, "total_sessions", "count of sessions created" },
     { CountType::SUM, "appid_unknown", "count of sessions where appid could not be determined" },
-    { CountType::END, nullptr, nullptr},
+    { CountType::SUM, "service_cache_prunes", "number of times the service cache was pruned" },
+    { CountType::SUM, "service_cache_adds", "number of times an entry was added to the service cache" },
+    { CountType::SUM, "service_cache_removes", "number of times an item was removed from the service cache" },
+    { CountType::SUM, "odp_reload_ignored_pkts", "count of packets ignored after open detector package is reloaded" },
+    { CountType::SUM, "tp_reload_ignored_pkts", "count of packets ignored after third-party module is reloaded" },
+    { CountType::END, nullptr, nullptr },
 };
 
-AppIdModule::AppIdModule() :
-    Module(MOD_NAME, MOD_HELP, s_params, false, &TRACE_NAME(appid_module))
+AppIdModule::AppIdModule() : Module(MOD_NAME, MOD_HELP, s_params)
 {
     config = nullptr;
 }
@@ -210,73 +425,76 @@ AppIdModule::~AppIdModule()
     AppIdPegCounts::cleanup_peg_info();
 }
 
-ProfileStats* AppIdModule::get_profile() const
+void AppIdModule::set_trace(const Trace* trace) const
+{ appid_trace = trace; }
+
+const TraceOption* AppIdModule::get_trace_options() const
 {
-    return &appidPerfStats;
+    static const TraceOption appid_trace_options(nullptr, 0, nullptr);
+    return &appid_trace_options;
 }
 
-const AppIdModuleConfig* AppIdModule::get_data()
+ProfileStats* AppIdModule::get_profile() const
 {
-    AppIdModuleConfig* temp = config;
+    return &appid_perf_stats;
+}
+
+const AppIdConfig* AppIdModule::get_data()
+{
+    AppIdConfig* temp = config;
     config = nullptr;
     return temp;
 }
 
-bool AppIdModule::set(const char* fqn, Value& v, SnortConfig* c)
+bool AppIdModule::set(const char*, Value& v, SnortConfig*)
 {
-#ifdef USE_RNA_CONFIG
-    if ( v.is("conf") )
-        config->conf_file = snort_strdup(v.get_string());
-    else
-#endif
     // FIXIT-L: DECRYPT_DEBUG - Move this to ssl-module
 #ifdef REG_TEST
     if ( v.is("first_decrypted_packet_debug") )
-        config->first_decrypted_packet_debug = v.get_long();
+        config->first_decrypted_packet_debug = v.get_uint32();
     else
 #endif
     if ( v.is("memcap") )
-        config->memcap = v.get_long();
+        config->memcap = v.get_size();
     else if ( v.is("log_stats") )
-        config->stats_logging_enabled = v.get_bool();
+        config->log_stats = v.get_bool();
     else if ( v.is("app_stats_period") )
-        config->app_stats_period = v.get_long();
+        config->app_stats_period = v.get_uint32();
     else if ( v.is("app_stats_rollover_size") )
-        config->app_stats_rollover_size = v.get_long();
-    else if ( v.is("app_stats_rollover_time") )
-        config->app_stats_rollover_time = v.get_long();
+        config->app_stats_rollover_size = v.get_uint32();
     else if ( v.is("app_detector_dir") )
         config->app_detector_dir = snort_strdup(v.get_string());
     else if ( v.is("tp_appid_path") )
         config->tp_appid_path = std::string(v.get_string());
     else if ( v.is("tp_appid_config") )
         config->tp_appid_config = std::string(v.get_string());
-    else if ( v.is("instance_id") )
-        config->instance_id = v.get_long();
-    else if ( v.is("debug") )
-        config->debug = v.get_bool();
-    else if ( v.is("dump_ports") )
-        config->dump_ports = v.get_bool();
+    else if ( v.is("tp_appid_stats_enable") )
+        config->tp_appid_stats_enable = v.get_bool();
+    else if ( v.is("tp_appid_config_dump") )
+        config->tp_appid_config_dump = v.get_bool();
+    else if ( v.is("list_odp_detectors") )
+        config->list_odp_detectors = v.get_bool();
     else if ( v.is("log_all_sessions") )
         config->log_all_sessions = v.get_bool();
-    else
-        return Module::set(fqn, v, c);
 
     return true;
 }
 
-bool AppIdModule::begin(const char* /*fqn*/, int, SnortConfig*)
+bool AppIdModule::begin(const char*, int, SnortConfig*)
 {
     if ( config )
         return false;
 
-    config = new AppIdModuleConfig;
+    config = new AppIdConfig;
     return true;
 }
 
-bool AppIdModule::end(const char*, int, SnortConfig*)
+bool AppIdModule::end(const char* fqn, int, SnortConfig* sc)
 {
     assert(config);
+
+    if ( Snort::is_reloading() && strcmp(fqn, "appid") == 0 )
+        sc->register_reload_resource_tuner(new AppIdReloadTuner(config->memcap));
 
     if ( !config->app_detector_dir )
     {
@@ -310,4 +528,14 @@ void AppIdModule::sum_stats(bool accumulate_now_stats)
 void AppIdModule::show_dynamic_stats()
 {
     AppIdPegCounts::print();
+}
+
+bool AppIdReloadTuner::tinit()
+{
+    return AppIdServiceState::initialize(memcap);
+}
+
+bool AppIdReloadTuner::tune_resources(unsigned work_limit)
+{
+    return AppIdServiceState::prune(memcap, work_limit);
 }

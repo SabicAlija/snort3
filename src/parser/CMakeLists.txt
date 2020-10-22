@@ -12,6 +12,8 @@ add_library (parser OBJECT
     parse_ports.h
     parse_rule.cc
     parse_rule.h
+    parse_so_rule.cc
+    parse_so_rule.h
     parse_stream.cc
     parse_stream.h
     parse_utils.cc
@@ -20,8 +22,6 @@ add_library (parser OBJECT
     cmd_line.h
     config_file.cc
     config_file.h
-    mstring.cc
-    mstring.h
     vars.cc
     vars.h
 )

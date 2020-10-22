@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,15 +16,13 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_syn_sent_state.h author davis mcpherson <davmcphe@@cisco.com>
+// tcp_syn_sent_state.h author davis mcpherson <davmcphe@cisco.com>
 // Created on: Aug 5, 2015
 
 #ifndef TCP_STATE_SYN_SENT_H
 #define TCP_STATE_SYN_SENT_H
 
-#include "stream/libtcp/tcp_state_handler.h"
-
-class TcpSession;
+#include "tcp_state_handler.h"
 
 class TcpStateSynSent : public TcpStateHandler
 {

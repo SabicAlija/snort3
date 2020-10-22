@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,6 +25,12 @@
 #include <cstddef>
 #include <cstdint>
 
+struct tMlpPattern
+{
+    const uint8_t* pattern;
+    size_t patternSize;
+};
+
 struct tMlmpPattern
 {
     /*binary pattern */
@@ -42,6 +48,7 @@ struct tMlmpTree;
 tMlmpTree* mlmpCreate();
 int mlmpAddPattern(tMlmpTree*, const tMlmpPattern*, void* metaData);
 int mlmpProcessPatterns(tMlmpTree*);
+void mlmp_reload_patterns(tMlmpTree&);
 void* mlmpMatchPatternUrl(tMlmpTree*, tMlmpPattern*);
 void* mlmpMatchPatternGeneric(tMlmpTree*, tMlmpPattern*);
 void mlmpDestroy(tMlmpTree*);

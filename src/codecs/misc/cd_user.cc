@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,7 @@
 #include "daqs/daq_user.h"
 #include "framework/codec.h"
 #include "packet_io/sfdaq.h"
+#include "packet_io/sfdaq_instance.h"
 
 using namespace snort;
 
@@ -44,7 +45,7 @@ public:
 
 void UserCodec::get_data_link_type(std::vector<int>& v)
 {
-    v.push_back(DLT_USER);
+    v.emplace_back(DLT_USER);
 }
 
 static void set_ip(const DAQ_UsrHdr_t* pci, CodecData& codec, DecodeData& snort)
@@ -98,15 +99,12 @@ static void set_flags(
 
 bool UserCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
 {
-    DAQ_QueryFlow_t query { DAQ_USR_QUERY_PCI, 0, nullptr };
+    DIOCTL_QueryUsrPCI qup = { raw.daq_msg, nullptr };
 
-    if ( SFDAQ::get_local_instance()->query_flow(raw.pkth, &query) != DAQ_SUCCESS or
-        query.length != sizeof(DAQ_UsrHdr_t) )
-    {
+    if ( SFDAQ::get_local_instance()->ioctl(DIOCTL_QUERY_USR_PCI, &qup, sizeof(qup)) != DAQ_SUCCESS )
         return false;
-    }
 
-    const DAQ_UsrHdr_t* pci = (DAQ_UsrHdr_t*)query.value;
+    const DAQ_UsrHdr_t* pci = qup.pci;
 
     if ( !pci )
         return false;

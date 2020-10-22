@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_normalizer.h author davis mcpherson <davmcphe@@cisco.com>
+// tcp_normalizer.h author davis mcpherson <davmcphe@cisco.com>
 // Created on: Jul 31, 2015
 
 #ifndef TCP_NORMALIZER_H
@@ -53,7 +53,7 @@ struct TcpNormalizerState
     TcpStreamTracker* tracker = nullptr;
     TcpStreamTracker* peer_tracker = nullptr;
 
-    StreamPolicy os_policy = StreamPolicy::OS_INVALID;
+    StreamPolicy os_policy = StreamPolicy::OS_DEFAULT;
 
     int32_t paws_ts_fudge = 0;
     int tcp_ts_flags = 0;
@@ -84,7 +84,7 @@ public:
     virtual void trim_win_payload(State&, TcpSegmentDescriptor&, uint32_t max = 0);
     virtual void trim_mss_payload(State&, TcpSegmentDescriptor&, uint32_t max = 0);
     virtual void ecn_tracker(State&, const snort::tcp::TCPHdr*, bool req3way);
-    virtual void ecn_stripper(State&, snort::Packet*);
+    virtual void ecn_stripper(State&, TcpSegmentDescriptor&);
     virtual uint32_t get_stream_window(State&, TcpSegmentDescriptor&);
     virtual uint32_t get_tcp_timestamp(State&, TcpSegmentDescriptor&, bool strip);
     virtual int handle_paws(State&, TcpSegmentDescriptor&);

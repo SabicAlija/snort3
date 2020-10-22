@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,6 @@
 #include "detect_trace.h"
 
 #include "log/log.h"
-#include "main/snort_debug.h"
 #include "main/thread.h"
 #include "protocols/packet.h"
 #include "utils/stats.h"
@@ -39,11 +38,7 @@
 using namespace snort;
 using namespace std;
 
-Trace TRACE_NAME(detection);
-
 #ifdef DEBUG_MSGS
-
-const uint64_t trace_buffer = TRACE_BUFFER_MINIMAL | TRACE_BUFFER_VERBOSE;
 
 static THREAD_LOCAL char* cursor_name = nullptr;
 static THREAD_LOCAL unsigned cursor_pos = -1;
@@ -58,15 +53,15 @@ void clear_trace_cursor_info()
     cursor_pos = -1;
 }
 
-void print_pkt_info(Packet* p)
+void print_pkt_info(Packet* p, const char* task)
 {
     const char* dir;
     SfIpString src_addr, dst_addr;
     unsigned src_port = 0, dst_port = 0;
 
-    if ( p->is_from_client() )
+    if ( p->is_from_application_client() )
         dir = "C2S";
-    else if ( p->is_from_server() )
+    else if ( p->is_from_application_server() )
         dir = "S2C";
     else
         dir = "UNK";
@@ -83,16 +78,17 @@ void print_pkt_info(Packet* p)
         dst_port = p->ptrs.dp;
     }
 
-    trace_logf(detection, TRACE_RULE_EVAL,"packet %" PRIu64 " %s %s:%u %s:%u\n",
-        p->context->packet_number, dir, src_addr, src_port, dst_addr, dst_port);
+    debug_logf(detection_trace, TRACE_RULE_EVAL, p,
+        "packet %" PRIu64 " %s %s:%u %s:%u (%s)\n", p->context->packet_number,
+        dir, src_addr, src_port, dst_addr, dst_port, task);
 }
 
-void print_pattern(const PatternMatchData* pmd)
+void print_pattern(const PatternMatchData* pmd, Packet* p)
 {
     string hex, txt, opts;
 
     get_pattern_info(pmd, pmd->pattern_buf, pmd->pattern_size, hex, txt, opts);
-    trace_logf(detection, TRACE_RULE_EVAL,
+    debug_logf(detection_trace, TRACE_RULE_EVAL, p,
         "Fast pattern %s[%u] = '%s' |%s| %s\n",
         pm_type_strings[pmd->pm_type],  pmd->pattern_size,
         txt.c_str(), hex.c_str(), opts.c_str());
@@ -100,12 +96,13 @@ void print_pattern(const PatternMatchData* pmd)
 
 void dump_buffer(const uint8_t* buff, unsigned len, Packet* p)
 {
-    if (!trace_enabled(detection_trace, trace_buffer))
+    if ( !trace_enabled(detection_trace, TRACE_BUFFER) )
         return;
 
     if (len == 0)
     {
-        trace_log(detection, "Buffer dump - empty buffer\n");
+        debug_log(detection_trace, TRACE_BUFFER, p,
+            "Buffer dump - empty buffer\n");
         return;
     }
 
@@ -119,23 +116,21 @@ void node_eval_trace(const detection_option_tree_node_t* node, const Cursor& cur
 
     if (node->option_type != RULE_OPTION_TYPE_LEAF_NODE )
     {
-        trace_logf(detection, TRACE_RULE_EVAL,
+        debug_logf(detection_trace, TRACE_RULE_EVAL, p,
             "Evaluating option %s, cursor name %s, cursor position %u\n",
             ((IpsOption*)node->option_data)->get_name(), name, pos);
     }
     else
     {
-        trace_logf(detection, TRACE_RULE_EVAL, "Reached leaf, cursor name %s, cursor position %u\n",
-                  name, pos);
+        debug_logf(detection_trace, TRACE_RULE_EVAL, p,
+            "Reached leaf, cursor name %s, cursor position %u\n", name, pos);
     }
 
-    if (!trace_enabled(detection_trace, trace_buffer))
+    if ( !trace_enabled(detection_trace, TRACE_BUFFER) )
         return;
 
-    if (trace_enabled(detection_trace, TRACE_BUFFER_VERBOSE))
-    {
+    if ( trace_enabled(detection_trace, TRACE_BUFFER, 5) )
         dump_buffer(cursor.buffer() + pos, cursor.length(), p);
-    }
     else if ((pos != cursor_pos) || strcmp(cursor_name, name))
     {
         cursor_pos = pos;
@@ -151,11 +146,11 @@ void clear_trace_cursor_info()
 {
 }
 
-void print_pkt_info(Packet*)
+void print_pkt_info(Packet*, const char*)
 {
 }
 
-void print_pattern(const PatternMatchData*)
+void print_pattern(const PatternMatchData*, Packet*)
 {
 }
 
@@ -168,4 +163,3 @@ void node_eval_trace(const detection_option_tree_node_t*, const Cursor&, Packet*
 }
 
 #endif
-

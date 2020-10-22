@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -24,75 +24,40 @@
 
 #include "snort_debug.h"
 
-#include <syslog.h>
-
 #include <cstring>
 
-#include "log/messages.h"
+#include "trace/trace_api.h"
 #include "utils/safec.h"
 
-#include "snort_config.h"
+#define STD_BUF_SIZE 1024
 
-using namespace snort;
-
-bool trace_enabled(Trace mask, Trace flags)
-{ return mask & flags; }
-
-bool trace_enabled(Trace mask)
-{ return mask; }
-
-template <int (output)(const char*, FILE*)>
-static inline void trace_vprintf(const char* name, Trace mask, const char* file, int line,
-    Trace flags, const char* fmt, va_list ap)
+namespace snort
 {
-    if ( !trace_enabled(mask, flags) )
-        return;
+template <void (log_func)(const char*, const char*, uint8_t, const char*, const Packet*)>
+void trace_vprintf(const char* name, TraceLevel log_level,
+    const char* trace_option, const Packet* p, const char* fmt, va_list ap)
+{
+    char buf[STD_BUF_SIZE];
+    vsnprintf(buf, sizeof(buf), fmt, ap);
 
-    char buf[STD_BUF];
-    int buf_len = sizeof(buf);
-    char* buf_ptr = buf;
-    int size;
-
-    if (name)
-    {   
-        size = snprintf(buf, buf_len, "%s: ", name);
-        if ( size >= buf_len )
-            size = buf_len - 1;
-        if ( size > 0 )
-        {
-            buf_ptr += size;
-            buf_len -= size;
-        }
-    }
-
-    if ( file )
-    {
-        size = snprintf(buf_ptr, buf_len, "%s:%d: ", file, line);
-        if ( size >= buf_len )
-            size = buf_len - 1;
-        if ( size > 0 )
-        {
-            buf_ptr += size;
-            buf_len -= size;
-        }
-    }
-
-    vsnprintf(buf_ptr, buf_len, fmt, ap);
-
-    if ( snort::SnortConfig::get_conf() and snort::SnortConfig::log_syslog() )
-        syslog(LOG_DAEMON | LOG_DEBUG, "%s", buf);
-    else
-        output(buf, stdout);
+    log_func(buf, name, log_level, trace_option, p);
 }
 
-void trace_vprintf(const char* name, Trace mask, const char* file, int line,
-    Trace flags, const char* fmt, va_list ap)
+void trace_vprintf(const char* name, TraceLevel log_level,
+    const char* trace_option, const Packet* p, const char* fmt, va_list ap)
 {
-    trace_vprintf<fputs>(name, mask, file, line, flags, fmt, ap);
+    trace_vprintf<TraceApi::log>(name, log_level, trace_option, p, fmt, ap);
+}
 }
 
 #ifdef UNIT_TEST
 #include <catch/snort_catch.h>
+
+#ifdef DEBUG_MSGS
+
+#include "framework/module.h"
+
+using namespace snort;
 
 //stringify the expansion of the macro
 #define sx(code) sm(code)
@@ -100,23 +65,19 @@ void trace_vprintf(const char* name, Trace mask, const char* file, int line,
 //stringify the macro
 #define sm(code) #code
 
-#define TRACE_SECTION_1 0x0000000000000001
-#define TRACE_SECTION_2 0x0000000000000002
-#define TRACE_SECTION_3 0x0000000000000004
-#define TRACE_SECTION_4 0x0000000000000008
-
 struct TestCase
 {
     const char* test;
     const char* expected;
 };
 
-static char testing_dump[STD_BUF];
-static int test_fputs(const char* str, FILE*)
-{
-    memcpy_s(testing_dump, STD_BUF, str, STD_BUF);
+static char testing_dump[STD_BUF_SIZE];
 
-    return 0;
+static void test_log(const char* log_msg, const char* name,
+    uint8_t log_level, const char* trace_option, const snort::Packet*)
+{
+    snprintf(testing_dump, sizeof(testing_dump), "%s:%s:%d: %s",
+        name, trace_option, log_level, log_msg);
 }
 
 TEST_CASE("macros", "[trace]")
@@ -124,32 +85,20 @@ TEST_CASE("macros", "[trace]")
     TestCase cases[] =
     {
         {
-            sx(trace_log(testing, "my message")),
-            "trace_print<trace_vprintf>(\"testing\", testing_trace, nullptr, 0, \"my message\")"
+            sx(debug_log(1, test_trace, "my message")),
+            "trace_print<snort::trace_vprintf>(1, test_trace, \"my message\")"
         },
         {
-            sx(trace_log(testing, my_flags, "my message")),
-            "trace_print<trace_vprintf>(\"testing\", testing_trace, nullptr, 0, my_flags, \"my message\")"
+            sx(debug_log(test_trace, my_flags, "my message")),
+            "trace_print<snort::trace_vprintf>(test_trace, my_flags, \"my message\")"
         },
         {
-            sx(trace_logf(testing, "%s %s", "my", "message")),
-            "trace_printf<trace_vprintf>(\"testing\", testing_trace, nullptr, 0, \"%s %s\", \"my\", \"message\")"
+            sx(debug_logf(1, test_trace, "%s %s", "my", "message")),
+            "trace_printf<snort::trace_vprintf>(1, test_trace, \"%s %s\", \"my\", \"message\")"
         },
         {
-            sx(trace_logf(testing, my_flags, "%s %s", "my", "message")),
-            "trace_printf<trace_vprintf>(\"testing\", testing_trace, nullptr, 0, my_flags, \"%s %s\", \"my\", \"message\")"
-        },
-        {
-            sx(trace_debug(testing, "my message")), "trace_print<trace_vprintf>(\"testing\", testing_trace, " sx(__FILE__) ", " sx(__LINE__) ", \"my message\")"
-        },
-        {
-            sx(trace_debug(testing, my_flags, "my message")), "trace_print<trace_vprintf>(\"testing\", testing_trace, " sx(__FILE__) ", " sx(__LINE__) ", my_flags, \"my message\")"
-        },
-        {
-            sx(trace_debugf(testing, "%s %s", "my", "message")), "trace_printf<trace_vprintf>(\"testing\", testing_trace, " sx(__FILE__) ", " sx(__LINE__) ", \"%s %s\", \"my\", \"message\")"
-        },
-        {
-            sx(trace_debugf(testing, my_flags, "%s %s", "my", "message")), "trace_printf<trace_vprintf>(\"testing\", testing_trace, " sx(__FILE__) ", " sx(__LINE__) ", my_flags, \"%s %s\", \"my\", \"message\")"
+            sx(debug_logf(test_trace, my_flags, "%s %s", "my", "message")),
+            "trace_printf<snort::trace_vprintf>(test_trace, my_flags, \"%s %s\", \"my\", \"message\")"
         }
     };
 
@@ -157,98 +106,144 @@ TEST_CASE("macros", "[trace]")
     CHECK( !strcmp(cases[1].expected, cases[1].test) );
     CHECK( !strcmp(cases[2].expected, cases[2].test) );
     CHECK( !strcmp(cases[3].expected, cases[3].test) );
-    CHECK( !strcmp(cases[4].expected, cases[4].test) );
-    CHECK( !strcmp(cases[5].expected, cases[5].test) );
-    CHECK( !strcmp(cases[6].expected, cases[6].test) );
-    CHECK( !strcmp(cases[7].expected, cases[7].test) );
 }
 
 #undef trace_print
 #undef trace_printf
 
 //These templates expand to replace the default expansion of trace_vprintf.
-//This custom expansion replaces output (expands to fputs in snort_debug.h macros)
-//with test_fputs for capturing what would be passed to the console.
-#define trace_print trace_print<trace_vprintf<test_fputs>>
-#define trace_printf trace_printf<trace_vprintf<test_fputs>>
+//This custom expansion replaces log_func (expands to TraceApi::log())
+//with test_log for capturing what would be passed to the console.
+#define trace_print trace_print<trace_vprintf<test_log>>
+#define trace_printf trace_printf<trace_vprintf<test_log>>
 
-TEST_CASE("trace_log", "[trace]")
+class TraceTestModule : public Module
 {
-    Trace TRACE_NAME(testing) = TRACE_SECTION_2 | TRACE_SECTION_3;
+public:
+    TraceTestModule(const char* name, const TraceOption* trace_options) :
+        Module(name, "trace_test_help"), test_trace_options(trace_options)
+    { }
+
+    virtual const TraceOption* get_trace_options() const
+    { return test_trace_options; }
+
+private:
+    const TraceOption* test_trace_options;
+};
+
+TEST_CASE("debug_log, debug_logf", "[trace]")
+{
+    enum
+    {
+        TEST_TRACE_OPTION1 = 0,
+        TEST_TRACE_OPTION2,
+        TEST_TRACE_OPTION3,
+        TEST_TRACE_OPTION4,
+        TEST_TRACE_OPTION5,
+    };
+
+    const TraceOption test_trace_values[] =
+    {
+        { "option1", TEST_TRACE_OPTION1, "help_option1" },
+        { "option2", TEST_TRACE_OPTION2, "help_option2" },
+        { "option3", TEST_TRACE_OPTION3, "help_option3" },
+        { "option4", TEST_TRACE_OPTION4, "help_option4" },
+        { "option5", TEST_TRACE_OPTION5, "help_option5" },
+
+        { nullptr, 0, nullptr },
+    };
+
+    TraceOption test_trace_options(nullptr, 0, nullptr);
+    TraceTestModule trace_test_module("test_module", &test_trace_options);
+    Trace test_trace(trace_test_module);
+
+    TraceTestModule trace_test_module_opt("test_opt_module", test_trace_values);
+    Trace test_opt_trace(trace_test_module_opt);
+
+    test_trace.set("all", 0);
 
     testing_dump[0] = '\0';
-    trace_log(testing, "my message");
-    CHECK( !strcmp(testing_dump, "testing: my message") );
-
-    testing_dump[0] = '\0';
-    trace_log(testing, TRACE_SECTION_1, "my masked message");
+    debug_log(&test_trace, nullptr, "my message");
     CHECK( testing_dump[0] == '\0' );
 
-    testing_dump[0] = '\0';
-    trace_log(testing, TRACE_SECTION_2, "my other masked message");
-    CHECK( !strcmp(testing_dump, "testing: my other masked message") );
-}
+    test_trace.set("all", 1);
+    test_opt_trace.set("option1", 1);
+    test_opt_trace.set("option2", 2);
+    test_opt_trace.set("option3", 3);
+    test_opt_trace.set("option4", 2);
+    test_opt_trace.set("option5", 2);
 
-TEST_CASE("trace_logf", "[trace]")
-{
-    Trace TRACE_NAME(testing) = TRACE_SECTION_2 | TRACE_SECTION_3;
-
-    testing_dump[0] = '\0';
-    trace_logf(testing, "%s %s", "my", "message");
-    CHECK( !strcmp(testing_dump, "testing: my message") );
-
-    testing_dump[0] = '\0';
-    trace_logf(testing, TRACE_SECTION_1, "%s %s %s", "my", "masked", "message");
-    CHECK( testing_dump[0] == '\0' );
-
-    testing_dump[0] = '\0';
-    trace_logf(testing, TRACE_SECTION_2, "%s %s %s %s", "my", "other", "masked", "message");
-    CHECK( !strcmp(testing_dump, "testing: my other masked message") );
-}
-
-TEST_CASE("trace_debug", "[trace]")
-{
-    Trace TRACE_NAME(testing) = TRACE_SECTION_2 | TRACE_SECTION_3;
-
-    testing_dump[0] = '\0';
-    trace_debug(testing, "my message"); CHECK( !strcmp(testing_dump, "testing: " __FILE__ ":" sx(__LINE__) ": my message") );
-
-    testing_dump[0] = '\0';
-    trace_debug(testing, TRACE_SECTION_1, "my masked message");
-    CHECK( testing_dump[0] == '\0' );
-
-    testing_dump[0] = '\0';
-    trace_debug(testing, TRACE_SECTION_2, "my other masked message"); CHECK( !strcmp(testing_dump, "testing: " __FILE__ ":" sx(__LINE__) ": my other masked message") );
-}
-
-TEST_CASE("trace_debugf", "[trace]")
-{
-    Trace TRACE_NAME(testing) = TRACE_SECTION_2 | TRACE_SECTION_3;
-
-    testing_dump[0] = '\0';
-    trace_debugf(testing, "%s %s", "my", "message"); CHECK( !strcmp(testing_dump, "testing: " __FILE__ ":" sx(__LINE__) ": my message") );
-
-    testing_dump[0] = '\0';
-    trace_debugf(testing, TRACE_SECTION_1, "%s %s %s", "my", "masked", "message");
-    CHECK( testing_dump[0] == '\0' );
-
-    testing_dump[0] = '\0';
-    trace_debugf(testing, TRACE_SECTION_2, "%s %s %s %s", "my", "other", "masked", "message"); CHECK( !strcmp(testing_dump, "testing: " __FILE__ ":" sx(__LINE__) ": my other masked message") );
-}
-
-TEST_CASE("safety", "[trace]")
-{
-    Trace TRACE_NAME(testing) = TRACE_SECTION_2 | TRACE_SECTION_3;
-    char message[STD_BUF + 1];
-
-    for( int i = 0; i < STD_BUF; i++ )
+    char message[STD_BUF_SIZE + 1];
+    for( int i = 0; i < STD_BUF_SIZE; i++ )
         message[i] = 'A';
-    message[STD_BUF] = '\0';
+    message[STD_BUF_SIZE] = '\0';
 
     testing_dump[0] = '\0';
-    trace_log(testing, message);
-    CHECK( (strlen(testing_dump) == STD_BUF - 1) );
+    debug_log(&test_trace, nullptr, message);
+    CHECK( (strlen(testing_dump) == STD_BUF_SIZE - 1) );
+
+    testing_dump[0] = '\0';
+    debug_log(3, &test_opt_trace, TEST_TRACE_OPTION3, nullptr, message);
+    CHECK( (strlen(testing_dump) == STD_BUF_SIZE - 1) );
+
+    testing_dump[0] = '\0';
+    debug_log(6, &test_opt_trace, TEST_TRACE_OPTION3, nullptr, message);
+    CHECK( (strlen(testing_dump) == 0) );
+
+    testing_dump[0] = '\0';
+    debug_log(&test_trace, nullptr, "my message"); 
+    CHECK( !strcmp(testing_dump, "test_module:all:1: my message") );
+
+    testing_dump[0] = '\0';
+    debug_logf(&test_trace, nullptr, "%s %s", "my", "message");
+    CHECK( !strcmp(testing_dump, "test_module:all:1: my message") );
+
+    testing_dump[0] = '\0';
+    debug_log(&test_opt_trace, TEST_TRACE_OPTION1, nullptr, "log option1 message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option1:1: log option1 message") );
+
+    testing_dump[0] = '\0';
+    debug_logf(&test_opt_trace, TEST_TRACE_OPTION1, nullptr, "%s %s %s", "log", "option1", "message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option1:1: log option1 message") );
+
+    testing_dump[0] = '\0';
+    debug_log(3, &test_opt_trace, TEST_TRACE_OPTION2, nullptr, "log option2 message");
+    CHECK( testing_dump[0] == '\0' );
+
+    testing_dump[0] = '\0';
+    debug_log(&test_opt_trace, TEST_TRACE_OPTION2, nullptr, "log option2 message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option2:1: log option2 message") );
+
+    testing_dump[0] = '\0';
+    debug_logf(&test_opt_trace, TEST_TRACE_OPTION2, nullptr, "%s %s %s", "log", "option2", "message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option2:1: log option2 message") );
+
+    testing_dump[0] = '\0';
+    debug_log(6, &test_opt_trace, TEST_TRACE_OPTION3, nullptr, "log option3 message");
+    CHECK( testing_dump[0] == '\0' );
+
+    testing_dump[0] = '\0';
+    debug_log(3, &test_opt_trace, TEST_TRACE_OPTION3, nullptr, "log option3 message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option3:3: log option3 message") );
+
+    testing_dump[0] = '\0';
+    debug_logf(3, &test_opt_trace, TEST_TRACE_OPTION3, nullptr, "%s %s %s", "log", "option3", "message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option3:3: log option3 message") );
+
+    testing_dump[0] = '\0';
+    debug_log(2, &test_opt_trace, TEST_TRACE_OPTION4, nullptr, "log option4 message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option4:2: log option4 message") );
+
+    testing_dump[0] = '\0';
+    debug_logf(2, &test_opt_trace, TEST_TRACE_OPTION4, nullptr, "%s %s %s", "log", "option4", "message");
+    CHECK( !strcmp(testing_dump, "test_opt_module:option4:2: log option4 message") );
+
+    testing_dump[0] = '\0';
+    debug_log(4, &test_opt_trace, TEST_TRACE_OPTION5, nullptr, "log option5 message");
+    CHECK( testing_dump[0] == '\0' );
 }
 
-#endif
+#endif // DEBUG_MSGS
+
+#endif // UNIT_TEST
 

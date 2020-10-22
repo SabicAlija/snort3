@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,8 @@
 
 #include "ip_session.h"
 
+#include "framework/data_bus.h"
+#include "memory/memory_cap.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/packet.h"
 
@@ -30,11 +32,16 @@
 #include "ip_ha.h"
 #include "stream_ip.h"
 
+#ifdef UNIT_TEST
+#include "catch/snort_catch.h"
+#endif
+
 using namespace snort;
 
 const PegInfo ip_pegs[] =
 {
     SESSION_PEGS("ip"),
+    { CountType::SUM, "total_bytes", "total number of bytes processed" },
     { CountType::SUM, "total_frags", "total fragments" },
     { CountType::NOW, "current_frags", "current fragments" },
     { CountType::SUM, "max_frags", "max fragments" },
@@ -79,7 +86,7 @@ static void IpSessionCleanup(Flow* lws, FragTracker* tracker)
 // private packet processing methods
 //-------------------------------------------------------------------------
 
-static inline void UpdateSession(Packet* p, Flow* lws)
+static inline void update_session(Packet* p, Flow* lws)
 {
     lws->markup_packet_flags(p);
 
@@ -98,15 +105,23 @@ static inline void UpdateSession(Packet* p, Flow* lws)
             (lws->ssn_state.session_flags & SSNFLAG_SEEN_SERVER) )
         {
             lws->ssn_state.session_flags |= SSNFLAG_ESTABLISHED;
-
             lws->set_ttl(p, false);
+
+            if ( p->type() == PktType::ICMP and p->ptrs.icmph)
+            {
+                DataBus::publish(STREAM_ICMP_BIDIRECTIONAL_EVENT, p);
+            }
+            else
+            {
+                DataBus::publish(STREAM_IP_BIDIRECTIONAL_EVENT, p);
+            }
         }
     }
 
     // Reset the session timeout.
+    if ( lws->ssn_server )
     {
-        StreamIpConfig* pc = get_ip_cfg(lws->ssn_server);
-        lws->set_expire(p, pc->session_timeout);
+        lws->set_expire(p, lws->default_session_timeout);
     }
 }
 
@@ -114,9 +129,11 @@ static inline void UpdateSession(Packet* p, Flow* lws)
 // IpSession methods
 //-------------------------------------------------------------------------
 
-IpSession::IpSession(Flow* flow) : Session(flow)
-{
-}
+IpSession::IpSession(Flow* f) : Session(f)
+{ memory::MemoryCap::update_allocations(sizeof(*this)); }
+
+IpSession::~IpSession()
+{ memory::MemoryCap::update_deallocations(sizeof(*this)); }
 
 void IpSession::clear()
 {
@@ -128,27 +145,27 @@ void IpSession::clear()
     }
 
     IpSessionCleanup(flow, &tracker);
-    IpHAManager::process_deletion(flow);
+    IpHAManager::process_deletion(*flow);
 }
 
 bool IpSession::setup(Packet* p)
 {
-    SESSION_STATS_ADD(ip_stats);
+    SESSION_STATS_ADD(ip_stats)
     memset(&tracker, 0, sizeof(tracker));
+
+    StreamIpConfig* pc = get_ip_cfg(flow->ssn_server);
+    flow->set_default_session_timeout(pc->session_timeout, false);
 
     if ( p->ptrs.decode_flags & DECODE_FRAG )
     {
         ip_stats.trackers_created++;
         ip_stats.current_frags++;
     }
-#ifdef ENABLE_EXPECTED_IP
-    if ( Stream::expected_flow(flow, p) )
+    if ( flow->ssn_state.ignore_direction != SSN_DIR_NONE )
     {
         ip_stats.sessions--; // Incremented in SESSION_STATS_ADD
-        MODULE_PROFILE_END(ip_perf_stats);
         return false;
     }
-#endif
     return true;
 }
 
@@ -165,19 +182,19 @@ int IpSession::process(Packet* p)
         if ( Stream::expected_flow(flow, p) )
             return 0;
 #endif
-        IpHAManager::process_deletion(flow);
+        IpHAManager::process_deletion(*flow);
     }
 
-    if ( Stream::blocked_flow(flow, p) || Stream::ignored_flow(flow, p) )
+    if ( Stream::blocked_flow(p) || Stream::ignored_flow(flow, p) )
         return 0;
-
+    ip_stats.total_bytes += p->dsize;
     if ( p->ptrs.decode_flags & DECODE_FRAG )
     {
         Defrag* d = get_defrag(flow->ssn_server);
         d->process(p, &tracker);
     }
 
-    UpdateSession(p, flow);
+    update_session(p, flow);
 
     return 0;
 }
@@ -219,3 +236,47 @@ bool IpSession::check_alerted(Packet* p, uint32_t gid, uint32_t sid)
     return false;
 }
 
+#ifdef UNIT_TEST
+
+// dummy
+class StreamIp : public Inspector
+{
+public:
+    StreamIp(StreamIpConfig*);
+    ~StreamIp() override;
+
+    bool configure(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
+    NORETURN_ASSERT void eval(Packet*) override;
+    StreamIpConfig* config;
+    Defrag* defrag;
+};
+
+TEST_CASE("IP Session", "[ip_session]")
+{
+    Flow lws;
+    Packet p(false);
+    DAQ_PktHdr_t dh = {};
+    p.pkth = &dh;
+
+    SECTION("update_session without inspector")
+    {
+        lws.ssn_server = nullptr;
+
+        update_session(&p, &lws);
+        CHECK(lws.expire_time == 0);
+    }
+
+    SECTION("update_session with inspector")
+    {
+        StreamIpConfig* sic = new StreamIpConfig;
+        sic->session_timeout = 360;
+        lws.set_default_session_timeout(sic->session_timeout, true);
+        StreamIp si(sic);
+        lws.ssn_server = &si;
+
+        update_session(&p, &lws);
+        CHECK(lws.expire_time == 360);
+    }
+}
+#endif

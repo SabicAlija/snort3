@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,7 +36,7 @@ using namespace snort;
 
 static const Parameter s_params[] =
 {
-    { "~", Parameter::PT_INT, "1:", nullptr,
+    { "~", Parameter::PT_INT, "1:max32", nullptr,
       "signature id" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -55,7 +55,7 @@ public:
     { return DETECT; }
 
 public:
-    int sid;
+    uint32_t sid = 0;
 };
 
 bool SidModule::set(const char*, Value& v, SnortConfig*)
@@ -63,7 +63,7 @@ bool SidModule::set(const char*, Value& v, SnortConfig*)
     if ( !v.is("~") )
         return false;
 
-    sid = v.get_long();
+    sid = v.get_uint32();
     return true;
 }
 

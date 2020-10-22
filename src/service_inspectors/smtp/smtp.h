@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -50,7 +50,7 @@
 #define STATE_BDATA            3    // Binary data state
 #define STATE_TLS_CLIENT_PEND  4    // Got STARTTLS
 #define STATE_TLS_SERVER_PEND  5    // Got STARTTLS
-#define STATE_TLS_DATA         6    // Successful handshake, TLS encrypted data 
+#define STATE_TLS_DATA         6    // Successful handshake, TLS encrypted data
 #define STATE_AUTH             7
 #define STATE_XEXCH50          8
 #define STATE_UNKNOWN          9
@@ -66,6 +66,7 @@
 #define SMTP_FLAG_GOT_RCPT_CMD               0x00000002
 #define SMTP_FLAG_BDAT                       0x00001000
 #define SMTP_FLAG_ABORT                      0x00002000
+#define SMTP_FLAG_ABANDON_EVT                0x00010000
 
 // session flags
 #define SMTP_FLAG_XLINK2STATE_GOTFIRSTCHUNK  0x00000001
@@ -142,12 +143,18 @@ class SmtpMime : public snort::MimeSession
 {
 public:
     using snort::MimeSession::MimeSession;
-    SMTP_PROTO_CONF* config;
+    SmtpProtoConf* config;
+#ifndef UNIT_TEST
 private:
+#endif
     int handle_header_line(const uint8_t* ptr, const uint8_t* eol,
-        int max_header_len) override;
-    int normalize_data(const uint8_t* ptr, const uint8_t* data_end) override;
+        int max_header_len, snort::Packet* p) override;
+    int normalize_data(const uint8_t* ptr, const uint8_t* data_end, snort::Packet* p) override;
+#ifdef UNIT_TEST
+private:
+#endif
     void decode_alert() override;
+    void decompress_alert() override;
     void reset_state(snort::Flow* ssn) override;
     bool is_end_of_data(snort::Flow* ssn) override;
 };
@@ -170,6 +177,9 @@ public:
 
     static void init()
     { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;

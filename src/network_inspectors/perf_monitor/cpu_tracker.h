@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,9 +37,9 @@ protected:
 private:
     //19 bits for microseconds
     //45 bits for seconds (out to year 1116918)
-    uint64_t last_wt;
-    uint64_t last_ut;
-    uint64_t last_st;
+    uint64_t last_wt = 0;
+    uint64_t last_ut = 0;
+    uint64_t last_st = 0;
 
     PegCount user_stat;
     PegCount system_stat;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -93,8 +93,6 @@ static int SnortFTP(
     ret = check_ftp(FTPsession, p, iInspectMode);
     if ( ret == FTPP_SUCCESS )
     {
-        NoProfile exclude(ftpPerfStats);
-
         // FIXIT-L ideally do_detection will look at the cmd & param buffers
         // or the rsp & msg buffers.  We should call it from inside check_ftp
         // each time we process a pipelined FTP command.
@@ -118,6 +116,7 @@ static int snort_ftp(Packet* p)
      */
     SetSiInput(&SiInput, p);
 
+    ftstats.total_bytes += p->dsize;
     if (p->flow)
     {
         FtpFlowData* fd = (FtpFlowData*)p->flow->get_flow_data(FtpFlowData::inspector_id);
@@ -151,7 +150,7 @@ static int snort_ftp(Packet* p)
             }
             else
             {
-                /* XXX - Not FTP or Telnet */
+                /* Not FTP or Telnet */
                 assert(false);
                 p->flow->free_flow_data(FtpFlowData::inspector_id);
                 return 0;
@@ -183,119 +182,29 @@ static int snort_ftp(Packet* p)
     return FTPP_INVALID_PROTO;
 }
 
-/*
- * Function: ResetStringFormat (FTP_PARAM_FMT *Fmt)
- *
- * Purpose: Recursively sets nodes that allow strings to nodes that check
- *          for a string format attack within the FTP parameter validation tree
- *
- * Arguments: Fmt       => pointer to the FTP Parameter configuration
- *
- * Returns: None
- *
- */
-static void ResetStringFormat(FTP_PARAM_FMT* Fmt)
-{
-    int i;
-    if (!Fmt)
-        return;
-
-    if (Fmt->type == e_unrestricted)
-        Fmt->type = e_strformat;
-
-    ResetStringFormat(Fmt->optional_fmt);
-    for (i=0; i<Fmt->numChoices; i++)
-    {
-        ResetStringFormat(Fmt->choices[i]);
-    }
-    ResetStringFormat(Fmt->next_param_fmt);
-}
-
-static int ProcessFTPDataChanCmdsList(
-    FTP_SERVER_PROTO_CONF* ServerConf, const FtpCmd* fc)
-{
-    const char* cmd = fc->name.c_str();
-    int iRet;
-
-    FTP_CMD_CONF* FTPCmd =
-        ftp_cmd_lookup_find(ServerConf->cmd_lookup, cmd, strlen(cmd), &iRet);
-
-    if (FTPCmd == nullptr)
-    {
-        /* Add it to the list */
-        // note that struct includes 1 byte for null, so just add len
-        FTPCmd = (FTP_CMD_CONF*)snort_calloc(sizeof(FTP_CMD_CONF)+strlen(cmd));
-        strncpy(FTPCmd->cmd_name, cmd, strlen(cmd) + 1);
-
-        // FIXIT-L make sure pulled from server conf when used if not overridden
-        //FTPCmd->max_param_len = ServerConf->def_max_param_len;
-
-        ftp_cmd_lookup_add(ServerConf->cmd_lookup, cmd,
-            strlen(cmd), FTPCmd);
-    }
-    if ( fc->flags & CMD_DIR )
-        FTPCmd->dir_response = fc->number;
-
-    if ( fc->flags & CMD_LEN )
-    {
-        FTPCmd->max_param_len = fc->number;
-        FTPCmd->max_param_len_overridden = 1;
-    }
-    if ( fc->flags & CMD_DATA )
-        FTPCmd->data_chan_cmd = true;
-
-    if ( fc->flags & CMD_REST )
-        FTPCmd->data_rest_cmd = true;
-
-    if ( fc->flags & CMD_XFER )
-        FTPCmd->data_xfer_cmd = true;
-
-    if ( fc->flags & CMD_PUT )
-        FTPCmd->file_put_cmd = true;
-
-    if ( fc->flags & CMD_GET )
-        FTPCmd->file_get_cmd = true;
-
-    if ( fc->flags & CMD_CHECK )
-    {
-        FTP_PARAM_FMT* Fmt = FTPCmd->param_format;
-        if (Fmt)
-        {
-            ResetStringFormat(Fmt);
-        }
-        else
-        {
-            Fmt = (FTP_PARAM_FMT*)snort_calloc(sizeof(FTP_PARAM_FMT));
-            Fmt->type = e_head;
-            FTPCmd->param_format = Fmt;
-
-            Fmt = (FTP_PARAM_FMT*)snort_calloc(sizeof(FTP_PARAM_FMT));
-            Fmt->type = e_strformat;
-            FTPCmd->param_format->next_param_fmt = Fmt;
-            Fmt->prev_param_fmt = FTPCmd->param_format;
-        }
-        FTPCmd->check_validity = true;
-    }
-    if ( fc->flags & CMD_VALID )
-    {
-        char err[1024];
-        ProcessFTPCmdValidity(
-            ServerConf, cmd, fc->format.c_str(), err, sizeof(err));
-    }
-    if ( fc->flags & CMD_ENCR )
-        FTPCmd->encr_cmd = true;
-
-    if ( fc->flags & CMD_LOGIN )
-        FTPCmd->login_cmd = true;
-
-    return 0;
-}
-
 //-------------------------------------------------------------------------
 // class stuff
 //-------------------------------------------------------------------------
 
-typedef InspectorData<FTP_CLIENT_PROTO_CONF> FtpClient;
+class FtpClient : public Inspector
+{
+public:
+    FtpClient(FTP_CLIENT_PROTO_CONF* client) : ftp_client(client) { }
+
+    ~FtpClient() override
+    { delete ftp_client; }
+
+    void show(const SnortConfig*) const override;
+    void eval(Packet*) override { }
+
+    FTP_CLIENT_PROTO_CONF* ftp_client;
+};
+
+void FtpClient::show(const SnortConfig*) const
+{
+    if ( ftp_client )
+        print_conf_client(ftp_client);
+}
 
 class FtpServer : public Inspector
 {
@@ -304,17 +213,22 @@ public:
     ~FtpServer() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
     StreamSplitter* get_splitter(bool) override;
+
+    bool is_control_channel() const override
+    { return true; }
+
+    bool can_start_tls() const override
+    { return true; }
 
     FTP_SERVER_PROTO_CONF* ftp_server;
 };
 
-FtpServer::FtpServer(FTP_SERVER_PROTO_CONF* server)
-{
-    ftp_server = server;
-}
+FtpServer::FtpServer(FTP_SERVER_PROTO_CONF* server) :
+    ftp_server(server)
+{}
 
 FtpServer::~FtpServer ()
 {
@@ -328,9 +242,10 @@ bool FtpServer::configure(SnortConfig* sc)
     return !FTPCheckConfigs(sc, ftp_server);
 }
 
-void FtpServer::show(SnortConfig*)
+void FtpServer::show(const SnortConfig*) const
 {
-    PrintFTPServerConf(ftp_server);
+    if ( ftp_server )
+        print_conf_server(ftp_server);
 }
 
 StreamSplitter* FtpServer::get_splitter(bool c2s)
@@ -360,7 +275,7 @@ FTP_CLIENT_PROTO_CONF* get_ftp_client(Packet* p)
         assert(client);
         p->flow->set_data(client);
     }
-    return client->data;
+    return client->ftp_client;
 }
 
 FTP_SERVER_PROTO_CONF* get_ftp_server(Packet* p)
@@ -443,10 +358,6 @@ static Inspector* fs_ctor(Module* mod)
 {
     FtpServerModule* fsm = (FtpServerModule*)mod;
     FTP_SERVER_PROTO_CONF* conf = fsm->get_data();
-    unsigned i = 0;
-
-    while ( const FtpCmd* cmd = fsm->get_cmd(i++) )
-        ProcessFTPDataChanCmdsList(conf, cmd);
 
     return new FtpServer(conf);
 }

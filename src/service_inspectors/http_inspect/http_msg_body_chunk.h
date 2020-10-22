@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,6 +20,7 @@
 #ifndef HTTP_MSG_BODY_CHUNK_H
 #define HTTP_MSG_BODY_CHUNK_H
 
+#include "http_common.h"
 #include "http_msg_body.h"
 
 //-------------------------------------------------------------------------
@@ -30,7 +31,8 @@ class HttpMsgBodyChunk : public HttpMsgBody
 {
 public:
     HttpMsgBodyChunk(const uint8_t* buffer, const uint16_t buf_size, HttpFlowData* session_data_,
-        HttpEnums::SourceId source_id_, bool buf_owner, snort::Flow* flow_, const HttpParaList* params_)
+        HttpCommon::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+        const HttpParaList* params_)
         : HttpMsgBody(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_) {}
     void update_flow() override;
 

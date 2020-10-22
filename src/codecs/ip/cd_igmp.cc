@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,10 +37,10 @@ static const RuleMap igmp_rules[] =
     { 0, nullptr }
 };
 
-class IgmpModule : public CodecModule
+class IgmpModule : public BaseCodecModule
 {
 public:
-    IgmpModule() : CodecModule(CD_IGMP_NAME, CD_IGMP_HELP) { }
+    IgmpModule() : BaseCodecModule(CD_IGMP_NAME, CD_IGMP_HELP) { }
 
     const RuleMap* get_rules() const override
     { return igmp_rules; }
@@ -85,7 +85,7 @@ bool IgmpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
 
 void IgmpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::IGMP);
+    v.emplace_back(ProtocolId::IGMP);
 }
 
 //-------------------------------------------------------------------------

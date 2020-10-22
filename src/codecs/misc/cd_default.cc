@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,7 +36,7 @@ public:
     DefaultCodec() : Codec(CD_DEFAULT_NAME) { }
 
     void get_protocol_ids(std::vector<ProtocolId>& v) override
-    { v.push_back(ProtocolId::FINISHED_DECODE); }
+    { v.emplace_back(ProtocolId::FINISHED_DECODE); }
 
     bool decode(const RawData&, CodecData&, DecodeData&) override
     { return false; }

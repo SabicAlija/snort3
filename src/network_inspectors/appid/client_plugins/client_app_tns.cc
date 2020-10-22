@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -332,7 +332,7 @@ inprocess:
     return APPID_INPROCESS;
 
 done:
-    add_app(args.asd, APP_ID_ORACLE_TNS, APP_ID_ORACLE_DATABASE, fd->version);
+    add_app(args.asd, APP_ID_ORACLE_TNS, APP_ID_ORACLE_DATABASE, fd->version, args.change_bits);
     if (user_start && user_end && ((user_size = user_end - user_start) > 0))
     {
         /* we truncate extra long usernames */
@@ -340,7 +340,7 @@ done:
             user_size = TNS_MAX_INFO_SIZE;
         memcpy(username, &args.data[user_start], user_size);
         username[user_size] = 0;
-        add_user(args.asd, username, APP_ID_ORACLE_DATABASE, true);
+        add_user(args.asd, username, APP_ID_ORACLE_DATABASE, true, args.change_bits);
     }
     return APPID_SUCCESS;
 }

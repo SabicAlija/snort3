@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -47,9 +47,9 @@ bool HexBook::translate(const char* in, HexVector& out)
         else if ( !hex )
         {
             if ( in[i] == '?' )
-                out.push_back(WILD);
+                out.emplace_back(WILD);
             else
-                out.push_back(in[i]);
+                out.emplace_back(in[i]);
         }
         else if ( in[i] != ' ' )
         {
@@ -64,7 +64,7 @@ bool HexBook::translate(const char* in, HexVector& out)
         if ( push && !byte.empty() )
         {
             int b = strtol(byte.c_str(), nullptr, 16);
-            out.push_back((uint8_t)b);
+            out.emplace_back((uint8_t)b);
             byte.clear();
         }
         ++i;
@@ -94,12 +94,15 @@ void HexBook::add_spell(
     p->value = val;
 }
 
-bool HexBook::add_spell(const char* key, const char* val)
+bool HexBook::add_spell(const char* key, const char*& val)
 {
     HexVector hv;
 
     if ( !translate(key, hv) )
+    {
+        val = nullptr;
         return false;
+    }
 
     unsigned i = 0;
     MagicPage* p = root;
@@ -120,7 +123,10 @@ bool HexBook::add_spell(const char* key, const char* val)
         ++i;
     }
     if ( p->key == key )
+    {
+        val = p->value.c_str();
         return false;
+    }
 
     add_spell(key, val, hv, i, p);
     return true;
@@ -152,7 +158,7 @@ const MagicPage* HexBook::find_spell(
             if ( const MagicPage* q = find_spell(s, n, p->any, i+1) )
                 return q;
         }
-        break;
+        return p->value.empty() ? nullptr : p;
     }
     return p;
 }
@@ -162,7 +168,7 @@ const char* HexBook::find_spell(
 {
     p = find_spell(data, len, p, 0);
 
-    if ( !p->value.empty() )
+    if ( p and !p->value.empty() )
         return p->value.c_str();
 
     return nullptr;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,12 +27,11 @@
 
 #include "tcp_session.h"
 
-using namespace std;
+using namespace snort;
 
 TcpStateSynSent::TcpStateSynSent(TcpStateMachine& tsm) :
     TcpStateHandler(TcpStreamTracker::TCP_SYN_SENT, tsm)
-{
-}
+{ }
 
 bool TcpStateSynSent::syn_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
@@ -43,7 +42,7 @@ bool TcpStateSynSent::syn_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 bool TcpStateSynSent::syn_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
     trk.finish_client_init(tsd);
-    if ( tsd.get_seg_len() )
+    if ( tsd.is_data_segment() )
         trk.session->handle_data_on_syn(tsd);
     trk.set_tcp_state(TcpStreamTracker::TCP_SYN_RECV);
     return true;
@@ -54,19 +53,19 @@ bool TcpStateSynSent::syn_ack_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& 
     if ( trk.update_on_3whs_ack(tsd) )
     {
         trk.session->update_timestamp_tracking(tsd);
-        if ( tsd.get_seg_len() )
+        if ( tsd.is_data_segment() )
             trk.session->handle_data_on_syn(tsd);
     }
     else
         trk.session->set_pkt_action_flag(ACTION_BAD_PKT);
+
     return true;
 }
 
 bool TcpStateSynSent::ack_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    snort::Flow* flow = tsd.get_flow();
+    Flow* flow = tsd.get_flow();
 
-    // FIXIT-H verify ack being sent is valid...
     trk.update_tracker_ack_sent(tsd);
     flow->set_session_flags(SSNFLAG_ESTABLISHED);
     flow->session_state |= ( STREAM_STATE_ACK | STREAM_STATE_ESTABLISHED );
@@ -78,16 +77,15 @@ bool TcpStateSynSent::ack_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 
 bool TcpStateSynSent::ack_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    if ( tsd.get_seg_len() > 0 )
+    if ( tsd.is_data_segment() )
         trk.session->handle_data_segment(tsd);
     return true;
 }
 
 bool TcpStateSynSent::data_seg_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    snort::Flow* flow = tsd.get_flow();
+    Flow* flow = tsd.get_flow();
 
-    // FIXIT-H verify ack being sent is valid...
     trk.update_tracker_ack_sent(tsd);
     flow->set_session_flags(SSNFLAG_ESTABLISHED);
     flow->session_state |= ( STREAM_STATE_ACK | STREAM_STATE_ESTABLISHED );
@@ -105,7 +103,7 @@ bool TcpStateSynSent::data_seg_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker&
 
 bool TcpStateSynSent::fin_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    if ( tsd.get_seg_len() > 0 )
+    if ( tsd.is_data_segment() )
         trk.session->handle_data_segment(tsd);
     return true;
 }
@@ -118,15 +116,11 @@ bool TcpStateSynSent::rst_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
         trk.set_tcp_state(TcpStreamTracker::TCP_CLOSED);
         trk.session->update_perf_base_state(TcpStreamTracker::TCP_CLOSED);
         trk.session->set_pkt_action_flag(ACTION_RST);
-        tsd.get_pkt()->flow->session_state |= STREAM_STATE_CLOSED;
-    }
-    else
-    {
-        trk.session->tel.set_tcp_event(EVENT_BAD_RST);
+        tsd.get_flow()->session_state |= STREAM_STATE_CLOSED;
     }
 
     // FIXIT-L might be good to create alert specific to RST with data
-    if ( tsd.get_seg_len() > 0 )
+    if ( tsd.is_data_segment() )
         trk.session->tel.set_tcp_event(EVENT_DATA_AFTER_RST_RCVD);
     return true;
 }

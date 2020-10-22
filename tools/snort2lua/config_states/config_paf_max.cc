@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,34 +42,15 @@ bool PafMax::convert(std::istringstream& data_stream)
 
     if (data_stream >> val)
     {
-        // FIXIT-H this is a hack to ensure max_pdu is in every configuration
-        // file and does not overwrite the stream_tcp table
-
-#if 0
         table_api.open_table("stream_tcp");
 
         if (val < 1460)
-        {
-            table_api.add_diff_option_comment("paf_max [0:63780]", "max_pdu [1460:63780]");
             val = 1460;
-        }
-
-        table_api.add_option("max_pdu", val);
-        table_api.close_table();
-#else
-
-        if (val < 1460)
-        {
-            data_api.add_comment("option change: 'paf_max [0:63780]' --> 'max_pdu [1460:32768]'");
-            val = 1460;
-        }
         else if (val > 32768)
-        {
-            data_api.add_comment("option change: 'paf_max [0:63780]' --> 'max_pdu [1460:32768]'");
             val = 32768;
-        }
-        data_api.add_comment("stream_tcp.max_pdu = " + std::to_string(val));
-#endif
+        table_api.add_option("max_pdu", val);
+        table_api.add_diff_option_comment("paf_max [0:63780]", "max_pdu [1460:32768]");
+        table_api.close_table();
 
         if (!(data_stream >> val))
             return true;

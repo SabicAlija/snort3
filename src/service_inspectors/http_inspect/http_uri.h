@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,8 +24,7 @@
 #include "http_module.h"
 #include "http_uri_norm.h"
 #include "http_field.h"
-#include "http_infractions.h"
-#include "http_event_gen.h"
+#include "http_event.h"
 
 //-------------------------------------------------------------------------
 // HttpUri class
@@ -51,12 +50,11 @@ public:
     const Field& get_query() { return query; }
     const Field& get_fragment() { return fragment; }
 
-    const Field& get_norm_host() { return host_norm; }
+    const Field& get_norm_host();
     const Field& get_norm_path() { return path_norm; }
     const Field& get_norm_query() { return query_norm; }
     const Field& get_norm_fragment() { return fragment_norm; }
     const Field& get_norm_classic() { return classic_norm; }
-    size_t get_file_proc_hash();
 
 private:
     const Field uri;
@@ -77,7 +75,6 @@ private:
     Field classic_norm;
     HttpInfractions* const infractions;
     HttpEventGen* const events;
-    size_t abs_path_hash = 0;
     HttpEnums::UriType uri_type = HttpEnums::URI__NOT_COMPUTE;
     const HttpEnums::MethodId method_id;
     const HttpParaList::UriParam& uri_param;
@@ -87,7 +84,7 @@ private:
     void parse_authority();
     void parse_abs_path();
 
-    void check_oversize_dir(Field&);
+    void check_oversize_dir(const Field&);
 };
 
 #endif

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -55,9 +55,9 @@ public:
 
 uint32_t ModbusDataOption::hash() const
 {
-    uint32_t a = 0, b = 0, c = 0;
+    uint32_t a = IpsOption::hash(), b = 0, c = 0;
 
-    mix_str(a, b, c, get_name());
+    mix(a, b, c);
     finalize(a,b,c);
 
     return c;
@@ -65,12 +65,12 @@ uint32_t ModbusDataOption::hash() const
 
 bool ModbusDataOption::operator==(const IpsOption& ips) const
 {
-    return !strcmp(get_name(), ips.get_name());
+    return IpsOption::operator==(ips);
 }
 
 IpsOption::EvalStatus ModbusDataOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(modbus_data_prof);
+    RuleProfile profile(modbus_data_prof);
 
     if ( !p->flow )
         return NO_MATCH;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,12 +20,12 @@
 #ifndef UTILS_SAFEC_H
 #define UTILS_SAFEC_H
 
-//FIXIT-M combine these macros in the build foo 
-#if defined(HAVE_SAFEC) && defined(ENABLE_SAFEC)
+#ifdef HAVE_SAFEC
 
 extern "C"
 {
-#include <libsafec/safe_lib.h>
+#include <safe_mem_lib.h>
+#include <safe_str_lib.h>
 }
 
 #else

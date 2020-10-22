@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,7 +30,7 @@
 using namespace snort;
 
 static DataBus& get_data_bus()
-{ return snort::get_inspection_policy()->dbus; }
+{ return get_inspection_policy()->dbus; }
 
 class BufferEvent : public DataEvent
 {
@@ -69,7 +69,25 @@ DataBus::~DataBus()
 {
     for ( auto& p : map )
         for ( auto* h : p.second )
-            delete h;
+        {
+            // If the object is cloned, pass the ownership to the next config.
+            // When the object is no further cloned (e.g., the last config), delete it.
+            if ( h->cloned )
+                h->cloned = false;
+            else
+                delete h;
+        }
+}
+
+void DataBus::clone(DataBus& from, const char* exclude_name)
+{
+    for ( auto& p : from.map )
+        for ( auto* h : p.second )
+            if ( nullptr == exclude_name || 0 != strcmp(exclude_name, h->module_name) )
+            {
+                h->cloned = true;
+                _subscribe(p.first.c_str(), h);
+            }
 }
 
 // add handler to list of handlers to be notified upon
@@ -80,9 +98,10 @@ void DataBus::subscribe(const char* key, DataHandler* h)
 }
 
 // for subscribers that need to receive events regardless of active inspection policy
-void DataBus::subscribe_default(const char* key, DataHandler* h)
+void DataBus::subscribe_global(const char* key, DataHandler* h, SnortConfig* sc)
 {
-    get_default_inspection_policy(SnortConfig::get_conf())->dbus._subscribe(key, h);
+    assert(sc);
+    sc->global_dbus->_subscribe(key, h);
 }
 
 void DataBus::unsubscribe(const char* key, DataHandler* h)
@@ -90,23 +109,19 @@ void DataBus::unsubscribe(const char* key, DataHandler* h)
     get_data_bus()._unsubscribe(key, h);
 }
 
-void DataBus::unsubscribe_default(const char* key, DataHandler* h)
+void DataBus::unsubscribe_global(const char* key, DataHandler* h, SnortConfig* sc)
 {
-    get_default_inspection_policy(SnortConfig::get_conf())->dbus._unsubscribe(key, h);
+    assert(sc);
+    sc->global_dbus->_unsubscribe(key, h);
 }
 
 // notify subscribers of event
 void DataBus::publish(const char* key, DataEvent& e, Flow* f)
 {
-    InspectionPolicy* pi = snort::get_inspection_policy();
+    InspectionPolicy* pi = get_inspection_policy();
     pi->dbus._publish(key, e, f);
 
-    // also publish to default policy to notify control subscribers such as appid
-    InspectionPolicy* di = snort::get_default_inspection_policy(SnortConfig::get_conf());
-
-    // of course, only when current is not default
-    if ( di != pi )
-        di->dbus._publish(key, e, f);
+    SnortConfig::get_conf()->global_dbus->_publish(key, e, f);
 }
 
 void DataBus::publish(const char* key, const uint8_t* buf, unsigned len, Flow* f)
@@ -123,12 +138,6 @@ void DataBus::publish(const char* key, Packet* p, Flow* f)
     publish(key, e, f);
 }
 
-void DataBus::publish(const char* key, void* user, int type, const uint8_t* data)
-{
-    DaqMetaEvent e(user, type, data);
-    publish(key, e, nullptr);
-}
-
 //--------------------------------------------------------------------------
 // private methods
 //--------------------------------------------------------------------------
@@ -136,7 +145,7 @@ void DataBus::publish(const char* key, void* user, int type, const uint8_t* data
 void DataBus::_subscribe(const char* key, DataHandler* h)
 {
     DataList& v = map[key];
-    v.push_back(h);
+    v.emplace_back(h);
 }
 
 void DataBus::_unsubscribe(const char* key, DataHandler* h)

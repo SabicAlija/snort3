@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,6 +29,7 @@
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "protocols/ssl.h"
+#include "pub_sub/opportunistic_tls_event.h"
 #include "search_engines/search_tool.h"
 #include "stream/stream.h"
 #include "utils/util_cstring.h"
@@ -128,6 +129,9 @@ const PegInfo imap_peg_names[] =
     { CountType::SUM, "sessions", "total imap sessions" },
     { CountType::NOW, "concurrent_sessions", "total concurrent imap sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent imap sessions" },
+    { CountType::SUM, "start_tls", "total STARTTLS events generated" },
+    { CountType::SUM, "ssl_search_abandoned", "total SSL search abandoned" },
+    { CountType::SUM, "ssl_srch_abandoned_early", "total SSL search abandoned too soon" },
     { CountType::SUM, "b64_attachments", "total base64 attachments decoded" },
     { CountType::SUM, "b64_decoded_bytes", "total base64 decoded bytes" },
     { CountType::SUM, "qp_attachments", "total quoted-printable attachments decoded" },
@@ -234,7 +238,7 @@ static void IMAP_GetEOL(const uint8_t* ptr, const uint8_t* end,
     const uint8_t* tmp_eol;
     const uint8_t* tmp_eolm;
 
-    tmp_eol = (uint8_t*)memchr(ptr, '\n', end - ptr);
+    tmp_eol = (const uint8_t*)memchr(ptr, '\n', end - ptr);
     if (tmp_eol == nullptr)
     {
         tmp_eol = end;
@@ -259,19 +263,6 @@ static void IMAP_GetEOL(const uint8_t* ptr, const uint8_t* end,
 
     *eol = tmp_eol;
     *eolm = tmp_eolm;
-}
-
-static void PrintImapConf(IMAP_PROTO_CONF* config)
-{
-    if (config == nullptr)
-        return;
-
-    LogMessage("IMAP config: \n");
-
-    config->decode_conf.print_decode_conf();
-
-    LogMessage("\n");
-
 }
 
 static inline int InspectPacket(Packet* p)
@@ -460,7 +451,7 @@ static void IMAP_ProcessServerPacket(Packet* p, IMAPData* imap_ssn)
                 FilePosition position = get_file_position(p);
 
                 int data_len = end - ptr;
-                ptr = imap_ssn->mime_ssn->process_mime_data(p->flow, ptr, data_len, false,
+                ptr = imap_ssn->mime_ssn->process_mime_data(p, ptr, data_len, false,
                     position);
                 if ( ptr < data_end)
                     len = len - (data_end - ptr);
@@ -491,6 +482,13 @@ static void IMAP_ProcessServerPacket(Packet* p, IMAPData* imap_ssn)
             {
             case RESP_FETCH:
                 imap_ssn->body_len = imap_ssn->body_read = 0;
+                if (!(imap_ssn->session_flags & IMAP_FLAG_ABANDON_EVT)
+                    and !p->flow->flags.data_decrypted)
+                {
+                    imap_ssn->session_flags |= IMAP_FLAG_ABANDON_EVT;
+                    DataBus::publish(SSL_SEARCH_ABANDONED, p);
+                    imapstats.ssl_search_abandoned++;
+                }
                 imap_ssn->state = STATE_DATA;
                 tmp = SnortStrcasestr((const char*)cmd_start, (eol - cmd_start), "BODY");
                 if (tmp != nullptr)
@@ -504,6 +502,20 @@ static void IMAP_ProcessServerPacket(Packet* p, IMAPData* imap_ssn)
                         imap_ssn->state = STATE_UNKNOWN;
                 }
                 break;
+            case RESP_OK:
+                if (imap_ssn->state == STATE_TLS_CLIENT_PEND)
+                {
+                    if ((imap_ssn->session_flags & IMAP_FLAG_ABANDON_EVT)
+                        and !p->flow->flags.data_decrypted)
+                    {
+                        imapstats.ssl_srch_abandoned_early++;
+                    }
+
+                    OpportunisticTlsEvent event(p, p->flow->service);
+                    DataBus::publish(OPPORTUNISTIC_TLS_EVENT, event, p->flow);
+                    imapstats.start_tls++;
+                    imap_ssn->state = STATE_DECRYPTION_REQ;
+                }
             default:
                 break;
             }
@@ -589,7 +601,8 @@ static void snort_imap(IMAP_PROTO_CONF* config, Packet* p)
     if (pkt_dir == IMAP_PKT_FROM_CLIENT)
     {
         /* This packet should be a tls client hello */
-        if (imap_ssn->state == STATE_TLS_CLIENT_PEND)
+        if ((imap_ssn->state == STATE_TLS_CLIENT_PEND)
+            || (imap_ssn->state == STATE_DECRYPTION_REQ))
         {
             if (IsTlsClientHello(p->data, p->data + p->dsize))
             {
@@ -680,6 +693,11 @@ void ImapMime::decode_alert()
     }
 }
 
+void ImapMime::decompress_alert()
+{
+    DetectionEngine::queue_event(GID_IMAP, IMAP_FILE_DECOMP_FAILED);
+}
+
 void ImapMime::reset_state(Flow* ssn)
 {
     IMAP_ResetState(ssn);
@@ -702,11 +720,17 @@ public:
     ~Imap() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     StreamSplitter* get_splitter(bool c2s) override
     { return new ImapSplitter(c2s); }
+
+    bool can_carve_files() const override
+    { return true; }
+
+    bool can_start_tls() const override
+    { return true; }
 
 private:
     IMAP_PROTO_CONF* config;
@@ -734,9 +758,10 @@ bool Imap::configure(SnortConfig*)
     return true;
 }
 
-void Imap::show(SnortConfig*)
+void Imap::show(const SnortConfig*) const
 {
-    PrintImapConf(config);
+    if ( config )
+        config->decode_conf.show();
 }
 
 void Imap::eval(Packet* p)
@@ -810,8 +835,6 @@ const InspectApi imap_api =
     nullptr, // ssn
     nullptr  // reset
 };
-
-#undef BUILDING_SO  // FIXIT-L can't be linked dynamically yet
 
 #ifdef BUILDING_SO
 SO_PUBLIC const BaseApi* snort_plugins[] =

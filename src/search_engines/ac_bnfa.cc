@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -46,8 +46,7 @@ private:
     bnfa_struct_t* obj;
 
 public:
-    AcBnfaMpse(SnortConfig*, const MpseAgent* agent)
-        : Mpse("ac_bnfa")
+    AcBnfaMpse(const MpseAgent* agent) : Mpse("ac_bnfa")
     {
         obj=bnfaNew(agent);
         if ( obj ) obj->bnfaMethod = 1;
@@ -66,8 +65,7 @@ public:
     }
 
     int add_pattern(
-        SnortConfig*, const uint8_t* P, unsigned m,
-        const PatternDescriptor& desc, void* user) override
+        const uint8_t* P, unsigned m, const PatternDescriptor& desc, void* user) override
     {
         return bnfaAddPattern(obj, P, m, desc.no_case, desc.negated, user);
     }
@@ -94,7 +92,7 @@ public:
         return 0;
     }
 
-    int get_pattern_count() override
+    int get_pattern_count() const override
     {
         return bnfaPatternCount(obj);
     }
@@ -105,9 +103,9 @@ public:
 //-------------------------------------------------------------------------
 
 static Mpse* bnfa_ctor(
-    SnortConfig* sc, class Module*, const MpseAgent* agent)
+    const SnortConfig*, class Module*, const MpseAgent* agent)
 {
-    return new AcBnfaMpse(sc, agent);
+    return new AcBnfaMpse(agent);
 }
 
 static void bnfa_dtor(Mpse* p)
@@ -149,6 +147,7 @@ static const MpseApi bnfa_api =
     bnfa_dtor,
     bnfa_init,
     bnfa_print,
+    nullptr,
 };
 
 const BaseApi* se_ac_bnfa[] =

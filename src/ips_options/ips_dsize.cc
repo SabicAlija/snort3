@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 #include "framework/ips_option.h"
 #include "framework/module.h"
 #include "framework/range.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -57,22 +57,20 @@ private:
 
 uint32_t DsizeOption::hash() const
 {
-    uint32_t a,b,c;
-
-    a = config.min;
-    b = config.max;
-    c = config.op;
+    uint32_t a = config.min;
+    uint32_t b = config.max;
+    uint32_t c = config.op;
 
     mix(a,b,c);
-    mix_str(a,b,c,get_name());
-    finalize(a,b,c);
+    a += IpsOption::hash();
 
+    finalize(a,b,c);
     return c;
 }
 
 bool DsizeOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const DsizeOption& rhs = (const DsizeOption&)ips;
@@ -82,7 +80,7 @@ bool DsizeOption::operator==(const IpsOption& ips) const
 // Test the packet's payload size against the rule payload size value
 IpsOption::EvalStatus DsizeOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(dsizePerfStats);
+    RuleProfile profile(dsizePerfStats);
 
     /* fake packet dsizes are always wrong
        (unless they are PDUs) */

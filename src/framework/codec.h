@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,7 +31,7 @@
 #include "utils/cpp_macros.h"
 
 struct TextLog;
-struct _daq_pkthdr;
+struct _daq_msg;
 
 namespace snort
 {
@@ -56,7 +56,6 @@ struct ICMPHdr;
 
 class Flow;
 struct Layer;
-struct Packet;
 
 // Used by root codecs to add their DLT to their HELP string
 #define ADD_DLT(help, x) help " (DLT " STRINGIFY_MX(x) ")"
@@ -66,11 +65,12 @@ constexpr uint8_t MAX_TTL = 255;
 
 struct RawData
 {
-    const _daq_pkthdr* pkth;
+    const struct _daq_msg* daq_msg;
     const uint8_t* data;
     uint32_t len;
 
-    RawData(const _daq_pkthdr*, const uint8_t*);
+    RawData(const struct _daq_msg* daq_msg, const uint8_t* data, uint32_t len) :
+        daq_msg(daq_msg), data(data), len(len) { }
 };
 
 /*  Decode Flags */
@@ -116,28 +116,31 @@ constexpr uint16_t CODEC_ETHER_NEXT = 0x1000;
 constexpr uint16_t CODEC_IPOPT_FLAGS = (CODEC_IPOPT_RR_SEEN |
     CODEC_IPOPT_RTRALT_SEEN | CODEC_IPOPT_LEN_THREE);
 
+struct SnortConfig;
+
 struct CodecData
 {
+    const SnortConfig* conf;
+
     /* This section will get reset before every decode() function call */
     ProtocolId next_prot_id;      /* protocol type of the next layer */
-    uint16_t lyr_len;           /* The length of the valid part layer */
-    uint16_t invalid_bytes;     /* the length of the INVALID part of this layer */
+    uint16_t lyr_len = 0;           /* The length of the valid part layer */
+    uint16_t invalid_bytes = 0;     /* the length of the INVALID part of this layer */
 
     /* Reset before each decode of packet begins */
 
     /*  Codec specific fields.  These fields are only relevant to codecs. */
-    uint32_t proto_bits;    /* protocols contained within this packet
+    uint32_t proto_bits = 0;    /* protocols contained within this packet
                                  -- will be propogated to Snort++ Packet struct*/
-    uint16_t codec_flags;   /* flags used while decoding */
-    uint8_t ip_layer_cnt;
+    uint16_t codec_flags = 0;   /* flags used while decoding */
+    uint8_t ip_layer_cnt = 0;
 
-    /*  The following values have junk values after initialization */
-    uint8_t ip6_extension_count; /* initialized in cd_ipv6.cc */
-    uint8_t curr_ip6_extension;  /* initialized in cd_ipv6.cc */
-    IpProtocol ip6_csum_proto;      /* initialized in cd_ipv6.cc.  Used for IPv6 checksums */
+    uint8_t ip6_extension_count = 0;
+    uint8_t curr_ip6_extension = 0;
+    IpProtocol ip6_csum_proto = IpProtocol::IP;   /* Used for IPv6 checksums */
+    bool tunnel_bypass = false;
 
-    CodecData(ProtocolId init_prot) : next_prot_id(init_prot), lyr_len(0),
-        invalid_bytes(0), proto_bits(0), codec_flags(0), ip_layer_cnt(0)
+    CodecData(const SnortConfig* sc, ProtocolId init_prot) : conf(sc), next_prot_id(init_prot)
     { }
 
     bool inline is_cooked() const
@@ -368,7 +371,7 @@ private:
 //-------------------------------------------------------------------------
 
 // this is the current version of the api
-#define CDAPI_VERSION ((BASE_API_VERSION << 16) | 0)
+#define CDAPI_VERSION ((BASE_API_VERSION << 16) | 1)
 
 typedef Codec* (* CdNewFunc)(Module*);
 typedef void (* CdDelFunc)(Codec*);

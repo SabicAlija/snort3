@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,6 +32,8 @@
 #include "protocols/packet.h"
 #include "log/messages.h"
 
+using namespace snort;
+
 static THREAD_LOCAL unsigned client_module_index = 0;
 
 ClientDetector::ClientDetector()
@@ -40,14 +42,14 @@ ClientDetector::ClientDetector()
     client = true;
 }
 
-void ClientDetector::register_appid(AppId appId, unsigned extractsInfo)
+void ClientDetector::register_appid(AppId appId, unsigned extractsInfo, OdpContext& odp_ctxt)
 {
-    AppInfoTableEntry* pEntry = AppInfoManager::get_instance().get_app_info_entry(appId);
+    AppInfoTableEntry* pEntry = odp_ctxt.get_app_info_mgr().get_app_info_entry(appId);
     if (!pEntry)
     {
-        if ( AppInfoManager::get_instance().configured() )
+        if ( odp_ctxt.get_app_info_mgr().configured() )
         {
-            snort::ParseWarning(WARN_RULES,
+            ParseWarning(WARN_RULES,
                 "appid: no entry for %d in appMapping.data; no rule support for this ID.",
                 appId);
         }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -49,6 +49,16 @@ bool Rule::add_hdr_data(const std::string& data)
     }
 }
 
+void Rule::set_rule_old_action(const std::string& action)
+{
+    old_action = action;
+}
+
+std::string& Rule::get_rule_old_action()
+{
+    return old_action;
+}
+
 void Rule::update_rule_action(const std::string& new_type)
 { hdr_data[0] = new_type; }
 
@@ -86,7 +96,7 @@ std::string Rule::get_option(const std::string& keyword)
     return std::string();
 }
 
-void Rule::update_option(const std::string& keyword, std::string& val)
+void Rule::update_option(const std::string& keyword, const std::string& val)
 {
     for (auto option : options)
     {
@@ -103,6 +113,11 @@ void Rule::add_suboption(const std::string& keyword)
 
 void Rule::add_suboption(const std::string& keyword, const std::string& val)
 { options.back()->add_suboption(keyword, val); }
+
+void Rule::reset_sticky()
+{
+    sticky_buffer.clear();
+}
 
 void Rule::set_curr_options_buffer(const std::string& new_buffer, bool add_option)
 {
@@ -165,5 +180,105 @@ std::ostream& operator<<(std::ostream& out, const Rule& rule)
     }
 
     return out;
+}
+
+void Rule::resolve_pcre_buffer_options()
+{
+    std::string curr_sticky_buffer = "";
+    const std::string service = get_option("service");
+    const bool service_sip = (service.find("sip") != std::string::npos);
+    const bool no_service_http = (service.find("http") == std::string::npos);
+    std::string new_buffer;
+    std::vector<RuleOption*>::iterator iter = options.begin();
+
+    while (iter != options.end())
+    {
+        std::string name = (*iter)->get_name();
+
+        if (name == "pcre_P_option_body" ||
+            name == "pcre_H_option_header")
+        {
+            delete(*iter);
+            iter = options.erase(iter);
+
+            if (service_sip)
+            {
+                if (name == "pcre_P_option_body")
+                {
+                    new_buffer = "sip_body";
+                }
+                else
+                {
+                    new_buffer = "sip_header";
+                }
+            }
+            else
+            {
+                if (name == "pcre_P_option_body")
+                {
+                    if (no_service_http)
+                    {
+                        add_comment("pcre P option converted to http_client_body by default");
+                    }
+                    new_buffer = "http_client_body";
+                }
+                else
+                {
+                    if (no_service_http)
+                    {
+                        add_comment("pcre H option converted to http_header by default");
+                    }
+                    new_buffer = "http_header";
+                }
+            }
+
+            /* Add sticky buffer option if not equal to current */
+            if (curr_sticky_buffer != new_buffer)
+            {
+                curr_sticky_buffer = new_buffer;
+                RuleOption* new_opt = new RuleOption(new_buffer);
+                iter = options.insert(iter, new_opt);
+                ++iter;
+            }
+        }
+        else if (name == "pkt_data" ||
+            name == "file_data" ||
+            name == "dce_stub_data" ||
+            name == "dnp3_data" ||
+            name == "modbus_data" ||
+            name == "http_cookie" ||
+            name == "http_method" ||
+            name == "http_raw_cookie" ||
+            name == "http_raw_header" ||
+            name == "http_raw_uri" ||
+            name == "http_stat_code" ||
+            name == "http_stat_msg" ||
+            name == "http_uri" ||
+            name == "raw_data")
+        {
+            curr_sticky_buffer = name;
+            ++iter;
+        }
+        else if (name == "http_header" ||
+            name == "http_client_body" ||
+            name == "sip_header" ||
+            name == "sip_body")
+        {
+            if (curr_sticky_buffer == name)
+            {
+                delete(*iter);
+                iter = options.erase(iter);
+            }
+            else
+            {
+                curr_sticky_buffer = name;
+                ++iter;
+            }
+        }
+        else
+        {
+            ++iter;
+        }
+    }
 }
 

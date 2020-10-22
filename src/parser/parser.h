@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,24 +36,26 @@ void parser_term(snort::SnortConfig*);
 void get_parse_location(const char*& name, unsigned& line);
 
 // use line = 0 for lua to suppress line numbers for errors or warnings
-void push_parse_location(const char* name, unsigned line = 1);
+void push_parse_location(
+    const char* code, const char* path, const char* name = nullptr, unsigned line = 1);
 
 void pop_parse_location();
 void inc_parse_position();
 
-snort::SnortConfig* ParseSnortConf(const snort::SnortConfig*, const char* fname = nullptr);
+snort::SnortConfig* ParseSnortConf(const snort::SnortConfig*, const char* fname = nullptr,
+    bool is_fatal = true);
 void ParseRules(snort::SnortConfig*);
-
-void OrderRuleLists(snort::SnortConfig*, const char*);
-void PrintRuleOrder(RuleListNode*);
+void ShowPolicyStats(const snort::SnortConfig*);
 
 char* ProcessFileOption(snort::SnortConfig*, const char*);
 void SetRuleStates(snort::SnortConfig*);
 
+void OrderRuleLists(snort::SnortConfig*);
 void FreeRuleLists(snort::SnortConfig*);
 void VarTablesFree(snort::SnortConfig*);
 
 void parser_append_rules(const char*);
+void parser_append_includes(const char*);
 
 int ParseBool(const char* arg);
 
@@ -83,7 +85,8 @@ inline RuleTreeNode* getRuntimeRtnFromOtn(const struct OptTreeNode* otn)
     return getRtnFromOtn(otn);
 }
 
-ListHead* CreateRuleType(snort::SnortConfig* sc, const char* name, snort::Actions::Type);
+RuleListNode* CreateRuleType(snort::SnortConfig* sc, const char* name,
+    snort::Actions::Type, bool is_plugin_action = false);
 
 void FreeRuleTreeNode(RuleTreeNode*);
 void DestroyRuleTreeNode(RuleTreeNode*);
@@ -98,6 +101,5 @@ struct RuleTreeNodeKey
     PolicyId policyId;
 };
 
-extern bool parsing_follows_files;
 #endif
 

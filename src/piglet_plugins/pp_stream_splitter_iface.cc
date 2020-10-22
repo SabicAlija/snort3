@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,7 @@
 #include "stream/stream_splitter.h"
 
 #include "pp_flow_iface.h"
+#include "pp_packet_iface.h"
 #include "pp_raw_buffer_iface.h"
 
 using namespace snort;
@@ -44,13 +45,13 @@ static const luaL_Reg methods[] =
             Lua::Args args(L);
 
             auto& self = StreamSplitterIface.get(L, 1);
-            auto& flow = FlowIface.get(L, 2);
+            auto& pkt = PacketIface.get(L, 2);
             auto& rb = RawBufferIface.get(L, 3);
             uint32_t len = args[4].opt_size(rb.size(), rb.size());
             uint32_t flags = args[5].opt_size();
 
             uint32_t fp = 0;
-            auto status = self.scan(&flow, get_data(rb), len, flags, &fp);
+            auto status = self.scan(&pkt, get_data(rb), len, flags, &fp);
 
             stack_push<StreamSplitter::Status, unsigned>(L, status);
             Lua::Stack<uint32_t>::push(L, fp);

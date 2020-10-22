@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -119,7 +119,7 @@ struct TCPHdr
     { return (th_flags & flags) == flags; }
 
     inline bool is_syn() const
-    { return (th_flags & TH_SYN); }
+    { return ((th_flags & TH_SYN) != 0); }
 
     inline bool is_syn_only() const
     { return (th_flags & (TH_SYN | TH_ACK)) == TH_SYN; }
@@ -128,22 +128,22 @@ struct TCPHdr
     { return are_flags_set(TH_SYN | TH_ACK); }
 
     inline bool is_ack() const
-    { return (th_flags & TH_ACK); }
+    { return ((th_flags & TH_ACK) != 0); }
 
     inline bool is_psh() const
-    { return (th_flags & TH_PUSH); }
+    { return ((th_flags & TH_PUSH) != 0); }
 
     inline bool is_rst() const
-    { return (th_flags & TH_RST); }
+    { return ((th_flags & TH_RST) != 0); }
 
     inline bool is_fin() const
-    { return (th_flags & TH_FIN); }
+    { return ((th_flags & TH_FIN) != 0); }
 
     /*  raw data access */
     inline uint16_t raw_src_port() const
     { return th_sport; }
 
-    inline uint16_t raw_dst_len() const
+    inline uint16_t raw_dst_port() const
     { return th_dport; }
 
     inline uint32_t raw_seq() const

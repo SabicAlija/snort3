@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,10 +24,12 @@
 
 // provides a common flow management interface
 
+#include <memory>
+
 #include "flow/flow.h"
 
-
-struct HostAttributeEntry;
+class HostAttributesDescriptor;
+typedef std::shared_ptr<HostAttributesDescriptor> HostAttributesEntry;
 
 namespace snort
 {
@@ -53,7 +55,7 @@ class StreamSplitter;
 #define IP_POLICIES  \
     "first | linux | bsd | bsd_right | last | windows | solaris"
 
-// sequence must match STREAM_POLICY_* defines in tcp_session.cc (1-based)
+// sequence must match enum StreamPolicy defines in tcp_defs.h
 #define TCP_POLICIES \
     "first | last | linux | old_linux | bsd | macos | solaris | irix | " \
     "hpux11 | hpux10 | windows | win_2003 | vista | proxy"
@@ -72,10 +74,9 @@ public:
     // for shutdown only
     static void purge_flows();
 
-    static void timeout_flows(time_t cur_time);
+    static void handle_timeouts(bool idle);
     static void prune_flows();
     static bool expected_flow(Flow*, Packet*);
-    static Flow* new_flow(FlowKey*);
 
     // Looks in the flow cache for flow session with specified key and returns
     // pointer to flow session object if found, otherwise null.
@@ -91,6 +92,7 @@ public:
     // Removes the flow session object from the flow cache table and returns
     // the resources allocated to that flow to the free list.
     static void delete_flow(const FlowKey*);
+    static void delete_flow(Flow*);
 
     // Examines the source and destination ip addresses and ports to determine if the
     // packet is from the client or server side of the flow and sets bits in the
@@ -111,7 +113,7 @@ public:
     // when it arrives.
     static int ignore_flow(
         const Packet* ctrlPkt, PktType, IpProtocol, const snort::SfIp* srcIP, uint16_t srcPort,
-        const snort::SfIp* dstIP, uint16_t dstPort, char direction, uint32_t flowdata_id);
+        const snort::SfIp* dstIP, uint16_t dstPort, char direction, FlowData* fd);
 
     // Resume inspection for flow.
     // FIXIT-L does resume work only for a flow that has been stopped by call to stop_inspection?
@@ -119,7 +121,7 @@ public:
 
     // Set Active status to force drop the current packet and set flow state to drop
     // subsequent packets arriving from the direction specified.
-    static void drop_traffic(Flow*, char dir);
+    static void drop_traffic(const Packet*, char dir);
 
     // Mark a flow as dropped, release allocated resources, and set flow state such that any
     // subsequent packets received on this flow are dropped.
@@ -143,7 +145,7 @@ public:
         Flow*, Packet* p, uint32_t gid, uint32_t sid,
         uint32_t eventId, uint32_t eventSecond);
 
-    // Get reassembly direction for given session
+    static void disable_reassembly(Flow*);
     static char get_reassembly_direction(Flow*);
 
     // Returns true if stream data for the flow is in sequence, otherwise return false.
@@ -163,7 +165,7 @@ public:
     static SnortProtocolId get_snort_protocol_id(Flow*);
 
     // Set the protocol identifier for a stream
-    static SnortProtocolId set_snort_protocol_id(Flow*, SnortProtocolId);
+    static SnortProtocolId set_snort_protocol_id(Flow*, SnortProtocolId, bool is_appid_service = false);
 
     // initialize response count and expiration time
     static void init_active_response(const Packet*, Flow*);
@@ -175,7 +177,8 @@ public:
     // TCP only.
     static int set_snort_protocol_id_expected(
         const Packet* ctrlPkt, PktType, IpProtocol, const snort::SfIp* srcIP, uint16_t srcPort,
-        const snort::SfIp* dstIP, uint16_t dstPort, SnortProtocolId, FlowData*);
+        const snort::SfIp* dstIP, uint16_t dstPort, SnortProtocolId, FlowData*,
+        bool swap_app_direction = false);
 
     // Get pointer to application data for a flow based on the lookup tuples for cases where
     // Snort does not have an active packet that is relevant.
@@ -204,13 +207,11 @@ public:
     //  Populate a session key from the Packet
     static void populate_flow_key(Packet*, FlowKey*);
 
-    static void update_direction(Flow*, char dir, const snort::SfIp* ip, uint16_t port);
-
     static void set_snort_protocol_id(
-        Flow*, const HostAttributeEntry*, int direction);
+        Flow*, const HostAttributesEntry&, int direction);
 
     static bool is_midstream(Flow* flow)
-    { return flow->ssn_state.session_flags & SSNFLAG_MIDSTREAM; }
+    { return ((flow->ssn_state.session_flags & SSNFLAG_MIDSTREAM) != 0); }
 
     // Get the TTL value used at session setup
     // Set outer=false to get inner ip ttl for ip in ip; else outer=true
@@ -218,7 +219,7 @@ public:
 
     static bool expired_flow(Flow*, Packet*);
     static bool ignored_flow(Flow*, Packet*);
-    static bool blocked_flow(Flow*, Packet*);
+    static bool blocked_flow(Packet*);
 
     // extra data methods
     static void set_extra_data(Flow*, Packet*, uint32_t);
@@ -231,6 +232,9 @@ public:
     // TCP-specific accessor methods.
     static uint16_t get_mss(Flow*, bool to_server);
     static uint8_t get_tcp_options_len(Flow*, bool to_server);
+
+    static bool set_packet_action_to_hold(Packet*);
+    static void set_no_ack_mode(Flow*, bool);
 
 private:
     static void set_ip_protocol(Flow*);

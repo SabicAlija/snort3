@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,6 +33,8 @@
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "protocols/ssl.h"
+#include "pub_sub/finalize_packet_event.h"
+#include "pub_sub/opportunistic_tls_event.h"
 #include "stream/stream.h"
 #include "stream/stream_splitter.h"
 
@@ -75,6 +77,7 @@ const PegInfo ssl_peg_names[] =
 SslFlowData::SslFlowData() : FlowData(inspector_id)
 {
     memset(&session, 0, sizeof(session));
+    finalize_info = {};
     sslstats.concurrent_sessions++;
     if(sslstats.max_concurrent_sessions < sslstats.concurrent_sessions)
         sslstats.max_concurrent_sessions = sslstats.concurrent_sessions;
@@ -97,19 +100,6 @@ SSLData* get_ssl_session_data(Flow* flow)
 {
     SslFlowData* fd = (SslFlowData*)flow->get_flow_data(SslFlowData::inspector_id);
     return fd ? &fd->session : nullptr;
-}
-
-static void PrintSslConf(SSL_PROTO_CONF* config)
-{
-    if (config == nullptr)
-        return;
-    LogMessage("SSL config:\n");
-    if ( config->trustservers )
-    {
-        LogMessage("    Server side data is trusted\n");
-    }
-
-    LogMessage("\n");
 }
 
 static void SSL_UpdateCounts(const uint32_t new_flags)
@@ -192,6 +182,7 @@ static inline uint32_t SSLPP_process_alert(
         !(new_flags & SSL_HEARTBEAT_SEEN))
     {
         DetectionEngine::disable_content(packet);
+        sslstats.disabled++;
     }
 
     /* Need to negate the application flags from the opposing side. */
@@ -238,6 +229,7 @@ static inline uint32_t SSLPP_process_app(SSL_PROTO_CONF* config, uint32_t ssn_fl
         else if (!(new_flags & SSL_HEARTBEAT_SEEN))
         {
             DetectionEngine::disable_content(packet);
+            sslstats.disabled++;
         }
     }
 
@@ -264,6 +256,7 @@ static inline void SSLPP_process_other(SSL_PROTO_CONF* config, SSLData* sd, uint
         else if (!(new_flags & SSL_HEARTBEAT_SEEN))
         {
             DetectionEngine::disable_content(packet);
+            sslstats.disabled++;
         }
     }
     else
@@ -345,6 +338,7 @@ static void snort_ssl(SSL_PROTO_CONF* config, Packet* p)
         if (!(new_flags & SSL_HEARTBEAT_SEEN))
         {
             DetectionEngine::disable_content(p);
+            sslstats.disabled++;
         }
 
         sd->ssn_flags |= new_flags;
@@ -412,6 +406,7 @@ static void snort_ssl(SSL_PROTO_CONF* config, Packet* p)
 //-------------------------------------------------------------------------
 // class stuff
 //-------------------------------------------------------------------------
+static const char* s_name = "ssl";
 
 class Ssl : public Inspector
 {
@@ -419,14 +414,50 @@ public:
     Ssl(SSL_PROTO_CONF*);
     ~Ssl() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
+    bool configure(SnortConfig*) override;
 
     StreamSplitter* get_splitter(bool c2s) override
     { return new SslSplitter(c2s); }
 
 private:
     SSL_PROTO_CONF* config;
+};
+
+class SslStartTlsEventtHandler : public DataHandler
+{
+public:
+    SslStartTlsEventtHandler() : DataHandler(s_name) { }
+
+    void handle(DataEvent&, Flow* flow) override
+    {
+        SslFlowData* fd = new SslFlowData;
+        fd->finalize_info.orig_flag = flow->flags.trigger_finalize_event;
+        fd->finalize_info.switch_in = true;
+        flow->set_flow_data(fd);
+        flow->flags.trigger_finalize_event = true;
+    }
+};
+
+class SslFinalizePacketHandler : public DataHandler
+{
+public:
+    SslFinalizePacketHandler() : DataHandler(s_name) {}
+
+    void handle(DataEvent& e, Flow*) override
+    {
+        FinalizePacketEvent* fp_event = (FinalizePacketEvent*)&e;
+        const Packet* pkt = fp_event->get_packet();
+        SslFlowData* fd = (SslFlowData*)pkt->flow->get_flow_data(SslFlowData::inspector_id);
+        if (fd and fd->finalize_info.switch_in)
+        {
+            pkt->flow->flags.trigger_finalize_event = fd->finalize_info.orig_flag;
+            fd->finalize_info.switch_in = false;
+            pkt->flow->set_proxied();
+            pkt->flow->set_service(const_cast<Packet*>(pkt), s_name);
+        }
+    }
 };
 
 Ssl::Ssl(SSL_PROTO_CONF* pc)
@@ -440,9 +471,13 @@ Ssl::~Ssl()
         delete config;
 }
 
-void Ssl::show(SnortConfig*)
+void Ssl::show(const SnortConfig*) const
 {
-    PrintSslConf(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_flag("trust_servers", config->trustservers);
+    ConfigLogger::log_value("max_heartbeat_length", config->max_heartbeat_len);
 }
 
 void Ssl::eval(Packet* p)
@@ -453,6 +488,13 @@ void Ssl::eval(Packet* p)
 
     sslstats.packets++;
     snort_ssl(config, p);
+}
+
+bool Ssl::configure(SnortConfig*)
+{
+    DataBus::subscribe(FINALIZE_PACKET_EVENT, new SslFinalizePacketHandler());
+    DataBus::subscribe(OPPORTUNISTIC_TLS_EVENT, new SslStartTlsEventtHandler());
+    return true;
 }
 
 //-------------------------------------------------------------------------
@@ -498,7 +540,7 @@ const InspectApi ssl_api =
     IT_SERVICE,
     PROTO_BIT__PDU,
     nullptr, // buffers
-    "ssl",
+    s_name,
     ssl_init,
     nullptr, // pterm
     nullptr, // tinit

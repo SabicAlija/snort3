@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,6 +28,8 @@
 
 #include "log/messages.h"
 
+using namespace snort;
+
 namespace Lua
 {
 State::State(bool openlibs)
@@ -35,14 +37,29 @@ State::State(bool openlibs)
     state = luaL_newstate();
 
     if ( !state )
-        snort::FatalError("Lua state instantiation failed\n");
+        FatalError("Lua state instantiation failed\n");
 
     if ( openlibs )
         luaL_openlibs(state);
 }
 
-State::State(State&& o) :
-    state { std::move(o.state) } { }
+State& State::operator=(State&& o)
+{
+    if (this != &o)
+    {
+        if (state)
+            lua_close(state);
+        state = o.state;
+        o.state = nullptr;
+    }
+    return *this;
+}
+
+State::State(State&& o) noexcept
+{
+    state = o.state;
+    o.state = nullptr;
+}
 
 State::~State()
 {

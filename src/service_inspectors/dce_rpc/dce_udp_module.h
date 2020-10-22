@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,14 @@
 #include "dce_common.h"
 #include "framework/module.h"
 
+namespace snort
+{
+class Trace;
+struct SnortConfig;
+}
+
+extern THREAD_LOCAL const snort::Trace* dce_udp_trace;
+
 #define DCE2_CL_BAD_MAJOR_VERSION 40
 #define DCE2_CL_BAD_PDU_TYPE      41
 #define DCE2_CL_DATA_LT_HDR       42
@@ -34,17 +42,10 @@
 #define DCE2_CL_DATA_LT_HDR_STR  "connection-less DCE/RPC - data length less than header size"
 #define DCE2_CL_BAD_SEQ_NUM_STR  "connection-less DCE/RPC - bad sequence number"
 
-namespace snort
-{
-struct SnortConfig;
-}
-
 struct dce2UdpProtoConf
 {
     dce2CommonProtoConf common;
 };
-
-extern Trace TRACE_NAME(dce_udp);
 
 class Dce2UdpModule : public snort::Module
 {
@@ -59,17 +60,23 @@ public:
     const snort::RuleMap* get_rules() const override;
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
-    snort::ProfileStats* get_profile(unsigned, const char*&, const char*&) const override;
+    snort::ProfileStats* get_profile() const override;
     void get_data(dce2UdpProtoConf&);
 
     Usage get_usage() const override
     { return INSPECT; }
 
+    bool is_bindable() const override
+    { return true; }
+
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
+
 private:
     dce2UdpProtoConf config;
 };
 
-void print_dce2_udp_conf(dce2UdpProtoConf& config);
+void print_dce2_udp_conf(const dce2UdpProtoConf&);
 
 #endif
 

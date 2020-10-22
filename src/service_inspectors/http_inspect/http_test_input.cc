@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,9 +25,12 @@
 
 #include "http_test_input.h"
 
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_module.h"
 #include "http_test_manager.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 static unsigned convert_num_octets(const char buffer[], unsigned length)
@@ -43,10 +46,50 @@ static unsigned convert_num_octets(const char buffer[], unsigned length)
     return amount;
 }
 
+static void parse_next_hex_half_byte(const char new_char, uint8_t& hex_val)
+{
+    if ((new_char >= '0') && (new_char <= '9'))
+        hex_val = hex_val * 16 + (new_char - '0');
+    else if ((new_char >= 'a') && (new_char <= 'f'))
+        hex_val = hex_val * 16 + 10 + (new_char - 'a');
+    else if ((new_char >= 'A') && (new_char <= 'F'))
+        hex_val = hex_val * 16 + 10 + (new_char - 'A');
+    else
+        assert(false);
+}
+
+static uint8_t get_hex_byte(const char buffer[])
+{
+    unsigned offset = 0;
+    assert(*buffer == '\\');
+    offset++;
+    assert((*(buffer + offset) == 'X') or (*(buffer + offset) == 'x'));
+    offset++;
+    uint8_t hex_val = 0;
+    parse_next_hex_half_byte (*(buffer + offset++), hex_val);
+    parse_next_hex_half_byte (*(buffer + offset++), hex_val);
+    return hex_val;
+}
+
+static bool is_number(const char buffer[], const unsigned length)
+{
+    for (unsigned k = 0; k < length; k++)
+    {
+        if (buffer[k] < '0' || buffer[k] > '9')
+            return false;
+    }
+    return true;
+}
+
 HttpTestInput::HttpTestInput(const char* file_name)
 {
     if ((test_data_file = fopen(file_name, "r")) == nullptr)
         throw std::runtime_error("Cannot open test input file");
+}
+
+HttpTestInput::~HttpTestInput()
+{
+    fclose(test_data_file);
 }
 
 void HttpTestInput::reset()
@@ -56,9 +99,6 @@ void HttpTestInput::reset()
     just_flushed = true;
     tcp_closed = false;
     flush_octets = 0;
-    close_pending = false;
-    close_notified = false;
-    finish_expected = false;
     need_break = false;
 
     for (int k = 0; k <= 1; k++)
@@ -81,14 +121,10 @@ void HttpTestInput::reset()
 // function is to read dev_notes.txt.
 void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, uint64_t seq_num)
 {
-    bool skip_to_break = false;
     if (seq_num != curr_seq_num)
     {
         assert(source_id == SRC_CLIENT);
         curr_seq_num = seq_num;
-        // If we have not yet found the break command we need to skim past everything and not
-        // return any data until we find it.
-        skip_to_break = !need_break;
         reset();
     }
 
@@ -135,7 +171,7 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
 
     // Now we need to move forward by reading more data from the file
     int new_char;
-    enum State { WAITING, COMMENT, COMMAND, PARAGRAPH, ESCAPE, HEXVAL };
+    enum State { WAITING, COMMENT, COMMAND, PARAGRAPH, ESCAPE, HEXVAL, INSERT};
     State state = WAITING;
     bool ending = false;
     unsigned command_length = 0;
@@ -163,11 +199,22 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                 state = ESCAPE;
                 ending = false;
             }
+            else if (new_char == '$')
+            {
+                state = INSERT;
+                command_length = 0;
+            }
             else if (new_char != '\n')
             {
                 state = PARAGRAPH;
                 ending = false;
                 msg_buf[last_source_id][end_offset[last_source_id]++] = (uint8_t)new_char;
+            }
+            else if (ending)
+            {
+                // An insert command was not followed by regular paragraph data
+                length = end_offset[last_source_id] - previous_offset[last_source_id];
+                return;
             }
             break;
         case COMMENT:
@@ -184,28 +231,21 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     strlen("request")))
                 {
                     last_source_id = SRC_CLIENT;
-                    if (!skip_to_break)
-                    {
-                        length = 0;
-                        return;
-                    }
+                    length = 0;
+                    return;
                 }
                 else if ((command_length == strlen("response")) && !memcmp(command_value,
                     "response", strlen("response")))
                 {
                     last_source_id = SRC_SERVER;
-                    if (!skip_to_break)
-                    {
-                        length = 0;
-                        return;
-                    }
+                    length = 0;
+                    return;
                 }
                 else if ((command_length == strlen("break")) && !memcmp(command_value, "break",
                     strlen("break")))
                 {
                     reset();
-                    if (!skip_to_break)
-                        need_break = true;
+                    need_break = true;
                     length = 0;
                     return;
                 }
@@ -213,25 +253,15 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     "tcpclose", strlen("tcpclose")))
                 {
                     tcp_closed = true;
+                    length = 0;
+                    return;
                 }
-                else if ((command_length > strlen("fill")) && !memcmp(command_value, "fill",
-                    strlen("fill")))
+                else if ((command_length == strlen("partial")) && !memcmp(command_value,
+                    "partial", strlen("partial")))
                 {
-                    const unsigned amount = convert_num_octets(command_value + strlen("fill"),
-                        command_length - strlen("fill"));
-                    assert((amount > 0) && (amount <= MAX_OCTETS));
-                    for (unsigned k = 0; k < amount; k++)
-                    {
-                        // auto-fill ABCDEFGHIJABCD ...
-                        msg_buf[last_source_id][end_offset[last_source_id]++] = 'A' + k%10;
-                    }
-                    if (skip_to_break)
-                        end_offset[last_source_id] = 0;
-                    else
-                    {
-                        length = end_offset[last_source_id] - previous_offset[last_source_id];
-                        return;
-                    }
+                    partial = true;
+                    length = 0;
+                    return;
                 }
                 else if ((command_length > strlen("fileset")) && !memcmp(command_value, "fileset",
                     strlen("fileset")))
@@ -251,28 +281,6 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     if ((include_file[last_source_id] = fopen(include_file_name, "r")) == nullptr)
                         throw std::runtime_error("Cannot open test file to be included");
                 }
-                else if ((command_length > strlen("fileread")) && !memcmp(command_value,
-                    "fileread", strlen("fileread")))
-                {
-                    // Read the specified number of octets from the included file into the message
-                    // buffer and return the resulting segment
-                    const unsigned amount = convert_num_octets(command_value + strlen("fileread"),
-                        command_length - strlen("fileread"));
-                    assert((amount > 0) && (amount <= MAX_OCTETS));
-                    for (unsigned k=0; k < amount; k++)
-                    {
-                        const int new_octet = getc(include_file[last_source_id]);
-                        assert(new_octet != EOF);
-                        msg_buf[last_source_id][end_offset[last_source_id]++] = new_octet;
-                    }
-                    if (skip_to_break)
-                        end_offset[last_source_id] = 0;
-                    else
-                    {
-                        length = end_offset[last_source_id] - previous_offset[last_source_id];
-                        return;
-                    }
-                }
                 else if ((command_length > strlen("fileskip")) && !memcmp(command_value,
                     "fileskip", strlen("fileskip")))
                 {
@@ -285,24 +293,87 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                         getc(include_file[last_source_id]);
                     }
                 }
-                else if ((command_length == strlen("fileclose")) && !memcmp(command_value,
-                    "fileclose", strlen("fileclose")))
+                else if (command_length > 0)
                 {
-                    if (include_file[last_source_id] != nullptr)
+                    // Look for a test number
+                    if (is_number(command_value, command_length))
                     {
-                        fclose(include_file[last_source_id]);
-                        include_file[last_source_id] = nullptr;
+                        int64_t test_number = 0;
+                        for (unsigned j=0; j < command_length; j++)
+                        {
+                            test_number = test_number * 10 + (command_value[j] - '0');
+                        }
+                        HttpTestManager::update_test_number(test_number);
                     }
+                    else
+                    {
+                        // Bad command in test file
+                        assert(false);
+                    }
+                }
+            }
+            else
+            {
+                if (command_length < max_command)
+                {
+                    command_value[command_length++] = new_char;
+                }
+                else
+                {
+                    assert(false);
+                }
+            }
+            break;
+        case INSERT:
+            if (new_char == '\n')
+            {
+                state = WAITING;
+                ending = true;
+                if ((command_length > strlen("fill")) && !memcmp(command_value, "fill",
+                    strlen("fill")))
+                {
+                    const unsigned amount = convert_num_octets(command_value + strlen("fill"),
+                        command_length - strlen("fill"));
+                    assert((amount > 0) && (amount <= MAX_OCTETS and
+                        (amount < sizeof(msg_buf[last_source_id]) - end_offset[last_source_id])));
+                    for (unsigned k = 0; k < amount; k++)
+                    {
+                        // auto-fill ABCDEFGHIJABCD ...
+                        msg_buf[last_source_id][end_offset[last_source_id]++] = 'A' + k%10;
+                    }
+                }
+                else if ((command_length > strlen("fileread")) && !memcmp(command_value,
+                    "fileread", strlen("fileread")))
+                {
+                    // Read the specified number of octets from the included file into the message
+                    // buffer and return the resulting segment
+                    const unsigned amount = convert_num_octets(command_value + strlen("fileread"),
+                        command_length - strlen("fileread"));
+                    assert((amount > 0) && (amount <= MAX_OCTETS and
+                        (amount < sizeof(msg_buf[last_source_id]) - end_offset[last_source_id])));
+                    for (unsigned k=0; k < amount; k++)
+                    {
+                        const int new_octet = getc(include_file[last_source_id]);
+                        assert(new_octet != EOF);
+                        msg_buf[last_source_id][end_offset[last_source_id]++] = new_octet;
+                    }
+                }
+                else if ((command_length > strlen("h2frameheader")) && !memcmp(command_value,
+                    "h2frameheader", strlen("h2frameheader")))
+                {
+                    generate_h2_frame_header(command_value, command_length);
+                }
+                else if ((command_length == strlen("h2preface")) && !memcmp(command_value,
+                    "h2preface", strlen("h2preface")))
+                {
+                    char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+                    memcpy(msg_buf[last_source_id] + end_offset[last_source_id], preface, sizeof(preface) - 1);
+                    end_offset[last_source_id] += sizeof(preface) - 1;
                 }
                 else if (command_length > 0)
                 {
                     // Look for a test number
-                    bool is_number = true;
-                    for (unsigned k=0; (k < command_length) && is_number; k++)
-                    {
-                        is_number = (command_value[k] >= '0') && (command_value[k] <= '9');
-                    }
-                    if (is_number)
+                    if (is_number(command_value, command_length))
                     {
                         int64_t test_number = 0;
                         for (unsigned j=0; j < command_length; j++)
@@ -343,17 +414,18 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     ending = true;
                 }
                 // Found the second consecutive blank line that ends the paragraph.
-                else if (skip_to_break)
-                {
-                    end_offset[last_source_id] = 0;
-                    ending = false;
-                    state = WAITING;
-                }
                 else
                 {
                     length = end_offset[last_source_id] - previous_offset[last_source_id];
                     return;
                 }
+            }
+            else if (ending and new_char == '$')
+            {
+                // only look for insert commands at the start of a line
+                state = INSERT;
+                command_length = 0;
+                ending = false;
             }
             else
             {
@@ -377,16 +449,11 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                 msg_buf[last_source_id][end_offset[last_source_id]++] = '\t';
                 break;
             case '#':
-                state = PARAGRAPH;
-                msg_buf[last_source_id][end_offset[last_source_id]++] = '#';
-                break;
             case '@':
-                state = PARAGRAPH;
-                msg_buf[last_source_id][end_offset[last_source_id]++] = '@';
-                break;
+            case '$':
             case '\\':
                 state = PARAGRAPH;
-                msg_buf[last_source_id][end_offset[last_source_id]++] = '\\';
+                msg_buf[last_source_id][end_offset[last_source_id]++] = new_char;
                 break;
             case 'x':
             case 'X':
@@ -401,14 +468,7 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
             }
             break;
         case HEXVAL:
-            if ((new_char >= '0') && (new_char <= '9'))
-                hex_val = hex_val * 16 + (new_char - '0');
-            else if ((new_char >= 'a') && (new_char <= 'f'))
-                hex_val = hex_val * 16 + 10 + (new_char - 'a');
-            else if ((new_char >= 'A') && (new_char <= 'F'))
-                hex_val = hex_val * 16 + 10 + (new_char - 'A');
-            else
-                assert(false);
+            parse_next_hex_half_byte(new_char, hex_val);
             if (++num_digits == 2)
             {
                 msg_buf[last_source_id][end_offset[last_source_id]++] = hex_val;
@@ -420,123 +480,191 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
         assert(end_offset[last_source_id] < sizeof(msg_buf[last_source_id]));
     }
     // End-of-file. Return everything we have so far.
-    if (skip_to_break)
-        end_offset[last_source_id] = 0;
     length = end_offset[last_source_id] - previous_offset[last_source_id];
 }
 
 void HttpTestInput::flush(uint32_t num_octets)
 {
     flush_octets = previous_offset[last_source_id] + num_octets;
+    assert(flush_octets <= end_offset[last_source_id]);
     assert(flush_octets <= MAX_OCTETS);
     flushed = true;
 }
 
 void HttpTestInput::reassemble(uint8_t** buffer, unsigned& length, SourceId source_id,
-    bool& tcp_close)
+    bool& tcp_close, bool& partial_flush)
 {
     *buffer = nullptr;
+    partial_flush = false;
     tcp_close = false;
 
     // Only piggyback on data moving in the same direction.
-    // Need flushed data unless the connection is closing.
-    if ((source_id != last_source_id) || (!flushed && !tcp_closed))
+    if (source_id != last_source_id)
+        return;
+
+    if (tcp_closed)
+    {
+        // Give the caller a chance to call finish()
+        tcp_close = true;
+        return;
+    }
+
+    // Need flushed data unless it's a partial flush.
+    if (!flushed && !partial)
     {
         return;
     }
 
-    // How we process TCP close situations depends on the size of the flush relative to the data
-    // buffer.
-    // 1. less than whole buffer - not the final flush, ignore pending close
-    // 2. exactly equal - process data now and signal the close next time around
-    // 3. more than whole buffer - signal the close now and truncate and send next time around
-    // 4. there was no flush - signal the close now and send the leftovers next time around
-    if (tcp_closed && (!flushed || (flush_octets >= end_offset[last_source_id])))
+    if (partial)
     {
-        if (close_pending)
-        {
-            // There is no more data. Clean up and notify caller about close.
-            just_flushed = true;
-            flushed = false;
-            end_offset[last_source_id] = 0;
-            previous_offset[last_source_id] = 0;
-            close_pending = false;
-            tcp_closed = false;
-            tcp_close = true;
-            finish_expected = true;
-        }
-        else if (!flushed)
-        {
-            // Failure to flush means scan() reached end of paragraph and returned PAF_SEARCH.
-            // Notify caller about close and they will do a zero-length flush().
-            previous_offset[last_source_id] = end_offset[last_source_id];
-            tcp_close = true;
-            close_notified = true;
-            finish_expected = true;
-        }
-        else if (flush_octets == end_offset[last_source_id])
-        {
-            // The flush point is the end of the paragraph. Supply the data now and if necessary
-            // notify the caller about close next time or otherwise just clean up.
-            *buffer = msg_buf[last_source_id];
-            length = flush_octets;
-            if (close_notified)
-            {
-                just_flushed = true;
-                flushed = false;
-                close_notified = false;
-                tcp_closed = false;
-            }
-            else
-            {
-                close_pending = true;
-            }
-        }
-        else
-        {
-            // Flushed more body data than is actually available. Truncate the size of the flush,
-            // notify caller about close, and supply the data next time.
-            flush_octets = end_offset[last_source_id];
-            tcp_close = true;
-            close_notified = true;
-            finish_expected = true;
-        }
+        // Give the caller a chance to set up for a partial flush before giving him the data
+        partial_flush = true;
+        partial = false;
         return;
     }
 
-    // Normal case with no TCP close or at least not yet
     *buffer = msg_buf[last_source_id];
     length = flush_octets;
-    if (flush_octets > end_offset[last_source_id])
-    {
-        // We need to generate additional data to fill out the body or chunk section.
-        for (uint32_t k = end_offset[last_source_id]; k < flush_octets; k++)
-        {
-            if (include_file[last_source_id] == nullptr)
-            {
-                msg_buf[last_source_id][k] = 'A' + k % 26;
-            }
-            else
-            {
-                int new_octet = getc(include_file[last_source_id]);
-                assert(new_octet != EOF);
-                msg_buf[last_source_id][k] = new_octet;
-            }
-        }
-    }
     just_flushed = true;
     flushed = false;
 }
 
+static uint8_t parse_frame_type(const char buffer[], const unsigned bytes_remaining,
+    unsigned& bytes_consumed)
+{
+    uint8_t frame_type = 0;
+    bytes_consumed = 0;
+    for (; bytes_consumed < bytes_remaining and buffer[bytes_consumed] == ' '; bytes_consumed++);
+    unsigned length = 0;
+    for (; (bytes_consumed + length < bytes_remaining) and (buffer[bytes_consumed + length] != ' ');
+        length++);
+
+    static const char* frame_names[10] =
+        { "data", "headers", "priority", "rst_stream", "settings", "push_promise", "ping", "goaway",
+        "window_update", "continuation" };
+    for (int i = 0; i < 10; i ++)
+    {
+        if (length == strlen(frame_names[i]) && !memcmp(buffer + bytes_consumed, frame_names[i],
+            strlen(frame_names[i])))
+        {
+            frame_type = i;
+            bytes_consumed += length;
+            return frame_type;
+        }
+    }
+    if (is_number(buffer + bytes_consumed, length))
+        frame_type = convert_num_octets(buffer + bytes_consumed, length);
+    else
+        assert(false);
+
+    bytes_consumed += length;
+    return frame_type;
+}
+
+
+// Can be decimal or hex value. The hex value is represented as a series of 4-character hex bytes
+// The hex value must not be more than 24-bits
+static uint32_t get_frame_length(const char buffer[], const unsigned bytes_remaining,
+    unsigned& bytes_consumed)
+{
+    bytes_consumed = 0;
+    uint32_t frame_length = 0;
+    for (; bytes_consumed < bytes_remaining and buffer[bytes_consumed] == ' '; bytes_consumed++);
+    unsigned length = 0;
+    for (; (bytes_consumed + length < bytes_remaining) and (buffer[bytes_consumed + length] != ' ');
+        length++);
+    if (is_number(buffer + bytes_consumed, length))
+    {
+        frame_length = convert_num_octets(buffer + bytes_consumed, length);
+        bytes_consumed += length;
+    }
+    else
+    {
+        assert(length >=3 and length <= 12 and length % 4 == 0);
+        unsigned end = bytes_consumed + length;
+        while (bytes_consumed < end)
+        {
+            frame_length <<= 8;
+            frame_length += get_hex_byte(buffer + bytes_consumed);
+            bytes_consumed += 4;
+        }
+    }
+    return frame_length;
+}
+
+// Hex value represented as \xnn -- always 4 characters long
+static uint8_t get_frame_flags(const char buffer[], const unsigned bytes_remaining,
+    unsigned& bytes_consumed)
+{
+    bytes_consumed = 0;
+    for (; bytes_consumed < bytes_remaining and buffer[bytes_consumed] == ' '; bytes_consumed++);
+    assert(bytes_remaining >= 4);
+    uint8_t frame_flags = get_hex_byte(buffer + bytes_consumed);
+    bytes_consumed += 4;
+    return frame_flags;
+}
+
+// Check for optional stream_id in input. Default to stream 0 if not included
+static uint32_t get_frame_stream_id(const char buffer[], const int bytes_remaining)
+{
+    int offset = 0;
+    for (; offset < bytes_remaining and buffer[offset] == ' '; offset++);
+    assert (bytes_remaining - offset >= 0);
+    int length = 0;
+    for (; (offset + length < bytes_remaining) and (buffer[offset + length] != ' '); length++);
+    if (length > 0)
+    {
+        if (is_number(buffer + offset, length))
+            return convert_num_octets(buffer + offset, length);
+        else
+            assert(false);
+    }
+    return 0;
+}
+
+void HttpTestInput::generate_h2_frame_header(const char command_value[], const unsigned command_length)
+{
+    unsigned offset = strlen("h2frameheader");
+    unsigned bytes_consumed = 0;
+    uint8_t frame_type = 0;
+    uint8_t frame_flags = 0;
+    uint32_t frame_length = 0;
+    uint64_t stream_id = 0;
+
+    // get the frame type
+    frame_type = parse_frame_type(command_value + offset, command_length - offset, bytes_consumed);
+    offset += bytes_consumed;
+
+    frame_length = get_frame_length(command_value + offset, command_length - offset, bytes_consumed);
+    offset += bytes_consumed;
+
+    assert (offset < command_length);
+    frame_flags = get_frame_flags(command_value + offset, command_length - offset, bytes_consumed);
+    offset += bytes_consumed;
+
+    stream_id = get_frame_stream_id(command_value + offset, command_length - offset);
+
+    // write the frame header
+    assert (!((frame_length >> (8*3)) & 0xFF));
+    msg_buf[last_source_id][end_offset[last_source_id]++] = (frame_length >> 16) & 0xFF;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = (frame_length >> 8) & 0xFF;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = frame_length & 0xFF;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = frame_type;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = frame_flags;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = (stream_id >> 24) & 0xFF;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = (stream_id >> 16) & 0xFF;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = (stream_id >> 8) & 0xFF;
+    msg_buf[last_source_id][end_offset[last_source_id]++] = stream_id & 0xFF;
+}
+
 bool HttpTestInput::finish()
 {
-    if (finish_expected)
+    if (tcp_closed)
     {
-        finish_expected = false;
+        tcp_closed = false;
         return true;
     }
     return false;
 }
-
 #endif
 

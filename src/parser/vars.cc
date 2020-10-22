@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -127,7 +127,7 @@ int PortVarDefine(SnortConfig* sc, const char* name, const char* s)
     PortObject* po;
     POParser pop;
     int rstat;
-    PortVarTable* portVarTable = snort::get_ips_policy()->portVarTable;
+    PortVarTable* portVarTable = get_ips_policy()->portVarTable;
 
     DisallowCrossTableDuplicateVars(sc, name, VAR_TYPE__PORTVAR);
 
@@ -139,10 +139,6 @@ int PortVarDefine(SnortConfig* sc, const char* name, const char* s)
         }
 
         po = PortObjectNew();
-        if ( !po )
-        {
-            ParseAbort("PortVarTable missing an 'any' variable.");
-        }
         PortObjectSetName(po, name);
         PortObjectAddPortAny(po);
     }
@@ -163,17 +159,13 @@ int PortVarDefine(SnortConfig* sc, const char* name, const char* s)
     if ( rstat < 0 )
     {
         ParseError("PortVarTableAdd failed with '%s', exiting.", po->name);
+        PortObjectFree(po);
     }
     else if ( rstat > 0 )
     {
         ParseWarning(WARN_VARS, "PortVar '%s', already defined.", po->name);
+        PortObjectFree(po);
     }
-
-#if 0
-    LogMessage("PortVar '%s' defined : ",po->name);
-    PortObjectPrintPortsRaw(po);
-    LogMessage("\n");
-#endif
 
     return 0;
 }
@@ -366,7 +358,7 @@ int VarIsIpList(vartable_t* ip_vartable, const char* value)
 void DisallowCrossTableDuplicateVars(
     SnortConfig*, const char* name, VarType var_type)
 {
-    IpsPolicy* dp = snort::get_ips_policy();
+    IpsPolicy* dp = get_ips_policy();
     VarEntry* var_table = dp->var_table;
     PortVarTable* portVarTable = dp->portVarTable;
     vartable_t* ip_vartable = dp->ip_vartable;
@@ -382,9 +374,8 @@ void DisallowCrossTableDuplicateVars(
     switch (var_type)
     {
     case VAR_TYPE__DEFAULT:
-        if (PortVarTableFind(portVarTable, name)
-            || sfvt_lookup_var(ip_vartable, name)
-            )
+        if ( PortVarTableFind(portVarTable, name)
+            || sfvt_lookup_var(ip_vartable, name) )
         {
             ParseError("can not redefine variable name %s to be of type "
                 "'var'. Use a different name.", name);
@@ -392,11 +383,11 @@ void DisallowCrossTableDuplicateVars(
         break;
 
     case VAR_TYPE__PORTVAR:
-        if (var_table != nullptr)
+        if ( var_table )
         {
             do
             {
-                if (strcasecmp(p->name, name) == 0)
+                if ( strcasecmp(p->name, name) == 0 )
                 {
                     ParseError("can not redefine variable name %s to be of "
                         "type 'portvar'. Use a different name.", name);
@@ -406,7 +397,7 @@ void DisallowCrossTableDuplicateVars(
             while (p != var_table);
         }
 
-        if (sfvt_lookup_var(ip_vartable, name))
+        if ( sfvt_lookup_var(ip_vartable, name) )
         {
             ParseError("can not redefine variable name %s to be of type "
                 "'portvar'. Use a different name.", name);
@@ -415,11 +406,11 @@ void DisallowCrossTableDuplicateVars(
         break;
 
     case VAR_TYPE__IPVAR:
-        if (var_table != nullptr)
+        if ( var_table )
         {
             do
             {
-                if (strcasecmp(p->name, name) == 0)
+                if ( strcasecmp(p->name, name) == 0 )
                 {
                     ParseError("can not redefine variable name %s to be of "
                         "type 'ipvar'. Use a different name.", name);
@@ -430,11 +421,12 @@ void DisallowCrossTableDuplicateVars(
             while (p != var_table);
         }
 
-        if (PortVarTableFind(portVarTable, name))
+        if ( PortVarTableFind(portVarTable, name) )
         {
             ParseError("can not redefine variable name %s to be of type "
                 "'ipvar'. Use a different name.", name);
         }
+        break;
 
     default:
         /* Invalid function usage */
@@ -457,7 +449,7 @@ void DisallowCrossTableDuplicateVars(
 VarEntry* VarDefine(
     SnortConfig* sc, const char* name, const char* value)
 {
-    IpsPolicy* dp = snort::get_ips_policy();
+    IpsPolicy* dp = get_ips_policy();
     VarEntry* var_table = dp->var_table;
     vartable_t* ip_vartable = dp->ip_vartable;
     VarEntry* p;
@@ -511,8 +503,7 @@ VarEntry* VarDefine(
     /* Check if this is a variable that stores an IP */
     else if (*value == '$')
     {
-        sfip_var_t* var;
-        if ((var = sfvt_lookup_var(ip_vartable, value)) != nullptr)
+        if ( sfvt_lookup_var(ip_vartable, value) )
         {
             sfvt_define(ip_vartable, name, value);
             return nullptr;
@@ -594,30 +585,6 @@ VarEntry* VarDefine(
     else
         p->id = var_id;
 
-#ifdef XXXXXXX
-    vlen = strlen(value);
-    LogMessage("Var '%s' defined, value len = %d chars", p->name, vlen);
-
-    if ( vlen < 64 )
-    {
-        LogMessage(", value = %s\n", value);
-    }
-    else
-    {
-        LogMessage("\n");
-        n = 128;
-        s = value;
-        while (vlen)
-        {
-            if ( n > vlen )
-                n = vlen;
-            LogMessage("   %.*s\n", n, s);
-            s    += n;
-            vlen -= n;
-        }
-    }
-#endif
-
     return p;
 }
 
@@ -645,7 +612,7 @@ void DeleteVars(VarEntry* var_table)
 
 const char* VarSearch(SnortConfig* sc, const char* name)
 {
-    IpsPolicy* dp = snort::get_ips_policy();
+    IpsPolicy* dp = get_ips_policy();
     VarEntry* var_table = dp->var_table;
     PortVarTable* portVarTable = dp->portVarTable;
     vartable_t* ip_vartable = dp->ip_vartable;
@@ -654,7 +621,6 @@ const char* VarSearch(SnortConfig* sc, const char* name)
     if ((ipvar = sfvt_lookup_var(ip_vartable, name)) != nullptr)
         return ExpandVars(sc, ipvar->value);
 
-    /* XXX Return a string value */
     if (PortVarTableFind(portVarTable, name))
         return name;
 
@@ -673,24 +639,8 @@ const char* VarSearch(SnortConfig* sc, const char* name)
     return nullptr;
 }
 
-/****************************************************************************
- *
- * Function: ExpandVars()
- *
- * Purpose: expand all variables in a string
- *
- * Arguments:
- *  SnortConfig *
- *      The snort config that has the vartables.
- *  char *
- *      The name of the variable.
- *
- * Returns:
- *  char *
- *      The expanded string.  Note that the string is returned in a
- *      static variable and most likely needs to be string dup'ed.
- *
- ***************************************************************************/
+ // The expanded string.  Note that the string is returned in a
+ // static variable and most likely needs to be string dup'ed.
 const char* ExpandVars(SnortConfig* sc, const char* string)
 {
     static char estring[ 65536 ];  // FIXIT-L convert this foo to a std::string
@@ -837,7 +787,7 @@ void AddVarToTable(SnortConfig* sc, const char* name, const char* value)
 }
 
 //--------------------------------------------------------------------------
-// unit tests 
+// unit tests
 //--------------------------------------------------------------------------
 
 #ifdef UNIT_TEST

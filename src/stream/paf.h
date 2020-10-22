@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,12 +25,16 @@
 #ifndef PAF_H
 #define PAF_H
 
+#include "main/thread.h"
+#include "profiler/profiler_defs.h"
 #include "stream/stream_splitter.h"
 
 namespace snort
 {
-class Flow;
+struct Packet;
 }
+
+extern THREAD_LOCAL snort::ProfileStats pafPerfStats;
 
 void* paf_new(unsigned max);     // create new paf config (per policy)
 void paf_delete(void*);  // free config
@@ -72,7 +76,7 @@ inline void paf_jump(PAF_State* ps, uint32_t n)
 }
 
 // called on each in order segment
-int32_t paf_check(snort::StreamSplitter* paf_config, PAF_State*, snort::Flow* ssn,
+int32_t paf_check(snort::StreamSplitter* paf_config, PAF_State*, snort::Packet* p,
     const uint8_t* data, uint32_t len, uint32_t total, uint32_t seq, uint32_t* flags);
 
 #endif

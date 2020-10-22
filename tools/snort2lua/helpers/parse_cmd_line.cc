@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -83,7 +83,6 @@ public:
     { idx = 0; arg = nullptr; }
 
     bool get_arg(const char*& key, const char*& val);
-    void dump();
 
 private:
     char** argv;
@@ -91,12 +90,6 @@ private:
     const char* arg;
     std::string buf;
 };
-
-void ArgList::dump()
-{
-    for ( int i = 0; i < argc; ++i )
-        printf("argv[%d]='%s'\n", i, argv[i]);
-}
 
 // FIXIT-L this chokes on -n -4 because it thinks
 // -4 is another arg instead of an option to -n
@@ -254,6 +247,12 @@ static void add_remark(const char* /*key*/, const char* val)
 static void bind_wizard(const char* /*key*/, const char* /*val*/)
 { Converter::set_bind_wizard(true); }
 
+static void bind_port(const char* /*key*/, const char* /*val*/)
+{
+    Converter::set_bind_port(true);
+    Converter::set_bind_wizard(false);
+}
+
 static void print_all(const char* /*key*/, const char* /*val*/)
 { DataApi::set_default_print(); }
 
@@ -281,6 +280,11 @@ static void set_ips_pattern(const char* /*key*/, const char* val)
 static void print_version(const char* /*key*/, const char* /*val*/)
 {
     std::cout << "Snort2Lua\t0.2.0";
+}
+
+static void dont_convert_max_session(const char* /*key*/, const char* /*val*/)
+{
+    Converter::unset_convert_max_session();
 }
 
 #ifdef REG_TEST
@@ -377,12 +381,18 @@ static ConfigFunc basic_opts[] =
     { "bind-wizard", bind_wizard, "",
       "Add default wizard to bindings" },
 
+    { "bind-port", bind_port, "",
+      "Convert port bindings" },
+
     { "conf-file", parse_config_file, "",
       "Same as '-c'. A Snort <snort_conf> file which will be converted" },
 
     { "dont-parse-includes", dont_parse_includes, "",
       "Same as '-p'. if <snort_conf> file contains any <include_file> or <policy_file> "
       "(i.e. 'include path/to/conf/other_conf'), do NOT parse those files" },
+
+    { "dont-convert-max-sessions", dont_convert_max_session, "",
+      "do not convert max_tcp, max_udp, max_icmp, max_ip to max_session" },
 
     { "error-file", parse_error_file, "<error_file>",
       "Same as '-e'. output all errors to <error_file>" },
@@ -489,22 +499,22 @@ static void help_args(const char* /*pfx*/, const char* /*val*/)
             if (name.size() > name_field_len)
                 std::cout << "\n" << std::left << std::setw(name_field_len) << " ";
 
-            std::string help = p->help;
+            std::string help_str = p->help;
             bool first_line = true;
 
-            while (!help.empty())
+            while (!help_str.empty())
             {
-                std::size_t len = util::get_substr_length(help, data_field_len);
+                std::size_t len = util::get_substr_length(help_str, data_field_len);
 
                 if (first_line)
                     first_line = false;
                 else
                     std::cout << "\n" << std::setw(name_field_len) << " ";
 
-                std::cout << std::left << Markup::escape(help.substr(0, len));
+                std::cout << std::left << help_str.substr(0, len);
 
-                if (len < help.size())
-                    help = help.substr(len + 1);
+                if (len < help_str.size())
+                    help_str = help_str.substr(len + 1);
                 else
                     break;
             }
@@ -513,6 +523,6 @@ static void help_args(const char* /*pfx*/, const char* /*val*/)
         }
         ++p;
     }
+    std::cout << std::resetiosflags(std::ios::adjustfield);
 }
 } // namespace parser
-

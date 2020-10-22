@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -40,15 +40,15 @@ struct DataBuffer
     unsigned len;
 };
 
-// FIXIT-L event trace should be placed in its own files
+// FIXIT-RC event trace should be placed in its own files
 void EventTrace_Init();
 void EventTrace_Term();
 
 void EventTrace_Log(const snort::Packet*, const OptTreeNode*, int action);
 
-inline int EventTrace_IsEnabled()
+inline int EventTrace_IsEnabled(const snort::SnortConfig* sc)
 {
-    return ( snort::SnortConfig::get_conf()->event_trace_max > 0 );
+    return ( sc->event_trace_max > 0 );
 }
 
 #endif

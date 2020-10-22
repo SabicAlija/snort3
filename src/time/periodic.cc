@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,11 +24,6 @@
 #include "periodic.h"
 
 #include <list>
-
-#ifdef UNIT_TEST
-#include <vector>
-#include "catch/snort_catch.h"
-#endif
 
 struct PeriodicHookNode
 {
@@ -78,11 +73,14 @@ void Periodic::unregister_all()
 // tests
 //--------------------------------------------------------------------------
 
-#ifdef UNIT_TEST
+#ifdef CATCH_TEST_BUILD
+
+#include "catch/catch.hpp"
+
 static std::vector<int> s_test_args;
 
 static void s_test_handler(void* pv)
-{ s_test_args.push_back(*(int*)(pv)); }
+{ s_test_args.emplace_back(*(int*)(pv)); }
 
 TEST_CASE("periodic", "[periodic]")
 {
@@ -120,5 +118,6 @@ TEST_CASE("periodic", "[periodic]")
     Periodic::unregister_all();
     CHECK( s_periodic_handlers.empty() );
 }
+
 #endif
 

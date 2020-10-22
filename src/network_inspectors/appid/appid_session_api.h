@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,12 +23,16 @@
 #define APPID_SESSION_API_H
 
 #include "flow/flow.h"
+#include "flow/stash_item.h"
 #include "main/snort_types.h"
+#include "pub_sub/appid_events.h"
 #include "sfip/sf_ip.h"
+#include "utils/util.h"
+#include "appid_dns_session.h"
+#include "appid_http_session.h"
 #include "application_ids.h"
 
 class AppIdDnsSession;
-class AppIdHttpSession;
 class AppIdSession;
 
 namespace snort
@@ -36,7 +40,7 @@ namespace snort
 #define APPID_SESSION_RESPONDER_MONITORED   (1ULL << 0)
 #define APPID_SESSION_INITIATOR_MONITORED   (1ULL << 1)
 #define APPID_SESSION_SPECIAL_MONITORED     (1ULL << 2)
-#define APPID_SESSION_IGNORE_FLOW_LOGGED    (1ULL << 3)
+#define APPID_SESSION_FUTURE_FLOW           (1ULL << 3)
 #define APPID_SESSION_EXPECTED_EVALUATE     (1ULL << 4)
 #define APPID_SESSION_DISCOVER_USER         (1ULL << 5)
 #define APPID_SESSION_HAS_DHCP_FP           (1ULL << 6)
@@ -73,122 +77,130 @@ namespace snort
 #define APPID_SESSION_RESPONDER_CHECKED     (1ULL << 26)
 #define APPID_SESSION_INITIATOR_CHECKED     (1ULL << 27)
 #define APPID_SESSION_SSL_SESSION           (1ULL << 28)
-#define APPID_SESSION_LOGIN_SUCCEEDED       (1ULL << 29)
-#define APPID_SESSION_SPDY_SESSION          (1ULL << 30)
-#define APPID_SESSION_ENCRYPTED             (1ULL << 31)
-#define APPID_SESSION_APP_REINSPECT         (1ULL << 32)
-#define APPID_SESSION_RESPONSE_CODE_CHECKED (1ULL << 33)
-#define APPID_SESSION_REXEC_STDERR          (1ULL << 34)
-#define APPID_SESSION_CHP_INSPECTING        (1ULL << 35)
-#define APPID_SESSION_STICKY_SERVICE        (1ULL << 36)
-#define APPID_SESSION_APP_REINSPECT_SSL     (1ULL << 37)
-#define APPID_SESSION_NO_TPI                (1ULL << 38)
-#define APPID_SESSION_IGNORE_FLOW           (1ULL << 39)
-#define APPID_SESSION_IGNORE_FLOW_IDED      (1ULL << 40)
+#define APPID_SESSION_SPDY_SESSION          (1ULL << 29)
+#define APPID_SESSION_ENCRYPTED             (1ULL << 30)
+#define APPID_SESSION_APP_REINSPECT         (1ULL << 31)
+#define APPID_SESSION_RESPONSE_CODE_CHECKED (1ULL << 32)
+#define APPID_SESSION_REXEC_STDERR          (1ULL << 33)
+#define APPID_SESSION_CHP_INSPECTING        (1ULL << 34)
+#define APPID_SESSION_STICKY_SERVICE        (1ULL << 35)
+#define APPID_SESSION_APP_REINSPECT_SSL     (1ULL << 36)
+#define APPID_SESSION_NO_TPI                (1ULL << 37)
+#define APPID_SESSION_FUTURE_FLOW_IDED      (1ULL << 38)
+#define APPID_SESSION_OOO_CHECK_TP          (1ULL << 39)
+#define APPID_SESSION_PAYLOAD_SEEN          (1ULL << 40)
+#define APPID_SESSION_HOST_CACHE_MATCHED    (1ULL << 41)
+#define APPID_SESSION_DECRYPT_MONITOR       (1ULL << 42)
+#define APPID_SESSION_HTTP_TUNNEL           (1ULL << 43)
 #define APPID_SESSION_IGNORE_ID_FLAGS \
-    (APPID_SESSION_IGNORE_FLOW | \
+    (APPID_SESSION_FUTURE_FLOW | \
     APPID_SESSION_NOT_A_SERVICE | \
     APPID_SESSION_NO_TPI | \
     APPID_SESSION_SERVICE_DETECTED | \
     APPID_SESSION_PORT_SERVICE_DONE)
 const uint64_t APPID_SESSION_ALL_FLAGS = 0xFFFFFFFFFFFFFFFFULL;
 
-enum APPID_FLOW_TYPE
-{
-    APPID_FLOW_TYPE_IGNORE,
-    APPID_FLOW_TYPE_NORMAL,
-    APPID_FLOW_TYPE_TMP
-};
-
-struct AppIdServiceSubtype
-{
-    AppIdServiceSubtype* next;
-    const char* service;
-    const char* vendor;
-    const char* version;
-};
-
-#define DHCP_OP55_MAX_SIZE  64
-#define DHCP_OP60_MAX_SIZE  64
-
-struct DHCPData
-{
-    DHCPData* next;
-    unsigned op55_len;
-    unsigned op60_len;
-    uint8_t op55[DHCP_OP55_MAX_SIZE];
-    uint8_t op60[DHCP_OP60_MAX_SIZE];
-    uint8_t eth_addr[6];
-};
-
-struct DHCPInfo
-{
-    DHCPInfo* next;
-    uint32_t ipAddr;
-    uint8_t eth_addr[6];
-    uint32_t subnetmask;
-    uint32_t leaseSecs;
-    uint32_t router;
-};
-
-struct FpSMBData
-{
-    FpSMBData* next;
-    unsigned major;
-    unsigned minor;
-    uint32_t flags;
-};
-
-enum SEARCH_SUPPORT_TYPE
-{
-    NOT_A_SEARCH_ENGINE,
-    SUPPORTED_SEARCH_ENGINE,
-    UNSUPPORTED_SEARCH_ENGINE,
-    UNKNOWN_SEARCH_ENGINE,
-};
-
-
-class SO_PUBLIC AppIdSessionApi
+class SO_PUBLIC AppIdSessionApi : public StashGenericObject
 {
 public:
-    AppIdSessionApi(AppIdSession* asd) : asd(asd) {}
-    bool refresh(Flow& flow);
-    AppId get_service_app_id();
-    AppId get_port_service_app_id();
-    AppId get_only_service_app_id();
-    AppId get_misc_app_id();
-    AppId get_client_app_id();
-    AppId get_payload_app_id();
-    AppId get_referred_app_id();
-    void get_app_id(AppId& service, AppId& client, AppId& payload, AppId& misc, AppId& referred);
-    void get_app_id(AppId* service, AppId* client, AppId* payload, AppId* misc, AppId* referred);
-    bool is_ssl_session_decrypted();
-    bool is_appid_inspecting_session();
-    bool is_appid_available();
-    const char* get_user_name(AppId* service, bool* isLoginSuccessful);
-    const char* get_client_version();
-    uint64_t get_appid_session_attribute(uint64_t flag);
-    APPID_FLOW_TYPE get_flow_type();
-    void get_service_info(const char** vendor, const char** version,
-        AppIdServiceSubtype**);
-    short get_service_port();
-    SfIp* get_service_ip();
-    SfIp* get_initiator_ip();
-    AppIdDnsSession* get_dns_session();
-    AppIdHttpSession* get_http_session();
-    SEARCH_SUPPORT_TYPE get_http_search();
-    char* get_tls_host();
-    DHCPData* get_dhcp_fp_data();
-    void free_dhcp_fp_data(DHCPData*);
-    DHCPInfo* get_dhcp_info();
-    void free_dhcp_info(DHCPInfo*);
-    FpSMBData* get_smb_fp_data();
-    void free_smb_fp_data(FpSMBData*);
-    const char* get_netbios_name();
-    bool is_http_inspection_done();
+    AppId get_service_app_id() const;
+    void get_service_info(const char*& vendor, const char*& version,
+        const AppIdServiceSubtype*& subtype) const;
+    const char* get_client_info(AppId& service) const;
+    AppId get_misc_app_id(uint32_t stream_index = 0) const;
+    AppId get_client_app_id(uint32_t stream_index = 0) const;
+    AppId get_payload_app_id(uint32_t stream_index = 0) const;
+    AppId get_referred_app_id(uint32_t stream_index = 0) const;
+    void get_app_id(AppId& service, AppId& client, AppId& payload, AppId& misc, AppId& referred,
+        uint32_t stream_index = 0) const;
+    void get_app_id(AppId* service, AppId* client, AppId* payload, AppId* misc, AppId* referred,
+        uint32_t stream_index = 0) const;
+    bool is_appid_inspecting_session() const;
+    bool is_appid_available() const;
+    const char* get_client_version(uint32_t stream_index = 0) const;
+    uint64_t get_appid_session_attribute(uint64_t flag) const;
+    const SfIp* get_initiator_ip() const;
+    const AppIdDnsSession* get_dns_session() const;
+    const AppIdHttpSession* get_http_session(uint32_t stream_index = 0) const;
+    const char* get_tls_host() const;
+    bool is_http_inspection_done() const;
+
+    // For protocols such as HTTP2 which can have multiple streams within a single flow,
+    // get_first_stream_* methods return the appids in the first stream seen in a packet.
+    void get_first_stream_app_ids(AppId& service, AppId& client, AppId& payload, AppId& misc) const;
+    void get_first_stream_app_ids(AppId& service, AppId& client, AppId& payload) const;
+
+    ~AppIdSessionApi()
+    {
+        delete_session_data();
+    }
+
+    uint32_t get_hsessions_size() const
+    {
+        return hsessions.size();
+    }
+
+    const std::string& get_session_id() const
+    {
+        return session_id;
+    }
+
+protected:
+    AppIdSessionApi(const AppIdSession* asd, const SfIp& ip);
 
 private:
-    AppIdSession* asd;
+    const AppIdSession* asd = nullptr;
+    AppId application_ids[APP_PROTOID_MAX] =
+        { APP_ID_NONE, APP_ID_NONE, APP_ID_NONE, APP_ID_NONE, APP_ID_NONE };
+    bool published = false;
+    bool stored_in_stash = false;
+    std::vector<AppIdHttpSession*> hsessions;
+    AppIdDnsSession* dsession = nullptr;
+    snort::SfIp initiator_ip;
+    ServiceAppDescriptor service;
+    char* tls_host = nullptr;
+    std::string session_id;
+
+    // Following two fields are used only for non-http sessions. For HTTP traffic,
+    // these fields are maintained inside AppIdHttpSession.
+    // Note: RTMP traffic is treated like HTTP in AppId
+    ClientAppDescriptor client;
+    PayloadAppDescriptor payload;
+
+    static THREAD_LOCAL uint32_t appid_flow_data_id;
+
+    void set_ss_application_ids(AppId service, AppId client, AppId payload, AppId misc,
+        AppId referred, AppidChangeBits& change_bits);
+    void set_ss_application_ids(AppId client, AppId payload, AppidChangeBits& change_bits);
+    void set_application_ids_service(AppId service_id, AppidChangeBits& change_bits);
+
+    AppIdHttpSession* get_hsession(uint32_t stream_index = 0) const;
+
+    void delete_session_data()
+    {
+        delete_all_http_sessions();
+        snort_free(tls_host);
+        delete dsession;
+    }
+
+    void delete_all_http_sessions()
+    {
+        for (auto hsession : hsessions)
+            delete hsession;
+        hsessions.clear();
+    }
+
+    void set_tls_host(const char* host)
+    {
+        if (host)
+        {
+            if (tls_host)
+                snort_free(tls_host);
+            tls_host = snort_strdup(host);
+        }
+    }
+
+    friend AppIdSession;
 };
 
 }

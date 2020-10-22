@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -51,15 +51,8 @@
 
 extern const PegInfo tcp_pegs[];
 
+extern THREAD_LOCAL const snort::Trace* stream_tcp_trace;
 extern THREAD_LOCAL snort::ProfileStats s5TcpPerfStats;
-extern THREAD_LOCAL snort::ProfileStats s5TcpNewSessPerfStats;
-extern THREAD_LOCAL snort::ProfileStats s5TcpStatePerfStats;
-extern THREAD_LOCAL snort::ProfileStats s5TcpDataPerfStats;
-extern THREAD_LOCAL snort::ProfileStats s5TcpInsertPerfStats;
-extern THREAD_LOCAL snort::ProfileStats s5TcpPAFPerfStats;
-extern THREAD_LOCAL snort::ProfileStats s5TcpFlushPerfStats;
-extern THREAD_LOCAL snort::ProfileStats s5TcpBuildPacketPerfStats;
-extern THREAD_LOCAL snort::ProfileStats streamSizePerfStats;
 
 struct TcpStats
 {
@@ -69,6 +62,10 @@ struct TcpStats
     PegCount restarts;
     PegCount resyns;
     PegCount discards;
+    PegCount discards_skipped;
+    PegCount invalid_seq_num;
+    PegCount invalid_ack;
+    PegCount no_flags_set;
     PegCount events;
     PegCount ignored;
     PegCount no_pickups;
@@ -80,13 +77,14 @@ struct TcpStats
     PegCount segs_released;
     PegCount segs_split;
     PegCount segs_used;
-    PegCount rebuilt_packets;   //iStreamFlushes
+    PegCount rebuilt_packets;
     PegCount rebuilt_buffers;
-    PegCount rebuilt_bytes;     //total_rebuilt_bytes
+    PegCount rebuilt_bytes;
     PegCount overlaps;
     PegCount gaps;
     PegCount exceeded_max_segs;
     PegCount exceeded_max_bytes;
+    PegCount payload_fully_trimmed;
     PegCount internalEvents;
     PegCount client_cleanups;
     PegCount server_cleanups;
@@ -98,26 +96,29 @@ struct TcpStats
     PegCount syn_acks;
     PegCount resets;
     PegCount fins;
+    PegCount meta_acks;
+    PegCount total_packets_held;
+    PegCount held_packet_rexmits;
+    PegCount held_packets_dropped;
+    PegCount held_packets_passed;
+    PegCount held_packet_timeouts;
+    PegCount held_packet_purges;
+    PegCount current_packets_held;
+    PegCount max_packets_held;
+    PegCount partial_flushes;
+    PegCount partial_flush_bytes;
+    PegCount inspector_fallbacks;
+    PegCount partial_fallbacks;
 };
 
 extern THREAD_LOCAL struct TcpStats tcpStats;
-
-inline void inc_tcp_discards()
-{
-    tcpStats.discards++;
-}
 
 //-------------------------------------------------------------------------
 // stream_tcp module
 //-------------------------------------------------------------------------
 
-#define MOD_NAME "stream_tcp"
-#define MOD_HELP "stream inspector for TCP flow tracking and stream normalization and reassembly"
-
-namespace snort
-{
-struct SnortConfig;
-}
+#define STREAM_TCP_MOD_NAME "stream_tcp"
+#define STREAM_TCP_MOD_HELP "stream inspector for TCP flow tracking and stream normalization and reassembly"
 
 class StreamTcpModule : public snort::Module
 {
@@ -140,6 +141,12 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    bool is_bindable() const override
+    { return true; }
+
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
 
 private:
     TcpStreamConfig* config;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,7 +29,7 @@
 #include "framework/module.h"
 #include "framework/ips_option.h"
 #include "framework/range.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "target_based/snort_protocols.h"
 #include "utils/util.h"
@@ -336,7 +336,7 @@ uint32_t Dce2IfaceOption::hash() const
         (uuid.node[0] << 8) |
         (uuid.node[1]);
 
-    mix_str(a, b, c, get_name());
+    mix(a, b, c);
 
     a += (uuid.node[2] << 24) |
         (uuid.node[3] << 16) |
@@ -349,6 +349,7 @@ uint32_t Dce2IfaceOption::hash() const
 
     a += version.op;
     b += any_frag;
+    c += IpsOption::hash();
 
     finalize(a, b, c);
 
@@ -366,7 +367,7 @@ bool Dce2IfaceOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus Dce2IfaceOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(dce2_iface_perf_stats);
+    RuleProfile profile(dce2_iface_perf_stats);
 
     if (p->dsize == 0)
     {

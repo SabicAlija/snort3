@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -66,13 +66,6 @@ struct dce2UdpStats
 
 extern THREAD_LOCAL dce2UdpStats dce2_udp_stats;
 extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_main;
-extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_session;
-extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_new_session;
-extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_detect;
-extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_log;
-extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_cl_acts;
-extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_cl_frag;
-extern THREAD_LOCAL snort::ProfileStats dce2_udp_pstat_cl_reass;
 
 struct DceRpcClHdr   /* Connectionless header */
 {
@@ -200,12 +193,13 @@ public:
     ~Dce2UdpFlowData() override;
 
     static void init()
-    {
-        inspector_id = snort::FlowData::create_flow_data_id();
-    }
+    { inspector_id = snort::FlowData::create_flow_data_id(); }
 
     static unsigned inspector_id;
     DCE2_UdpSsnData dce2_udp_session;
+
+    size_t size_of() override
+    { return sizeof(*this); }
 };
 
 DCE2_UdpSsnData* get_dce2_udp_session_data(snort::Flow*);

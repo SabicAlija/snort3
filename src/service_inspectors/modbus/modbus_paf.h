@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,7 +42,7 @@ class ModbusSplitter : public snort::StreamSplitter
 public:
     ModbusSplitter(bool);
 
-    Status scan(snort::Flow*, const uint8_t* data, uint32_t len, uint32_t flags,
+    Status scan(snort::Packet*, const uint8_t* data, uint32_t len, uint32_t flags,
         uint32_t* fp) override;
 
     bool is_paf() override { return true; }

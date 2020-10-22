@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -43,7 +43,8 @@ SO_PUBLIC void LogPayload(TextLog*, Packet*);
 SO_PUBLIC bool LogAppID(TextLog*, Packet*);
 
 SO_PUBLIC void LogNetData(
-    TextLog*, const uint8_t* data, const int len, Packet*, const char* buf_name = nullptr);
+        TextLog*, const uint8_t* data, const int len, Packet*, const char* buf_name = nullptr,
+        const char* ins_name = nullptr);
 
 SO_PUBLIC void Log2ndHeader(TextLog*, Packet*);
 SO_PUBLIC void LogTCPHeader(TextLog*, Packet*);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,16 +33,23 @@ using namespace std;
 
 static const Parameter s_params[] =
 {
+    { "limit_alerts", Parameter::PT_BOOL, nullptr, "true",
+      "limit DCE alert to at most one per signature per flow" },
+
     { "disable_defrag", Parameter::PT_BOOL, nullptr, "false",
-      " Disable DCE/RPC defragmentation" },
+      "disable DCE/RPC defragmentation" },
+
     { "max_frag_len", Parameter::PT_INT, "1514:65535", "65535",
-      " Maximum fragment size for defragmentation" },
+      "maximum fragment size for defragmentation" },
+
     { "reassemble_threshold", Parameter::PT_INT, "0:65535", "0",
-      " Minimum bytes received before performing reassembly" },
+      "minimum bytes received before performing reassembly" },
+
     { "policy", Parameter::PT_ENUM,
       "Win2000 |  WinXP | WinVista | Win2003 | Win2008 | Win7 | "
       "Samba | Samba-3.0.37 | Samba-3.0.22 | Samba-3.0.20", "WinXP",
-      " Target based policy to use" },
+      "target based policy to use" },
+
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -52,6 +59,7 @@ static const RuleMap dce2_tcp_rules[] =
     { DCE2_CO_BAD_MINOR_VERSION, DCE2_CO_BAD_MINOR_VERSION_STR },
     { DCE2_CO_BAD_PDU_TYPE, DCE2_CO_BAD_PDU_TYPE_STR },
     { DCE2_CO_FRAG_LEN_LT_HDR, DCE2_CO_FRAG_LEN_LT_HDR_STR },
+    { DCE2_CO_REM_FRAG_LEN_LT_SIZE, DCE2_CO_REM_FRAG_LEN_LT_SIZE_STR },
     { DCE2_CO_NO_CTX_ITEMS_SPECFD, DCE2_CO_NO_CTX_ITEMS_SPECFD_STR },
     { DCE2_CO_NO_TFER_SYNTAX_SPECFD, DCE2_CO_NO_TFER_SYNTAX_SPECFD_STR },
     { DCE2_CO_FRAG_LT_MAX_XMIT_FRAG, DCE2_CO_FRAG_LT_MAX_XMIT_FRAG_STR },
@@ -104,6 +112,8 @@ static const PegInfo dce2_tcp_pegs[] =
     { CountType::SUM, "server_frags_reassembled",
         "total connection-oriented server fragments reassembled" },
     { CountType::SUM, "tcp_sessions", "total tcp sessions" },
+    { CountType::SUM, "tcp_expected_sessions", "total tcp dynamic endpoint expected sessions" },
+    { CountType::SUM, "tcp_expected_realized", "total tcp dynamic endpoint expected realized sessions" },
     { CountType::SUM, "tcp_packets", "total tcp packets" },
     { CountType::NOW, "concurrent_sessions", "total concurrent sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent sessions" },
@@ -129,57 +139,9 @@ PegCount* Dce2TcpModule::get_counts() const
     return (PegCount*)&dce2_tcp_stats;
 }
 
-ProfileStats* Dce2TcpModule::get_profile(
-    unsigned index, const char*& name, const char*& parent) const
+ProfileStats* Dce2TcpModule::get_profile() const
 {
-    switch ( index )
-    {
-    case 0:
-        name = "dce_tcp_main";
-        parent = nullptr;
-        return &dce2_tcp_pstat_main;
-
-    case 1:
-        name = "dce_tcp_session";
-        parent = "dce_tcp_main";
-        return &dce2_tcp_pstat_session;
-
-    case 2:
-        name = "dce_tcp_new_session";
-        parent = "dce_tcp_session";
-        return &dce2_tcp_pstat_new_session;
-
-    case 3:
-        name = "dce_tcp_detect";
-        parent = "dce_tcp_main";
-        return &dce2_tcp_pstat_detect;
-
-    case 4:
-        name = "dce_tcp_log";
-        parent = "dce_tcp_main";
-        return &dce2_tcp_pstat_log;
-
-    case 5:
-        name = "dce_tcp_co_segment";
-        parent = "dce_tcp_main";
-        return &dce2_tcp_pstat_co_seg;
-
-    case 6:
-        name = "dce_tcp_co_fragment";
-        parent = "dce_tcp_main";
-        return &dce2_tcp_pstat_co_frag;
-
-    case 7:
-        name = "dce_tcp_co_reassembly";
-        parent = "dce_tcp_main";
-        return &dce2_tcp_pstat_co_reass;
-
-    case 8:
-        name = "dce_tcp_co_context";
-        parent = "dce_tcp_main";
-        return &dce2_tcp_pstat_co_ctx;
-    }
-    return nullptr;
+    return &dce2_tcp_pstat_main;
 }
 
 bool Dce2TcpModule::set(const char*, Value& v, SnortConfig*)
@@ -195,9 +157,8 @@ void Dce2TcpModule::get_data(dce2TcpProtoConf& dce2_tcp_config)
     dce2_tcp_config = config;
 }
 
-void print_dce2_tcp_conf(dce2TcpProtoConf& config)
+void print_dce2_tcp_conf(const dce2TcpProtoConf& config)
 {
-    LogMessage("DCE TCP config: \n");
     print_dce2_co_config(config.common);
 }
 

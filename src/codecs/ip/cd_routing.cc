@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -68,7 +68,7 @@ struct IP6Route0
 } // namespace
 
 void Ipv6RoutingCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ROUTING); }
+{ v.emplace_back(ProtocolId::ROUTING); }
 
 bool Ipv6RoutingCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {
@@ -80,7 +80,7 @@ bool Ipv6RoutingCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
         return false;
     }
 
-    if ( SnortConfig::get_conf()->hit_ip6_maxopts(codec.ip6_extension_count) )
+    if ( codec.conf->hit_ip6_maxopts(codec.ip6_extension_count) )
     {
         codec_event(codec, DECODE_IP6_EXCESS_EXT_HDR);
         return false;

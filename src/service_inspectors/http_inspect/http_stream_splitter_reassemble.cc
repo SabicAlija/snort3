@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,13 +29,14 @@
 #include "http_test_input.h"
 
 using namespace HttpEnums;
+using namespace snort;
 
 void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer,
     const uint8_t* data, unsigned length) const
 {
     ChunkState& curr_state = session_data->chunk_state[source_id];
     uint32_t& expected = session_data->chunk_expected_length[source_id];
-    bool& is_broken_chunk = session_data->is_broken_chunk[source_id];
+    const bool& is_broken_chunk = session_data->is_broken_chunk[source_id];
     uint32_t& num_good_chunks = session_data->num_good_chunks[source_id];
 
     if (is_broken_chunk && (num_good_chunks == 0))
@@ -100,7 +101,7 @@ void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer
             decompress_copy(buffer, session_data->section_offset[source_id], data+k, skip_amount,
                 session_data->compression[source_id], session_data->compress_stream[source_id],
                 at_start, session_data->get_infractions(source_id),
-                session_data->get_events(source_id));
+                session_data->events[source_id]);
             if ((expected -= skip_amount) == 0)
                 curr_state = CHUNK_DCRLF1;
             k += skip_amount-1;
@@ -130,7 +131,7 @@ void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer
             decompress_copy(buffer, session_data->section_offset[source_id], data+k, skip_amount,
                 session_data->compression[source_id], session_data->compress_stream[source_id],
                 at_start, session_data->get_infractions(source_id),
-                session_data->get_events(source_id));
+                session_data->events[source_id]);
             k += skip_amount-1;
             break;
           }
@@ -221,39 +222,45 @@ void HttpStreamSplitter::decompress_copy(uint8_t* buffer, uint32_t& offset, cons
     offset += length;
 }
 
-const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsigned total, unsigned,
-    const uint8_t* data, unsigned len, uint32_t flags, unsigned& copied)
+const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
+    unsigned, const uint8_t* data, unsigned len, uint32_t flags, unsigned& copied)
 {
-    snort::Profile profile(HttpModule::get_profile_stats());
+    Profile profile(HttpModule::get_profile_stats());
 
-    snort::StreamBuffer http_buf { nullptr, 0 };
+    StreamBuffer http_buf { nullptr, 0 };
 
     copied = len;
 
-    HttpFlowData* session_data = (HttpFlowData*)flow->get_flow_data(HttpFlowData::inspector_id);
+    HttpFlowData* session_data = HttpInspect::http_get_flow_data(flow);
     assert(session_data != nullptr);
 
 #ifdef REG_TEST
-    if (HttpTestManager::use_test_output())
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP))
     {
-        if (HttpTestManager::use_test_input())
+        if (HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
         {
             if (!(flags & PKT_PDU_TAIL))
             {
                 return http_buf;
             }
             bool tcp_close;
+            bool partial_flush;
             uint8_t* test_buffer;
             HttpTestManager::get_test_input_source()->reassemble(&test_buffer, len, source_id,
-                tcp_close);
+                tcp_close, partial_flush);
             if (tcp_close)
             {
                 finish(flow);
             }
+            if (partial_flush)
+            {
+                init_partial_flush(flow);
+            }
             if (test_buffer == nullptr)
             {
-                // Source ID does not match test data, no test data was flushed, or there is no
-                // more test data
+                // Source ID does not match test data, no test data was flushed, preparing for a
+                // partial flush, preparing for a TCP connection close, or there is no more test
+                // data
                 return http_buf;
             }
             data = test_buffer;
@@ -261,12 +268,19 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
         }
         else
         {
-            printf("Reassemble from flow data %" PRIu64 " direction %d total %u length %u\n",
-                session_data->seq_num, source_id, total, len);
-            fflush(stdout);
+            fprintf(HttpTestManager::get_output_file(), "Reassemble from flow data %" PRIu64
+                " direction %d total %u length %u partial %d\n", session_data->seq_num, source_id,
+                total, len, session_data->partial_flush[source_id]);
+            fflush(HttpTestManager::get_output_file());
         }
     }
 #endif
+
+    assert(session_data->type_expected[source_id] != SEC_ABORT);
+    if (session_data->section_type[source_id] == SEC__NOT_COMPUTE)
+    {
+        return { nullptr, 0 };
+    }
 
     // Sometimes it is necessary to reassemble zero bytes when a connection is closing to trigger
     // proper clean up. But even a zero-length buffer cannot be processed with a nullptr lest we
@@ -275,24 +289,19 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
     if (data == nullptr)
         data = (const uint8_t*)"";
 
-    // FIXIT-H Workaround for TP Bug 149662
-    if (session_data->section_type[source_id] == SEC__NOT_COMPUTE)
-    {
-        return { nullptr, 0 };
-    }
+    uint8_t*& partial_buffer = session_data->partial_buffer[source_id];
+    uint32_t& partial_buffer_length = session_data->partial_buffer_length[source_id];
+    uint32_t& partial_raw_bytes = session_data->partial_raw_bytes[source_id];
+    assert(partial_raw_bytes + total <= MAX_OCTETS);
 
-    assert(session_data->section_type[source_id] != SEC__NOT_COMPUTE);
-    assert(total <= MAX_OCTETS);
-
-    // FIXIT-H this is a precaution/workaround for stream issues. When they are fixed replace this
+    // FIXIT-E this is a precaution/workaround for stream issues. When they are fixed replace this
     // block with an assert.
-    if ( !((session_data->octets_expected[source_id] == total) ||
-        (!session_data->strict_length[source_id] &&
-        (total <= session_data->octets_expected[source_id]))) )
+    if ((session_data->section_offset[source_id] == 0) &&
+        (session_data->octets_expected[source_id] != partial_raw_bytes + total))
     {
         if (session_data->octets_expected[source_id] == 0)
         {
-            // FIXIT-H This is a known problem. No data was scanned and yet somehow stream can
+            // FIXIT-E This is a known problem. No data was scanned and yet somehow stream can
             // give us data when we ask for an empty message section. Dropping the unexpected data
             // enables us to send the HTTP headers through detection as originally planned.
             total = 0;
@@ -301,11 +310,11 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
         else
         {
 #ifdef REG_TEST
-	    // FIXIT-M: known case: if session clears w/o a flush point,
-	    // stream_tcp will flush to paf max which could be well below what
-	    // has been scanned so far.  since no flush point was specified,
-	    // NHI should just deal with what it gets.
-            assert(false);
+            // FIXIT-M: known case: if session clears w/o a flush point,
+            // stream_tcp will flush to paf max which could be well below what
+            // has been scanned so far.  since no flush point was specified,
+            // NHI should just deal with what it gets.
+            //assert(false);
 #endif
             return http_buf;
         }
@@ -319,12 +328,13 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
     if (session_data->section_type[source_id] == SEC_DISCARD)
     {
 #ifdef REG_TEST
-        if (HttpTestManager::use_test_output())
+        if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP))
         {
             fprintf(HttpTestManager::get_output_file(), "Discarded %u octets\n\n", len);
             fflush(HttpTestManager::get_output_file());
         }
 #endif
+        assert(partial_buffer == nullptr);
         if (flags & PKT_PDU_TAIL)
         {
             assert(session_data->running_total[source_id] == total);
@@ -340,6 +350,7 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
                 {
                     session_data->half_reset(source_id);
                 }
+                // FIXIT-M update this to include H2 message once H2I supports trailers and finish()
                 else if (session_data->type_expected[source_id] == SEC_BODY_CHUNK)
                 {
                     session_data->trailer_prep(source_id);
@@ -351,9 +362,12 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
 
     HttpModule::increment_peg_counts(PEG_REASSEMBLE);
 
-    const bool is_body = (session_data->section_type[source_id] == SEC_BODY_CHUNK) ||
-                         (session_data->section_type[source_id] == SEC_BODY_CL) ||
-                         (session_data->section_type[source_id] == SEC_BODY_OLD);
+    const bool is_body =
+        (session_data->section_type[source_id] == SEC_BODY_CHUNK) ||
+        (session_data->section_type[source_id] == SEC_BODY_CL) ||
+        (session_data->section_type[source_id] == SEC_BODY_OLD) ||
+        (session_data->section_type[source_id] == SEC_BODY_H2);
+
     uint8_t*& buffer = session_data->section_buffer[source_id];
     if (buffer == nullptr)
     {
@@ -361,11 +375,21 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
         if (is_body)
             buffer = new uint8_t[MAX_OCTETS];
         else
-            buffer = new uint8_t[(total > 0) ? total : 1];
-        session_data->section_total[source_id] = total;
+        {
+            const uint32_t buffer_size = (total > 0) ? total : 1;
+            buffer = new uint8_t[buffer_size];
+        }
     }
-    else
-        assert(session_data->section_total[source_id] == total);
+
+    if (partial_buffer_length > 0)
+    {
+        assert(session_data->section_offset[source_id] == 0);
+        memcpy(buffer, partial_buffer, partial_buffer_length);
+        session_data->section_offset[source_id] = partial_buffer_length;
+        partial_buffer_length = 0;
+        delete[] partial_buffer;
+        partial_buffer = nullptr;
+    }
 
     if (session_data->section_type[source_id] != SEC_BODY_CHUNK)
     {
@@ -374,7 +398,7 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
         decompress_copy(buffer, session_data->section_offset[source_id], data, len,
             session_data->compression[source_id], session_data->compress_stream[source_id],
             at_start, session_data->get_infractions(source_id),
-            session_data->get_events(source_id));
+            session_data->events[source_id]);
     }
     else
     {
@@ -389,19 +413,21 @@ const snort::StreamBuffer HttpStreamSplitter::reassemble(snort::Flow* flow, unsi
         const uint16_t buf_size =
             session_data->section_offset[source_id] - session_data->num_excess[source_id];
 
-        // FIXIT-M kludge until we work out issues with returning an empty buffer
-        http_buf.data = buffer;
-        if (buf_size > 0)
+        if (session_data->partial_flush[source_id])
         {
-            http_buf.length = buf_size;
-            session_data->zero_byte_workaround[source_id] = false;
+            // Store the data from a partial flush for reuse
+            partial_buffer = new uint8_t[buf_size];
+            memcpy(partial_buffer, buffer, buf_size);
+            partial_buffer_length = buf_size;
+            partial_raw_bytes += total;
         }
         else
-        {
-            buffer[0] = '\0';
-            http_buf.length = 1;
-            session_data->zero_byte_workaround[source_id] = true;
-        }
+            partial_raw_bytes = 0;
+
+        http_buf.data = buffer;
+        http_buf.length = buf_size;
+        session_data->octets_reassembled[source_id] = buf_size;
+
         buffer = nullptr;
         session_data->section_offset[source_id] = 0;
     }

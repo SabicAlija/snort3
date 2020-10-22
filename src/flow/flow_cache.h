@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -28,6 +28,8 @@
 #include <ctime>
 #include <type_traits>
 
+#include "framework/counts.h"
+
 #include "flow_config.h"
 #include "prune_stats.h"
 
@@ -37,33 +39,33 @@ class Flow;
 struct FlowKey;
 }
 
+class FlowUniList;
+
 class FlowCache
 {
 public:
-    FlowCache(const FlowConfig&);
+    FlowCache(const FlowCacheConfig&);
     ~FlowCache();
 
     FlowCache(const FlowCache&) = delete;
     FlowCache& operator=(const FlowCache&) = delete;
 
-    void push(snort::Flow*);
-
     snort::Flow* find(const snort::FlowKey*);
-    snort::Flow* get(const snort::FlowKey*);
+    snort::Flow* allocate(const snort::FlowKey*);
 
-    int release(snort::Flow*, PruneReason = PruneReason::NONE, bool do_cleanup = true);
+    void release(snort::Flow*, PruneReason = PruneReason::NONE, bool do_cleanup = true);
 
-    unsigned prune_unis();
     unsigned prune_stale(uint32_t thetime, const snort::Flow* save_me);
     unsigned prune_excess(const snort::Flow* save_me);
     bool prune_one(PruneReason, bool do_cleanup);
     unsigned timeout(unsigned num_flows, time_t cur_time);
+    unsigned delete_flows(unsigned num_to_delete);
 
     unsigned purge();
     unsigned get_count();
 
     unsigned get_max_flows() const
-    { return config.max_sessions; }
+    { return config.max_flows; }
 
     PegCount get_total_prunes() const
     { return prune_stats.get_total(); }
@@ -71,25 +73,51 @@ public:
     PegCount get_prunes(PruneReason reason) const
     { return prune_stats.get(reason); }
 
+    PegCount get_total_deletes() const
+    { return delete_stats.get_total(); }
+
+    PegCount get_deletes(FlowDeleteState state) const
+    { return delete_stats.get(state); }
+
     void reset_stats()
-    { prune_stats = PruneStats(); }
+    {
+        prune_stats = PruneStats();
+        delete_stats = FlowDeleteStats();
+    }
 
     void unlink_uni(snort::Flow*);
 
+    void set_flow_cache_config(const FlowCacheConfig& cfg)
+    { config = cfg; }
+
+    const FlowCacheConfig& get_flow_cache_config() const
+    { return config; }
+
+    unsigned get_flows_allocated() const
+    { return flows_allocated; }
+
 private:
+    void delete_uni();
+    void push(snort::Flow*);
     void link_uni(snort::Flow*);
-    int remove(snort::Flow*);
+    void remove(snort::Flow*);
+    void retire(snort::Flow*);
+    unsigned prune_unis(PktType);
+    unsigned delete_active_flows
+        (unsigned mode, unsigned num_to_delete, unsigned &deleted);
 
 private:
     static const unsigned cleanup_flows = 1;
-    const FlowConfig config;
-    unsigned uni_count;
+    FlowCacheConfig config;
     uint32_t flags;
 
     class ZHash* hash_table;
-    snort::Flow* uni_head, * uni_tail;
-    PruneStats prune_stats;
-};
+    unsigned flows_allocated = 0;
+    FlowUniList* uni_flows;
+    FlowUniList* uni_ip_flows;
 
+    PruneStats prune_stats;
+    FlowDeleteStats delete_stats;
+};
 #endif
 

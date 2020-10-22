@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2007-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -201,7 +201,7 @@ struct SSLv2_shello_t
 #define SSL_IS_CKEYX(x) ((x) & SSL_CLIENT_KEYX_FLAG)
 #define SSL_IS_APP(x) (((x) & SSL_SAPP_FLAG) || ((x) & SSL_CAPP_FLAG))
 #define SSL_IS_ALERT(x) ((x) & SSL_ALERT_FLAG)
-#define SSL_CLEAR_TEMPORARY_FLAGS(x) x &= ~SSL_STATEFLAGS;
+#define SSL_CLEAR_TEMPORARY_FLAGS(x) (x) &= ~SSL_STATEFLAGS
 
 /* Verifies that the error flags haven't been triggered */
 #define SSL_IS_CLEAN(x) \

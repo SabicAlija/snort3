@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -46,15 +46,15 @@ private:
 };
 
 InspectorPiglet::InspectorPiglet(
-    Lua::State& state, const std::string& target, Module* m, SnortConfig* sc) :
-    BasePlugin(state, target, m, sc)
+    Lua::State& state, const std::string& tgt, Module* m, SnortConfig* sc) :
+    BasePlugin(state, tgt, m, sc)
 {
     FlushBucket::set(0);
 
     assert(module);
     assert(snort_conf);
 
-    instance = InspectorManager::instantiate(target.c_str(), module, snort_conf);
+    instance = InspectorManager::instantiate(tgt.c_str(), module, snort_conf);
 }
 
 

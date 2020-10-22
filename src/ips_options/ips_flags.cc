@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -26,7 +26,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -54,9 +54,9 @@ static THREAD_LOCAL ProfileStats tcpFlagsPerfStats;
 
 struct TcpFlagCheckData
 {
-    u_char mode;
-    u_char tcp_flags;
-    u_char tcp_mask; /* Mask to take away from the flags check */
+    uint8_t mode;
+    uint8_t tcp_flags;
+    uint8_t tcp_mask; /* Mask to take away from the flags check */
 };
 
 class TcpFlagOption : public IpsOption
@@ -81,14 +81,11 @@ private:
 
 uint32_t TcpFlagOption::hash() const
 {
-    uint32_t a,b,c;
-    const TcpFlagCheckData* data = &config;
+    uint32_t a = config.mode;
+    uint32_t b = config.tcp_flags | (config.tcp_mask << 8);
+    uint32_t c = IpsOption::hash();
 
-    a = data->mode;
-    b = data->tcp_flags | (data->tcp_mask << 8);
-    c = 0;
-
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -96,7 +93,7 @@ uint32_t TcpFlagOption::hash() const
 
 bool TcpFlagOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const TcpFlagOption& rhs = (const TcpFlagOption&)ips;
@@ -115,7 +112,7 @@ bool TcpFlagOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus TcpFlagOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(tcpFlagsPerfStats);
+    RuleProfile profile(tcpFlagsPerfStats);
 
     // if error appeared when tcp header was processed,
     // test fails automagically.
@@ -126,7 +123,7 @@ IpsOption::EvalStatus TcpFlagOption::eval(Cursor&, Packet* p)
      */
 
     TcpFlagCheckData* flagptr = &config;
-    u_char tcp_flags = p->ptrs.tcph->th_flags & (0xFF ^ flagptr->tcp_mask);
+    uint8_t tcp_flags = p->ptrs.tcph->th_flags & (0xFF ^ flagptr->tcp_mask);
 
     switch ((flagptr->mode))
     {
@@ -357,7 +354,7 @@ public:
     { return DETECT; }
 
 public:
-    TcpFlagCheckData data;
+    TcpFlagCheckData data = {};
 };
 
 bool FlagsModule::begin(const char*, int, SnortConfig*)

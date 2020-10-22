@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -49,7 +49,7 @@ public:
 } // namespace
 
 void Icmp6IpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::IP_EMBEDDED_IN_ICMP6); }
+{ v.emplace_back(ProtocolId::IP_EMBEDDED_IN_ICMP6); }
 
 bool Icmp6IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {
@@ -80,10 +80,10 @@ bool Icmp6IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
         return false;
     }
 
-//    orig_frag_offset = ntohs(GET_ORIG_IPH_OFF(p));
-//    orig_frag_offset &= 0x1FFF;
+    // orig_frag_offset = ntohs(GET_ORIG_IPH_OFF(p));
+    // orig_frag_offset &= 0x1FFF;
 
-    // XXX NOT YET IMPLEMENTED - fragments inside ICMP payload
+    // FIXIT-L NOT YET IMPLEMENTED - fragments inside ICMP payload
 
     // since we know the protocol ID in this layer (and NOT the
     // next layer), set the correct protocol here.  Normally,
@@ -92,7 +92,7 @@ bool Icmp6IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
     // this case because I don't want this going to the TCP, UDP, or
     // ICMP codec. Therefore, doing a minor decode here.
 
-    // FIXIT-H will fail to decode Ipv6 options
+    // FIXIT-M will fail to decode Ipv6 options
     switch (ip6h->next())
     {
     case IpProtocol::TCP:     /* decode the interesting part of the header */
@@ -103,7 +103,7 @@ bool Icmp6IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
         codec.proto_bits |= PROTO_BIT__UDP_EMBED_ICMP;
         break;
 
-    //  FIXIT-H do we need to handle ICMPV6 here?
+    //  FIXIT-M do we need to handle ICMPV6 here?
     case IpProtocol::ICMPV4:
         codec.proto_bits |= PROTO_BIT__ICMP_EMBED_ICMP;
         break;

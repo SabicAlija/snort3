@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 #include "service_tftp.h"
 
+#include "detection/ips_context.h"
 #include "protocols/packet.h"
 
 #include "app_info_table.h"
@@ -127,13 +128,11 @@ int TftpServiceDetector::validate(AppIdDiscoveryArgs& args)
     int mode = 0;
     uint16_t block = 0;
     uint16_t tmp = 0;
-    const snort::SfIp* sip = nullptr;
-    const snort::SfIp* dip = nullptr;
+    const SfIp* sip = nullptr;
+    const SfIp* dip = nullptr;
     AppIdSession* pf = nullptr;
     const uint8_t* data = args.data;
     uint16_t size = args.size;
-    //FIXIT-M - Avoid thread locals
-    static THREAD_LOCAL SnortProtocolId tftp_snort_protocol_id = UNKNOWN_PROTOCOL_ID;
 
     if (!size)
         goto inprocess;
@@ -183,16 +182,15 @@ int TftpServiceDetector::validate(AppIdDiscoveryArgs& args)
         if (strcasecmp((const char*)data, "netascii") && strcasecmp((const char*)data, "octet"))
             goto bail;
 
-        if(tftp_snort_protocol_id == UNKNOWN_PROTOCOL_ID)
-            tftp_snort_protocol_id = snort::SnortConfig::get_conf()->proto_ref->find("tftp");
 
         tmp_td = (ServiceTFTPData*)snort_calloc(sizeof(ServiceTFTPData));
         tmp_td->state = TFTP_STATE_TRANSFER;
         dip = args.pkt->ptrs.ip_api.get_dst();
         sip = args.pkt->ptrs.ip_api.get_src();
-        pf = AppIdSession::create_future_session(args.pkt, dip, 0, sip,
-            args.pkt->ptrs.sp, args.asd.protocol, tftp_snort_protocol_id, APPID_EARLY_SESSION_FLAG_FW_RULE,
-            handler->get_inspector());
+        pf = AppIdSession::create_future_session(args.pkt,
+            dip, 0, sip, args.pkt->ptrs.sp, args.asd.protocol,
+            args.asd.config.snort_proto_ids[PROTO_INDEX_TFTP]);
+
         if (pf)
         {
             data_add(*pf, tmp_td, &snort_free);
@@ -203,8 +201,8 @@ int TftpServiceDetector::validate(AppIdDiscoveryArgs& args)
                 tmp_td->state = TFTP_STATE_ERROR;
                 return APPID_ENOMEM;
             }
-            initialize_expected_session(args.asd, *pf, APPID_SESSION_EXPECTED_EVALUATE, APP_ID_FROM_RESPONDER);
-            pf->common.initiator_ip = *sip;
+            args.asd.initialize_future_session(*pf, APPID_SESSION_EXPECTED_EVALUATE, APP_ID_FROM_RESPONDER);
+            pf->set_initiator_ip(*sip);
             pf->service_disco_state = APPID_DISCO_STATE_STATEFUL;
             pf->scan_flags |= SCAN_HOST_PORT_FLAG;
         }
@@ -326,7 +324,7 @@ inprocess:
 success:
     if (appidDebug->is_active())
         LogMessage("AppIdDbg %s TFTP success\n", appidDebug->get_debug_session());
-    return add_service(args.asd, args.pkt, args.dir, APP_ID_TFTP);
+    return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_TFTP);
 
 bail:
     incompatible_data(args.asd, args.pkt, args.dir);

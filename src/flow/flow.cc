@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,44 +27,34 @@
 #include "flow/ha.h"
 #include "flow/session.h"
 #include "framework/data_bus.h"
+#include "helpers/bitop.h"
 #include "ips_options/ips_flowbits.h"
+#include "memory/memory_cap.h"
 #include "protocols/packet.h"
 #include "sfip/sf_ip.h"
-#include "utils/bitop.h"
 #include "utils/stats.h"
 #include "utils/util.h"
 
 using namespace snort;
 
-unsigned FlowData::flow_data_id = 0;
-
-FlowData::FlowData(unsigned u, Inspector* ph)
-{
-    assert(u > 0);
-    id = u;
-    handler = ph;
-    prev = next = nullptr;
-    if ( handler )
-        handler->add_ref();
-}
-
-FlowData::~FlowData()
-{
-    if ( handler )
-        handler->rem_ref();
-}
-
 Flow::Flow()
 {
-    memset(this, 0, sizeof(*this));
+    memory::MemoryCap::update_allocations(sizeof(*this) + sizeof(FlowStash));
+    constexpr size_t offset = offsetof(Flow, key);
+    // FIXIT-L need a struct to zero here to make future proof
+    memset((uint8_t*)this+offset, 0, sizeof(*this)-offset);
 }
 
+Flow::~Flow()
+{
+    memory::MemoryCap::update_deallocations(sizeof(*this) + sizeof(FlowStash));
+    term();
+}
 
 void Flow::init(PktType type)
 {
     pkt_type = type;
     bitop = nullptr;
-    flow_flags = 0;
 
     if ( HighAvailabilityManager::active() )
     {
@@ -73,14 +63,20 @@ void Flow::init(PktType type)
     }
     mpls_client.length = 0;
     mpls_server.length = 0;
+
+    stash = new FlowStash;
 }
 
 void Flow::term()
 {
-    if ( session )
-        delete session;
+    if ( !session )
+        return;
 
-    free_flow_data();
+    delete session;
+    session = nullptr;
+
+    if ( flow_data )
+        free_flow_data();
 
     if ( mpls_client.length )
         delete[] mpls_client.start;
@@ -92,10 +88,16 @@ void Flow::term()
         delete bitop;
 
     if ( ssn_client )
+    {
         ssn_client->rem_ref();
+        ssn_client = nullptr;
+    }
 
     if ( ssn_server )
+    {
         ssn_server->rem_ref();
+        ssn_server = nullptr;
+    }
 
     if ( clouseau )
         clouseau->rem_ref();
@@ -103,8 +105,20 @@ void Flow::term()
     if ( gadget )
         gadget->rem_ref();
 
+    if (assistant_gadget)
+        assistant_gadget->rem_ref();
+
+    if ( data )
+        clear_data();
+
     if ( ha_state )
         delete ha_state;
+
+    if (stash)
+    {
+        delete stash;
+        stash = nullptr;
+    }
 }
 
 inline void Flow::clean()
@@ -124,19 +138,24 @@ inline void Flow::clean()
         delete bitop;
         bitop = nullptr;
     }
+    filtering_state.clear();
 }
 
 void Flow::reset(bool do_cleanup)
 {
-    DetectionEngine::onload(this);
-    DetectionEngine::set_next_packet();
-    DetectionEngine de;
-
     if ( session )
     {
+        DetectionEngine::onload(this);
+
         if ( do_cleanup )
+        {
+            DetectionEngine::set_next_packet();
+            DetectionEngine de;
+
             session->cleanup();
 
+            de.get_context()->clear_callbacks();
+        }
         else
             session->clear();
     }
@@ -167,7 +186,12 @@ void Flow::reset(bool do_cleanup)
     if ( ha_state )
         ha_state->reset();
 
-    constexpr size_t offset = offsetof(Flow, flow_data);
+    if ( stash )
+        stash->reset();
+
+    deferred_trust.clear();
+
+    constexpr size_t offset = offsetof(Flow, context_chain);
     // FIXIT-L need a struct to zero here to make future proof
     memset((uint8_t*)this+offset, 0, sizeof(Flow)-offset);
 }
@@ -211,6 +235,13 @@ void Flow::clear(bool dump_flow_data)
         clear_gadget();
 }
 
+void Flow::trust()
+{
+    set_ignore_direction(SSN_DIR_BOTH);
+    set_state(Flow::FlowState::ALLOW);
+    disable_inspection();
+}
+
 int Flow::set_flow_data(FlowData* fd)
 {
     FlowData* old = get_flow_data(fd->get_id());
@@ -226,6 +257,12 @@ int Flow::set_flow_data(FlowData* fd)
         flow_data->prev = fd;
 
     flow_data = fd;
+
+    // this is after actual allocation so we can't prune beforehand
+    // but if we are that close to the edge we are in trouble anyway
+    // large allocations can be accounted for directly
+    fd->update_allocations(fd->size_of());
+
     return 0;
 }
 
@@ -261,6 +298,7 @@ void Flow::free_flow_data(FlowData* fd)
         fd->prev->next = fd->next;
         fd->next->prev = fd->prev;
     }
+    fd->update_deallocations(fd->size_of());
     delete fd;
 }
 
@@ -274,15 +312,13 @@ void Flow::free_flow_data(uint32_t proto)
 
 void Flow::free_flow_data()
 {
-    FlowData* fd = flow_data;
-
-    while (fd)
+    while (flow_data)
     {
-        FlowData* tmp = fd;
-        fd = fd->next;
+        FlowData* tmp = flow_data;
+        flow_data = flow_data->next;
+        tmp->update_deallocations(tmp->size_of());
         delete tmp;
     }
-    flow_data = nullptr;
 }
 
 void Flow::call_handlers(Packet* p, bool eof)
@@ -317,14 +353,14 @@ void Flow::markup_packet_flags(Packet* p)
         if ( p->packet_flags & PKT_STREAM_UNEST_UNI )
             p->packet_flags ^= PKT_STREAM_UNEST_UNI;
     }
-    if ( ssn_state.session_flags & SSNFLAG_STREAM_ORDER_BAD )
-        p->packet_flags |= PKT_STREAM_ORDER_BAD;
 }
 
 void Flow::set_direction(Packet* p)
 {
     ip::IpApi* ip_api = &p->ptrs.ip_api;
 
+    // FIXIT-M This does not work properly for NAT "real" v6 addresses on top of v4 packet data
+    //  (it will only compare a portion of the address)
     if (ip_api->is_ip4())
     {
         if (ip_api->get_src()->fast_eq4(client_ip))
@@ -472,8 +508,16 @@ bool Flow::is_pdu_inorder(uint8_t dir)
 }
 
 void Flow::set_service(Packet* pkt, const char* new_service)
-{   
+{
     service = new_service;
     DataBus::publish(FLOW_SERVICE_CHANGE_EVENT, pkt);
-}   
+}
 
+void Flow::swap_roles()
+{
+    flags.client_initiated = !flags.client_initiated;
+    std::swap(client_ip, server_ip);
+    std::swap(client_port, server_port);
+    std::swap(flowstats.client_pkts, flowstats.server_pkts);
+    std::swap(flowstats.client_bytes, flowstats.server_bytes);
+}

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -263,19 +263,6 @@ static const ConvertMap enable_deep_teredo_inspection_api =
 const ConvertMap* enable_deep_teredo_inspection_map = &enable_deep_teredo_inspection_api;
 
 /*************************************************
- ******************  enable_gtp ******************
- *************************************************/
-
-static const std::string enable_gtp = "enable_gtp";
-static const ConvertMap enable_gtp_api =
-{
-    enable_gtp,
-    config_true_no_opt_ctor<& enable_gtp, & udp>
-};
-
-const ConvertMap* enable_gtp_map = &enable_gtp_api;
-
-/*************************************************
  **********  enable_mpls_overlapping_ip **********
  *************************************************/
 
@@ -301,19 +288,6 @@ static const ConvertMap nopcre_api =
 };
 
 const ConvertMap* nopcre_map = &nopcre_api;
-
-/*************************************************
- ******************  no_promisc  *****************
- *************************************************/
-
-static const std::string no_promisc = "no_promisc";
-static const ConvertMap no_promisc_api =
-{
-    no_promisc,
-    config_true_no_opt_ctor<& no_promisc, & daq>
-};
-
-const ConvertMap* no_promisc_map = &no_promisc_api;
 
 /*************************************************
  ******************  obfuscate  ******************

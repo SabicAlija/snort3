@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -58,7 +58,6 @@ typedef struct _ip_node
 #define ip_addr ip;   /* To ease porting Snort */
     struct _ip_node* next;
     int flags;
-    // XXX
     int addr_flags; /* Flags used exclusively by Snort */
                     /* Keeping these variables separate keeps
                      * this from stepping on Snort's toes. */
@@ -98,8 +97,12 @@ struct vartable_t
     uint32_t id;
 };
 
+/* Deep copy of src added to dst */
+SfIpRet sfvar_add(sfip_var_t* dst, sfip_var_t* src);
+
 /* Creates a new variable that is an alias of another variable
  * Does a "deep" copy so it owns it's own pointers */
+sfip_var_t* sfvar_deep_copy(const sfip_var_t*);
 sfip_var_t* sfvar_create_alias(const sfip_var_t* alias_from, const char* alias_to);
 
 /* Allocates a new variable as according to "str" */

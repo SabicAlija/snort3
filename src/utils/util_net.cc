@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@
 
 namespace snort
 {
-char* ObfuscateIpToText(const SfIp* ip, SfCidr& homenet, SfCidr& obfunet, InetBuf& ab)
+char* ObfuscateIpToText(const SfIp* ip, const SfCidr& homenet, const SfCidr& obfunet, InetBuf& ab)
 {
     ab[0] = 0;
 
@@ -44,12 +44,11 @@ char* ObfuscateIpToText(const SfIp* ip, SfCidr& homenet, SfCidr& obfunet, InetBu
     }
     else
     {
-        SfIp tmp;
-        tmp.set(*ip);
+        SfIp tmp(*ip);
 
         if ( homenet.is_set() )
         {
-            if ( homenet.contains(&tmp) == SFIP_CONTAINS )
+            if ( homenet.contains(ip) == SFIP_CONTAINS )
                 tmp.obfuscate(&obfunet);
         }
         else

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,9 +23,11 @@
 
 #include "policy.h"
 
+#include "actions/actions.h"
 #include "detection/detection_engine.h"
 #include "log/messages.h"
 #include "managers/inspector_manager.h"
+#include "parser/parse_conf.h"
 #include "parser/vars.h"
 #include "ports/port_var_table.h"
 
@@ -60,7 +62,7 @@ NetworkPolicy::NetworkPolicy(PolicyId id)
 class AltPktHandler : public DataHandler
 {
 public:
-    AltPktHandler() = default;
+    AltPktHandler() : DataHandler("detection") { }
 
     void handle(DataEvent& e, Flow*) override
     { DetectionEngine::detect(const_cast<Packet*>(e.get_packet())); }
@@ -79,7 +81,15 @@ void InspectionPolicy::init(InspectionPolicy* other_inspection_policy)
 {
     framework_policy = nullptr;
     cloned = false;
-
+    if (other_inspection_policy)
+    {
+        policy_id = other_inspection_policy->policy_id;
+        policy_mode = other_inspection_policy->policy_mode;
+        user_policy_id = other_inspection_policy->user_policy_id;
+#ifdef HAVE_UUID
+        uuid_copy(uuid, other_inspection_policy->uuid);
+#endif
+    }
     InspectorManager::new_policy(this, other_inspection_policy);
 }
 
@@ -97,7 +107,7 @@ void InspectionPolicy::configure()
 // detection policy
 //-------------------------------------------------------------------------
 
-IpsPolicy::IpsPolicy(PolicyId id)
+IpsPolicy::IpsPolicy(PolicyId id) : action(Actions::Type::MAX, nullptr)
 {
     policy_id = id;
     user_policy_id = 0;
@@ -111,6 +121,7 @@ IpsPolicy::IpsPolicy(PolicyId id)
     nonamePortVarTable = PortTableNew();
 
     enable_builtin_rules = false;
+    obfuscate_pii = false;
 }
 
 IpsPolicy::~IpsPolicy()
@@ -137,7 +148,11 @@ PolicyMap::PolicyMap(PolicyMap* other_map)
     if ( other_map )
         clone(other_map);
     else
-        add_shell(new Shell);
+    {
+        add_shell(new Shell(nullptr, true));
+        empty_ips_policy = new IpsPolicy(ips_policy.size());
+        ips_policy.push_back(empty_ips_policy);
+    }
 
     set_inspection_policy(inspection_policy[0]);
     set_ips_policy(ips_policy[0]);
@@ -168,6 +183,7 @@ PolicyMap::~PolicyMap()
 
         for ( auto p : network_policy )
             delete p;
+
     }
 
     shells.clear();
@@ -182,44 +198,62 @@ void PolicyMap::clone(PolicyMap *other_map)
     shells = other_map->shells;
     ips_policy = other_map->ips_policy;
     network_policy = other_map->network_policy;
+    empty_ips_policy = other_map->empty_ips_policy;
 
     for ( unsigned i = 0; i < (other_map->inspection_policy.size()); i++)
     {
         if ( i == 0 )
         {
-            inspection_policy.push_back(new InspectionPolicy(other_map->inspection_policy[i]));
+            inspection_policy.emplace_back(new InspectionPolicy(other_map->inspection_policy[i]));
         }
         else
-            inspection_policy.push_back(other_map->inspection_policy[i]);
+            inspection_policy.emplace_back(other_map->inspection_policy[i]);
     }
+
+    shell_map = other_map->shell_map;
+
+    // Fix references to inspection_policy[0]
+    for ( auto p : other_map->shell_map )
+    {
+        if ( p.second->inspection == other_map->inspection_policy[0] )
+            shell_map[p.first]->inspection = inspection_policy[0];
+    }
+
+    user_inspection = other_map->user_inspection;
+
+    // Fix references to inspection_policy[0]
+    for ( auto p : other_map->user_inspection )
+    {
+        if ( p.second == other_map->inspection_policy[0] )
+            user_inspection[p.first] = inspection_policy[0];
+    }
+
+    user_ips = other_map->user_ips;
+    user_network = other_map->user_network;
 }
 
-unsigned PolicyMap::add_inspection_shell(Shell* sh)
+InspectionPolicy* PolicyMap::add_inspection_shell(Shell* sh)
 {
     unsigned idx = inspection_policy.size();
-    shells.push_back(sh);
-    inspection_policy.push_back(new InspectionPolicy(idx));
+    InspectionPolicy* p = new InspectionPolicy(idx);
 
-    shell_map[sh] = std::make_shared<PolicyTuple>(inspection_policy.back(), nullptr, nullptr);
-    return idx;
+    shells.push_back(sh);
+    inspection_policy.push_back(p);
+    shell_map[sh] = std::make_shared<PolicyTuple>(p, nullptr, nullptr);
+
+    return p;
 }
 
-unsigned PolicyMap::add_ips_shell(Shell* sh)
+IpsPolicy* PolicyMap::add_ips_shell(Shell* sh)
 {
     unsigned idx = ips_policy.size();
-    shells.push_back(sh);
-    ips_policy.push_back(new IpsPolicy(idx));
-    shell_map[sh] = std::make_shared<PolicyTuple>(nullptr, ips_policy.back(), nullptr);
-    return idx;
-}
+    IpsPolicy* p = new IpsPolicy(idx);
 
-unsigned PolicyMap::add_network_shell(Shell* sh)
-{
-    unsigned idx = network_policy.size();
     shells.push_back(sh);
-    network_policy.push_back(new NetworkPolicy(idx));
-    shell_map[sh] = std::make_shared<PolicyTuple>(nullptr, nullptr, network_policy.back());
-    return idx;
+    ips_policy.push_back(p);
+    shell_map[sh] = std::make_shared<PolicyTuple>(nullptr, p, nullptr);
+
+    return p;
 }
 
 std::shared_ptr<PolicyTuple> PolicyMap::add_shell(Shell* sh)
@@ -236,8 +270,8 @@ std::shared_ptr<PolicyTuple> PolicyMap::add_shell(Shell* sh)
 std::shared_ptr<PolicyTuple> PolicyMap::get_policies(Shell* sh)
 {
     const auto& pt = shell_map.find(sh);
-    
-    return pt == shell_map.end() ? nullptr:pt->second;
+
+    return pt == shell_map.end() ? nullptr : pt->second;
 }
 
 //-------------------------------------------------------------------------
@@ -259,7 +293,13 @@ InspectionPolicy* get_inspection_policy()
 IpsPolicy* get_ips_policy()
 { return s_detection_policy; }
 
-InspectionPolicy* get_default_inspection_policy(SnortConfig* sc)
+IpsPolicy* get_ips_policy(const SnortConfig* sc, unsigned i)
+{
+    return sc && i < sc->policy_map->ips_policy_count() ?
+        sc->policy_map->get_ips_policy(i) : nullptr;
+}
+
+InspectionPolicy* get_default_inspection_policy(const SnortConfig* sc)
 { return sc->policy_map->get_inspection_policy(0); }
 
 void set_ips_policy(IpsPolicy* p)
@@ -268,18 +308,23 @@ void set_ips_policy(IpsPolicy* p)
 void set_network_policy(NetworkPolicy* p)
 { s_traffic_policy = p; }
 
-IpsPolicy* get_user_ips_policy(SnortConfig* sc, unsigned policy_id)
+IpsPolicy* get_user_ips_policy(const SnortConfig* sc, unsigned policy_id)
 {
     return sc->policy_map->get_user_ips(policy_id);
 }
 
-NetworkPolicy* get_user_network_policy(SnortConfig* sc, unsigned policy_id)
+IpsPolicy* get_empty_ips_policy(const SnortConfig* sc)
+{
+    return sc->policy_map->get_empty_ips();
+}
+
+NetworkPolicy* get_user_network_policy(const SnortConfig* sc, unsigned policy_id)
 {
     return sc->policy_map->get_user_network(policy_id);
 }
 } // namespace snort
 
-void set_network_policy(SnortConfig* sc, unsigned i)
+void set_network_policy(const SnortConfig* sc, unsigned i)
 {
     PolicyMap* pm = sc->policy_map;
 
@@ -290,7 +335,7 @@ void set_network_policy(SnortConfig* sc, unsigned i)
 void set_inspection_policy(InspectionPolicy* p)
 { s_inspection_policy = p; }
 
-void set_inspection_policy(SnortConfig* sc, unsigned i)
+void set_inspection_policy(const SnortConfig* sc, unsigned i)
 {
     PolicyMap* pm = sc->policy_map;
 
@@ -298,7 +343,7 @@ void set_inspection_policy(SnortConfig* sc, unsigned i)
         set_inspection_policy(pm->get_inspection_policy(i));
 }
 
-void set_ips_policy(SnortConfig* sc, unsigned i)
+void set_ips_policy(const SnortConfig* sc, unsigned i)
 {
     PolicyMap* pm = sc->policy_map;
 
@@ -306,7 +351,7 @@ void set_ips_policy(SnortConfig* sc, unsigned i)
         set_ips_policy(pm->get_ips_policy(i));
 }
 
-void set_policies(SnortConfig* sc, Shell* sh)
+void set_policies(const SnortConfig* sc, Shell* sh)
 {
     auto policies = sc->policy_map->get_policies(sh);
 
@@ -320,21 +365,18 @@ void set_policies(SnortConfig* sc, Shell* sh)
         set_network_policy(policies->network);
 }
 
-void set_default_policy(SnortConfig* sc)
+void set_default_policy(const SnortConfig* sc)
 {
     set_network_policy(sc->policy_map->get_network_policy(0));
     set_inspection_policy(sc->policy_map->get_inspection_policy(0));
     set_ips_policy(sc->policy_map->get_ips_policy(0));
 }
 
-void set_default_policy()
-{ set_default_policy(SnortConfig::get_conf()); }
-
 bool default_inspection_policy()
 {
     if ( !get_inspection_policy() )
         return false;
-    
+
     if ( get_inspection_policy()->policy_id != 0 )
         return false;
 

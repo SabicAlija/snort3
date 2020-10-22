@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,12 +27,9 @@
 #include <cstdint>
 #include <string>
 
+#include "appid_types.h"
 #include "client_plugins/client_detector.h"
 #include "service_plugins/service_detector.h"
-
-#include "main/snort_debug.h"
-
-extern Trace TRACE_NAME(appid_module);
 
 namespace snort
 {
@@ -40,6 +37,7 @@ struct Packet;
 }
 struct lua_State;
 class AppIdSession;
+class AppInfoTableEntry;
 
 #define DETECTOR "Detector"
 #define DETECTORFLOW "DetectorFlow"
@@ -62,6 +60,7 @@ struct LuaDetectorParameters
         size = args.size;
         dir = args.dir;
         asd = &args.asd;
+        change_bits = &args.change_bits;
         pkt = args.pkt;
     }
 
@@ -69,8 +68,8 @@ struct LuaDetectorParameters
     uint16_t size = 0;
     AppidSessionDirection dir = APP_ID_FROM_INITIATOR;
     AppIdSession* asd;
-    snort::Packet* pkt = nullptr;
-    uint8_t macAddress[6] = { 0 };
+    AppidChangeBits* change_bits = nullptr;
+    const snort::Packet* pkt = nullptr;
 };
 
 class LuaStateDescriptor
@@ -102,12 +101,11 @@ public:
 };
 
 
-//FIXIT-M: RELOAD - Don't use this class, 
-//required now to store LSD objects
+// FIXIT-M: RELOAD - Don't use this class, required now to store LSD objects
 class LuaObject {
-   
+
 public:
-    LuaObject() = default;
+    LuaObject(OdpContext& odp_ctxt) : odp_ctxt(odp_ctxt) { }
     virtual ~LuaObject() = default;
     LuaObject(const LuaObject&) = delete;
     LuaObject& operator=(const LuaObject&) = delete;
@@ -115,24 +113,46 @@ public:
     LuaStateDescriptor lsd;
     virtual AppIdDetector* get_detector() = 0;
     LuaStateDescriptor* validate_lua_state(bool packet_context);
+
+    const std::string& get_cb_fn_name()
+    { return cb_fn_name; }
+
+    void set_cb_fn_name(const char* name)
+    { cb_fn_name = name; }
+
+    bool is_running()
+    { return running; }
+
+    void set_running(bool is_running)
+    { running = is_running; }
+
+    OdpContext& get_odp_ctxt() const
+    { return odp_ctxt; }
+
+private:
+    std::string cb_fn_name;
+    bool running = false;
+    OdpContext& odp_ctxt;
 };
 
 class LuaServiceObject: public LuaObject
-{ 
+{
 public:
     ServiceDetector* sd;
     LuaServiceObject(AppIdDiscovery* sdm, const std::string& detector_name,
-        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L);
+        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L,
+        OdpContext& odp_ctxt);
     ServiceDetector* get_detector()
     { return sd; }
 };
 
 class LuaClientObject : public LuaObject
-{ 
+{
 public:
     ClientDetector* cd;
-    LuaClientObject(AppIdDiscovery* cdm, const std::string& detector_name,
-        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L);
+    LuaClientObject(const std::string& detector_name,
+        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L,
+        OdpContext& odp_ctxt);
     ClientDetector* get_detector()
     { return cd; }
 };
@@ -141,6 +161,9 @@ int register_detector(lua_State*);
 void init_chp_glossary();
 int init(lua_State*, int result=0);
 void free_chp_glossary();
+
+void check_detector_callback(const snort::Packet& p, AppIdSession& asd, AppidSessionDirection dir,
+    AppId app_id, AppidChangeBits& change_bits, AppInfoTableEntry* entry = nullptr);
 
 #endif
 

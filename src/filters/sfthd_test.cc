@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 #endif
 
 #include "catch/snort_catch.h"
+#include "main/snort_config.h"
 #include "hash/xhash.h"
 #include "parser/parse_ip.h"
 #include "sfip/sf_ip.h"
@@ -739,13 +740,13 @@ static EventData pktData[] =
 
 //---------------------------------------------------------------
 
-static void Init(ThreshData* base, int max)
+static void Init(const SnortConfig* sc, ThreshData* base, int max)
 {
     // FIXIT-L must set policies because they may have been invalidated
     // by prior tests with transient SnortConfigs.  better to fix sfthd
     // to use a SnortConfig parameter or make this a make check test
     // with a separate executable.
-    set_default_policy();
+    set_default_policy(sc);
 
     int i;
     int id = 0;
@@ -760,7 +761,7 @@ static void Init(ThreshData* base, int max)
 
             p->create = sfthd_create_threshold(nullptr,
                 pThdObjs, p->gid, p->sid, p->tracking, p->type, PRIORITY,
-                p->count, p->seconds, set);
+                p->count, p->seconds, set, get_network_policy()->policy_id);
 
             continue;
         }
@@ -771,24 +772,24 @@ static void Init(ThreshData* base, int max)
     }
 }
 
-static void InitDefault()
+static void InitDefault(const SnortConfig* sc)
 {
     pThdObjs = sfthd_objs_new();
     pThd = sfthd_new(MEM_DEFAULT, MEM_DEFAULT);
-    Init(thData, NUM_THDS);
+    Init(sc, thData, NUM_THDS);
 }
 
-static void InitMincap()
+static void InitMincap(const SnortConfig* sc)
 {
     pThdObjs = sfthd_objs_new();
     pThd = sfthd_new(MEM_MINIMUM, MEM_MINIMUM+1);
-    Init(thData, NUM_THDS);
+    Init(sc, thData, NUM_THDS);
 }
 
-static void InitDetect()
+static void InitDetect(const SnortConfig* sc)
 {
     dThd = sfthd_local_new(MEM_DEFAULT);
-    Init(ruleData, NUM_RULS);
+    Init(sc, ruleData, NUM_RULS);
 }
 
 static void Term()
@@ -808,7 +809,8 @@ static void Term()
             p->rule = nullptr;
         }
     }
-    xhash_delete(dThd);
+
+    delete dThd;
 }
 
 static int SetupCheck(int i)
@@ -836,18 +838,18 @@ static int EventTest(EventData* p, THD_NODE* rule)
     long curtime = (long)p->now;
     int status;
 
-    snort::SfIp sip, dip;
+    SfIp sip, dip;
     sip.set(p->sip);
     dip.set(p->dip);
 
     if ( rule )
     {
-        status = sfthd_test_rule(dThd, rule, &sip, &dip, curtime);
+        status = sfthd_test_rule(dThd, rule, &sip, &dip, curtime, get_ips_policy()->policy_id);
     }
     else
     {
         status = sfthd_test_threshold(
-            pThdObjs, pThd, p->gid, p->sid, &sip, &dip, curtime);
+            pThdObjs, pThd, p->gid, p->sid, &sip, &dip, curtime, get_network_policy()->policy_id);
     }
 
     return status;
@@ -913,7 +915,8 @@ static int PacketCheck(int i)
 
 TEST_CASE("sfthd normal", "[sfthd]")
 {
-    InitDefault();
+    SnortConfig sc;
+    InitDefault(&sc);
 
     SECTION("setup")
     {
@@ -930,7 +933,8 @@ TEST_CASE("sfthd normal", "[sfthd]")
 
 TEST_CASE("sfthd mincap", "[sfthd]")
 {
-    InitMincap();
+    SnortConfig sc;
+    InitMincap(&sc);
 
     SECTION("setup")
     {
@@ -947,7 +951,8 @@ TEST_CASE("sfthd mincap", "[sfthd]")
 
 TEST_CASE("sfthd detect", "[sfthd]")
 {
-    InitDetect();
+    SnortConfig sc;
+    InitDetect(&sc);
 
     SECTION("rules")
     {

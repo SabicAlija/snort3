@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,9 +21,11 @@
 #include "config.h"
 #endif
 
+#include "detection/treenodes.h"
 #include "framework/decode_data.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
+#include "main/snort_config.h"
 
 using namespace snort;
 using namespace std;
@@ -43,22 +45,35 @@ static const Parameter s_params[] =
 };
 
 #define s_help \
-    "rule option for conveying arbitrary name, value data within the rule text"
+    "rule option for conveying arbitrary comma-separated name, value data within the rule text"
 
 class MetadataModule : public Module
 {
 public:
     MetadataModule() : Module(s_name, s_help, s_params) { }
+
+    bool begin(const char*, int, SnortConfig*) override;
     bool set(const char*, Value&, SnortConfig*) override;
 
     Usage get_usage() const override
     { return DETECT; }
+
+    bool match = false;
 };
 
-bool MetadataModule::set(const char*, Value& v, SnortConfig*)
+bool MetadataModule::begin(const char*, int, SnortConfig*)
+{
+    match = false;
+    return true;
+}
+
+bool MetadataModule::set(const char*, Value& v, SnortConfig* sc)
 {
     if ( !v.is("*") )
         return false;
+
+    if ( !match and !sc->metadata_filter.empty() )
+        match = strstr(v.get_string(), sc->metadata_filter.c_str()) != nullptr;
 
     return true;
 }
@@ -77,8 +92,11 @@ static void mod_dtor(Module* m)
     delete m;
 }
 
-static IpsOption* metadata_ctor(Module*, OptTreeNode*)
+static IpsOption* metadata_ctor(Module* p, OptTreeNode* otn)
 {
+    MetadataModule* m = (MetadataModule*)p;
+    if ( m->match )
+        otn->set_metadata_match();
     return nullptr;
 }
 

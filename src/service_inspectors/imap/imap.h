@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,11 +38,13 @@
 #define STATE_TLS_DATA         3    // Successful handshake, TLS encrypted data
 #define STATE_COMMAND          4
 #define STATE_UNKNOWN          5
+#define STATE_DECRYPTION_REQ   6    
 
 // session flags
 #define IMAP_FLAG_NEXT_STATE_UNKNOWN         0x00000004
 #define IMAP_FLAG_GOT_NON_REBUILT            0x00000008
 #define IMAP_FLAG_CHECK_SSL                  0x00000010
+#define IMAP_FLAG_ABANDON_EVT                0x00000020
 
 typedef enum _IMAPCmdEnum
 {
@@ -149,6 +151,7 @@ class ImapMime : public snort::MimeSession
     using snort::MimeSession::MimeSession;
 private:
     void decode_alert() override;
+    void decompress_alert() override;
     void reset_state(snort::Flow* ssn) override;
     bool is_end_of_data(snort::Flow* ssn) override;
 };
@@ -171,6 +174,9 @@ public:
 
     static void init()
     { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;

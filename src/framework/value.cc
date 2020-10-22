@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,12 +33,6 @@
 
 using namespace snort;
 using namespace std;
-
-Value::~Value()
-{
-    if ( ss )
-        delete ss;
-}
 
 void Value::get_mac(uint8_t (&mac)[6]) const
 {
@@ -192,22 +186,59 @@ bool Value::strtol(long& n, const std::string& tok) const
     return true;
 }
 
-const char* Value::get_as_string()
+std::string Value::get_as_string() const
 {
+    std::string value_str = str;
     switch ( type )
     {
     case VT_BOOL:
-        str = num ? "true" : "false";
+        value_str = num ? "true" : "false";
         break;
     case VT_NUM:
-        ss = new stringstream;
-        *ss << num;
-        str = ss->str();
+    {
+        stringstream tmp;
+        tmp << std::fixed;
+        tmp << num;
+        value_str = tmp.str();
+        auto dot_pos = value_str.find('.');
+        auto pos = value_str.find_last_not_of("0");
+        if ( pos == dot_pos )
+            --pos;
+
+        value_str = value_str.substr(0, pos + 1);
         break;
+    }
     default:
         break;
     }
-    return str.c_str();
+    return value_str;
+}
+
+std::string Value::get_origin_string() const
+{
+    if ( origin_str.empty() )
+        return "";
+
+    std::string value;
+    std::string token;
+
+    stringstream ss(origin_str);
+    while ( ss >> token )
+    {
+        value += token;
+        value += " ";
+    }
+    value.erase(value.size() - 1);
+
+    return value;
+}
+
+Parameter::Type Value::get_param_type() const
+{
+    if ( param )
+        return param->type;
+
+    return Parameter::PT_MAX;
 }
 
 void Value::update_mask(uint8_t& mask, uint8_t flag, bool invert)
@@ -378,19 +409,23 @@ TEST_CASE("token test", "[Value]")
 
 TEST_CASE("get as string", "[Value]")
 {
-    const char* str_val;
     bool bool_val = true;
     double num_val = 6;
 
     Value test_val(bool_val);
-    str_val = (const char *)test_val.get_as_string();
-    REQUIRE(str_val != nullptr);
-    CHECK((strcmp(str_val,"true")==0));
+    CHECK((strcmp(test_val.get_as_string().c_str(),"true") == 0));
 
     test_val.set(num_val);
-    str_val = (const char *)test_val.get_as_string();
-    REQUIRE(str_val != nullptr);
-    CHECK((strcmp(str_val,"6")==0));
+    CHECK((strcmp(test_val.get_as_string().c_str(),"6") == 0));
+
+    test_val.set(1234.2);
+    CHECK((strcmp(test_val.get_as_string().c_str(),"1234.2") == 0));
+
+    test_val.set(123456.0893);
+    CHECK((strcmp(test_val.get_as_string().c_str(),"123456.0893") == 0));
+
+    test_val.set(0.0803);
+    CHECK((strcmp(test_val.get_as_string().c_str(),"0.0803") == 0));
 }
 
 

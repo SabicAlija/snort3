@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -52,6 +52,7 @@ RpcDecode::~RpcDecode()
     {
         auto& bind = cv.make_binder();
         bind.set_when_proto("tcp");
+        bind.set_when_role("server");
         bind.add_when_port("111");
         bind.add_when_port("32271");
         bind.set_use_type("rpc_decode");
@@ -90,6 +91,7 @@ bool RpcDecode::convert(std::istringstream& data_stream)
 
         else if (isdigit(keyword[0]))
         {
+            bind.set_when_role("server");
             bind.add_when_port(keyword);
             ports_set = true;
         }
@@ -102,6 +104,7 @@ bool RpcDecode::convert(std::istringstream& data_stream)
 
     if (!ports_set)
     {
+        bind.set_when_role("server");
         bind.add_when_port("111");
         bind.add_when_port("32271");
     }

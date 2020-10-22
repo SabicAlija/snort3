@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,8 +24,9 @@
 #include "ips_manager.h"
 
 #include <cassert>
-#include <list>
+#include <map>
 
+#include "detection/fp_detect.h"
 #include "detection/treenodes.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
@@ -46,8 +47,8 @@ struct Option
     { api = p; init = false; count = 0; }
 };
 
-typedef list<Option*> OptionList;
-static OptionList s_options;
+typedef map<std::string, Option*> OptionMap;
+static OptionMap s_options;
 
 static std::string current_keyword = std::string();
 static Module* current_module = nullptr;
@@ -59,13 +60,14 @@ static const Parameter* current_params = nullptr;
 
 void IpsManager::add_plugin(const IpsApi* api)
 {
-    s_options.push_back(new Option(api));
+    assert(s_options.find(api->base.name) == s_options.end());
+    s_options[api->base.name] = new Option(api);
 }
 
 void IpsManager::release_plugins()
 {
-    for ( auto* p : s_options )
-        delete p;
+    for ( auto& p : s_options )
+        delete p.second;
 
     s_options.clear();
 }
@@ -74,8 +76,8 @@ void IpsManager::dump_plugins()
 {
     Dumper d("IPS Options");
 
-    for ( auto* p : s_options )
-        d.dump(p->api->base.name, p->api->base.version);
+    for ( auto& p : s_options )
+        d.dump(p.second->api->base.name, p.second->api->base.version);
 }
 
 //-------------------------------------------------------------------------
@@ -98,8 +100,10 @@ static bool set_arg(
     const char* opt, const char* val, SnortConfig* sc)
 {
     if ( !p->is_positional() )
-        p = Parameter::find(p, opt);
-
+    {
+        const Parameter* q = ModuleManager::get_parameter(m->get_name(), opt);
+        p = q ? q : Parameter::find(p, opt);
+    }
     else if ( *opt )  // must contain spaces like ip_proto:! 6;
         return false;
 
@@ -112,6 +116,13 @@ static bool set_arg(
     if ( p->type == Parameter::PT_IMPLIED )
         v.set(true);
 
+    else if ( p->type == Parameter::PT_BOOL )
+    {
+        if ( !val or !strcmp(val, "true") )
+            v.set(true);
+        else
+            v.set(false);
+    }
     else if ( p->type == Parameter::PT_INT )
     {
         char* end = nullptr;
@@ -119,7 +130,7 @@ static bool set_arg(
         if ( p->is_wild_card() )
             val = opt;
 
-        long n = strtol(val, &end, 0);
+        long n = (long)strtoll(val, &end, 0);
 
         if ( !*end )
             v.set(n);
@@ -153,9 +164,9 @@ static bool set_arg(
 
 static Option* get_opt(const char* keyword)
 {
-    for ( auto* p : s_options )
-        if ( !strcasecmp(p->api->base.name, keyword) )
-            return p;
+    auto opt = s_options.find(keyword);
+    if ( opt != s_options.end() )
+        return opt->second;
 
     return nullptr;
 }
@@ -163,6 +174,15 @@ static Option* get_opt(const char* keyword)
 const char* IpsManager::get_option_keyword()
 {
     return current_keyword.c_str();
+}
+
+const IpsApi* IpsManager::get_option_api(const char* keyword)
+{
+    Option* opt = get_opt(keyword);
+    if ( opt )
+        return opt->api;
+    else
+        return nullptr;
 }
 
 bool IpsManager::option_begin(
@@ -190,7 +210,7 @@ bool IpsManager::option_begin(
         return false;
     }
 
-    // FIXIT-H allow service too
+    // FIXIT-M allow service too
     //if ( opt->api->protos && !(proto & opt->api->protos) )
     //{
     //    ParseError("%s not allowed with given rule protocol", opt->api->base.name);
@@ -244,12 +264,12 @@ bool IpsManager::option_set(
     return true;
 }
 
-bool IpsManager::option_end(
+IpsOption* IpsManager::option_end(
     SnortConfig* sc, OptTreeNode* otn, SnortProtocolId snort_protocol_id,
     const char* key, RuleOptType& type)
 {
     if ( current_keyword.empty() )
-        return false;
+        return nullptr;
 
     assert(!strcmp(current_keyword.c_str(), key));
 
@@ -270,14 +290,14 @@ bool IpsManager::option_end(
     {
         ParseError("unknown option %s", key);
         current_keyword.clear();
-        return false;
+        return nullptr;
     }
 
     if ( mod and !mod->end(key, 0, sc) )
     {
         ParseError("can't finalize %s", key);
         current_keyword.clear();
-        return false;
+        return nullptr;
     }
 
     IpsOption* ips = opt->api->ctor(mod, otn);
@@ -285,7 +305,7 @@ bool IpsManager::option_end(
     current_keyword.clear();
 
     if ( !ips )
-        return ( type == OPT_TYPE_META );
+        return nullptr;
 
     if ( void* prev = add_detection_option(sc, ips->get_type(), ips) )
     {
@@ -293,14 +313,12 @@ bool IpsManager::option_end(
         ips = (IpsOption*)prev;
     }
 
-    OptFpList* fpl = AddOptFuncToList(IpsOption::eval, otn);
+    OptFpList* fpl = AddOptFuncToList(fp_eval_option, otn);
     fpl->ips_opt = ips;
     fpl->type = ips->get_type();
 
     if ( ips->is_relative() )
         fpl->isRelative = 1;
-
-    otn_set_plugin(otn, ips->get_type());
 
     if ( ips->is_agent() and !otn_set_agent(otn, ips) )
     {
@@ -308,53 +326,53 @@ bool IpsManager::option_end(
         ParseWarning(WARN_RULES,
             "at most one action per rule is allowed; other actions disabled");
     }
-    return true;
+    return ips;
 }
 
 //-------------------------------------------------------------------------
 
-void IpsManager::global_init(SnortConfig*)
+void IpsManager::global_init(const SnortConfig*)
 {
 }
 
-void IpsManager::global_term(SnortConfig* sc)
+void IpsManager::global_term(const SnortConfig* sc)
 {
-    for ( auto* p : s_options )
-        if ( p->init && p->api->pterm )
+    for ( auto& p : s_options )
+        if ( p.second->init && p.second->api->pterm )
         {
-            p->api->pterm(sc);
-            p->init = false;
+            p.second->api->pterm(sc);
+            p.second->init = false;
         }
 }
 
 void IpsManager::reset_options()
 {
-    for ( auto* p : s_options )
-        p->count = 0;
+    for ( auto& p : s_options )
+        p.second->count = 0;
 
     // this is the default when we start parsing a rule body
     IpsOption::set_buffer("pkt_data");
 }
 
-void IpsManager::setup_options()
+void IpsManager::setup_options(const SnortConfig* sc)
 {
-    for ( auto* p : s_options )
-        if ( p->init && p->api->tinit )
-            p->api->tinit(SnortConfig::get_conf());
+    for ( auto& p : s_options )
+        if ( p.second->init && p.second->api->tinit )
+            p.second->api->tinit(sc);
 }
 
-void IpsManager::clear_options()
+void IpsManager::clear_options(const SnortConfig* sc)
 {
-    for ( auto* p : s_options )
-        if ( p->init && p->api->tterm )
-            p->api->tterm(SnortConfig::get_conf());
+    for ( auto& p : s_options )
+        if ( p.second->init && p.second->api->tterm )
+            p.second->api->tterm(sc);
 }
 
 bool IpsManager::verify(SnortConfig* sc)
 {
-    for ( auto* p : s_options )
-        if ( p->init && p->api->verify )
-            p->api->verify(sc);
+    for ( auto& p : s_options )
+        if ( p.second->init && p.second->api->verify )
+            p.second->api->verify(sc);
 
     return true;
 }
@@ -363,9 +381,9 @@ bool IpsManager::verify(SnortConfig* sc)
 
 static const IpsApi* find_api(const char* name)
 {
-    for ( auto wrap : s_options )
-        if ( !strcmp(wrap->api->base.name, name) )
-            return wrap->api;
+    for ( auto& wrap : s_options )
+        if ( !strcmp(wrap.second->api->base.name, name) )
+            return wrap.second->api;
 
     return nullptr;
 }

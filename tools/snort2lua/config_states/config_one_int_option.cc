@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -54,14 +54,15 @@ public:
     ConfigIntOption(Converter& c,
         const std::string* snort_opt,
         const std::string* table,
-        const std::string* lua_opt) :
+        const std::string* lua_opt,
+        int max_int_value) :
         ConversionState(c),
         snort_option(snort_opt),
         lua_table(table),
-        lua_option(lua_opt)
+        lua_option(lua_opt),
+        max_value(max_int_value)
     {
     }
-
 
     bool convert(std::istringstream& stream) override
     {
@@ -81,12 +82,19 @@ public:
         // if the two names are not equal ...
         if ((lua_option != nullptr) && *snort_option != *lua_option)
         {
-            retval = parse_int_option(*lua_option, stream, false);
+            if (max_value)
+                retval = parse_max_int_option(*lua_option, stream, max_value, false);
+            else
+                retval = parse_int_option(*lua_option, stream, false);
+
             table_api.add_diff_option_comment("config " + *snort_option + ":", *lua_option);
         }
         else
         {
-            retval = parse_int_option(*snort_option, stream, false);
+            if (max_value)
+                retval = parse_max_int_option(*snort_option, stream, max_value, false);
+            else
+                retval = parse_int_option(*snort_option, stream, false);
         }
 
         table_api.close_table();
@@ -98,14 +106,16 @@ private:
     const std::string* snort_option;
     const std::string* lua_table;
     const std::string* lua_option;
+    const int max_value;
 };
 
 template<const std::string* snort_option,
-const std::string* lua_table,
-const std::string* lua_option = nullptr>
+    const std::string* lua_table,
+    const std::string* lua_option = nullptr,
+    int max_int_value = 0>
 static ConversionState* config_int_ctor(Converter& c)
 {
-    return new ConfigIntOption(c, snort_option, lua_table, lua_option);
+    return new ConfigIntOption(c, snort_option, lua_table, lua_option, max_int_value);
 }
 } // namespace
 
@@ -185,9 +195,10 @@ static const std::string max_mpls_stack_depth = "max_mpls_stack_depth";
 static const ConvertMap max_mpls_labelchain_len_api =
 {
     max_mpls_labelchain_len,
-    config_int_ctor<& max_mpls_labelchain_len,
-    & mpls,
-    & max_mpls_stack_depth>,
+    config_int_ctor<&max_mpls_labelchain_len,
+        &mpls,
+        &max_mpls_stack_depth,
+        255>,
 };
 
 const ConvertMap* max_mpls_labelchain_len_map = &max_mpls_labelchain_len_api;
@@ -283,5 +294,18 @@ static const ConvertMap tagged_packet_limit_api =
 };
 
 const ConvertMap* tagged_packet_limit_map = &tagged_packet_limit_api;
+
+/**************************************************
+ ********************* umask  *********************
+ **************************************************/
+
+static const std::string umask = "umask";
+static const ConvertMap umask_api =
+{
+    umask,
+    config_int_ctor<& umask, & process>,
+};
+
+const ConvertMap* umask_map = &umask_api;
 } // namespace config
 

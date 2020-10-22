@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,6 +29,7 @@
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "protocols/ssl.h"
+#include "pub_sub/opportunistic_tls_event.h"
 #include "search_engines/search_tool.h"
 #include "stream/stream.h"
 #include "utils/util_cstring.h"
@@ -80,9 +81,13 @@ static THREAD_LOCAL POPSearchInfo pop_search_info;
 const PegInfo pop_peg_names[] =
 {
     { CountType::SUM, "packets", "total packets processed" },
+    { CountType::SUM, "total_bytes", "total number of bytes processed" },
     { CountType::SUM, "sessions", "total pop sessions" },
     { CountType::NOW, "concurrent_sessions", "total concurrent pop sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent pop sessions" },
+    { CountType::SUM, "start_tls", "total STARTTLS events generated" },
+    { CountType::SUM, "ssl_search_abandoned", "total SSL search abandoned" },
+    { CountType::SUM, "ssl_srch_abandoned_early", "total SSL search abandoned too soon" },
     { CountType::SUM, "b64_attachments", "total base64 attachments decoded" },
     { CountType::SUM, "b64_decoded_bytes", "total base64 decoded bytes" },
     { CountType::SUM, "qp_attachments", "total quoted-printable attachments decoded" },
@@ -193,7 +198,7 @@ static void POP_GetEOL(const uint8_t* ptr, const uint8_t* end,
     const uint8_t* tmp_eol;
     const uint8_t* tmp_eolm;
 
-    tmp_eol = (uint8_t*)memchr(ptr, '\n', end - ptr);
+    tmp_eol = (const uint8_t*)memchr(ptr, '\n', end - ptr);
     if (tmp_eol == nullptr)
     {
         tmp_eol = end;
@@ -218,19 +223,6 @@ static void POP_GetEOL(const uint8_t* ptr, const uint8_t* end,
 
     *eol = tmp_eol;
     *eolm = tmp_eolm;
-}
-
-static void PrintPopConf(POP_PROTO_CONF* config)
-{
-    if (config == nullptr)
-        return;
-
-    LogMessage("POP config: \n");
-
-    config->decode_conf.print_decode_conf();
-
-    LogMessage("\n");
-
 }
 
 static inline int InspectPacket(Packet* p)
@@ -343,31 +335,28 @@ static const uint8_t* POP_HandleCommand(Packet* p, POPData* pop_ssn, const uint8
     /* if command not found, alert and move on */
     if (!cmd_found)
     {
-        if (pop_ssn->state == STATE_UNKNOWN)
+        /* check for encrypted */
+        if (pop_ssn->state == STATE_UNKNOWN and
+            pop_ssn->session_flags & POP_FLAG_CHECK_SSL and
+            IsSSL(ptr, end - ptr, p->packet_flags))
         {
-            /* check for encrypted */
-            if ((pop_ssn->session_flags & POP_FLAG_CHECK_SSL) &&
-                (IsSSL(ptr, end - ptr, p->packet_flags)))
-            {
-                pop_ssn->state = STATE_TLS_DATA;
+            pop_ssn->state = STATE_TLS_DATA;
 
-                /* Ignore data */
-                return end;
-            }
-            else
+            /* Ignore data */
+            return end;
+        }
+        else
+        {
+            if (pop_ssn->state == STATE_UNKNOWN)
             {
                 /* don't check for ssl again in this packet */
                 if (pop_ssn->session_flags & POP_FLAG_CHECK_SSL)
                     pop_ssn->session_flags &= ~POP_FLAG_CHECK_SSL;
 
                 pop_ssn->state = STATE_DATA;
-                //pop_ssn->data_state = STATE_DATA_UNKNOWN;
-
+                DetectionEngine::queue_event(GID_POP, POP_UNKNOWN_CMD);
                 return ptr;
             }
-        }
-        else
-        {
             DetectionEngine::queue_event(GID_POP, POP_UNKNOWN_CMD);
             return eol;
         }
@@ -432,7 +421,7 @@ static void POP_ProcessServerPacket(Packet* p, POPData* pop_ssn)
             //ptr = POP_HandleData(p, ptr, end);
             FilePosition position = get_file_position(p);
             int len = end - ptr;
-            ptr = pop_ssn->mime_ssn->process_mime_data(p->flow, ptr, len, false, position);
+            ptr = pop_ssn->mime_ssn->process_mime_data(p, ptr, len, false, position);
             continue;
         }
         POP_GetEOL(ptr, end, &eol, &eolm);
@@ -452,7 +441,30 @@ static void POP_ProcessServerPacket(Packet* p, POPData* pop_ssn)
             case RESP_OK:
                 tmp = SnortStrcasestr((const char*)cmd_start, (eol - cmd_start), "octets");
                 if (tmp != nullptr)
+                {
+					if (!(pop_ssn->session_flags & POP_FLAG_ABANDON_EVT)
+                    	and !p->flow->flags.data_decrypted)
+                	{
+                    	pop_ssn->session_flags |= POP_FLAG_ABANDON_EVT;
+                    	DataBus::publish(SSL_SEARCH_ABANDONED, p);
+                    	popstats.ssl_search_abandoned++;
+               		}
+
                     pop_ssn->state = STATE_DATA;
+				}
+                else if (pop_ssn->state == STATE_TLS_CLIENT_PEND)
+                {
+                    if ((pop_ssn->session_flags & POP_FLAG_ABANDON_EVT)
+                        and !p->flow->flags.data_decrypted)
+                    {
+                        popstats.ssl_srch_abandoned_early++;
+                    }
+
+                    OpportunisticTlsEvent event(p, p->flow->service);
+                    DataBus::publish(OPPORTUNISTIC_TLS_EVENT, event, p->flow);
+                    popstats.start_tls++;
+                    pop_ssn->state = STATE_DECRYPTION_REQ; 
+                }
                 else
                 {
                     pop_ssn->prev_response = RESP_OK;
@@ -523,12 +535,14 @@ static void snort_pop(POP_PROTO_CONF* config, Packet* p)
         }
     }
 
+    popstats.total_bytes += p->dsize;
     int pkt_dir = POP_Setup(p, pop_ssn);
 
     if (pkt_dir == POP_PKT_FROM_CLIENT)
     {
         /* This packet should be a tls client hello */
-        if (pop_ssn->state == STATE_TLS_CLIENT_PEND)
+        if ((pop_ssn->state == STATE_TLS_CLIENT_PEND) 
+			|| (pop_ssn->state == STATE_DECRYPTION_REQ))
         {
             if (IsTlsClientHello(p->data, p->data + p->dsize))
             {
@@ -619,6 +633,11 @@ void PopMime::decode_alert()
     }
 }
 
+void PopMime::decompress_alert()
+{
+    DetectionEngine::queue_event(GID_POP, POP_FILE_DECOMP_FAILED);
+}
+
 void PopMime::reset_state(Flow* ssn)
 {
     POP_ResetState(ssn);
@@ -641,11 +660,17 @@ public:
     ~Pop() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     StreamSplitter* get_splitter(bool c2s) override
     { return new PopSplitter(c2s); }
+
+    bool can_carve_files() const override
+    { return true; }
+
+    bool can_start_tls() const override
+    { return true; }
 
 private:
     POP_PROTO_CONF* config;
@@ -673,9 +698,10 @@ bool Pop::configure(SnortConfig* )
     return true;
 }
 
-void Pop::show(SnortConfig*)
+void Pop::show(const SnortConfig*) const
 {
-    PrintPopConf(config);
+    if ( config )
+        config->decode_conf.show();
 }
 
 void Pop::eval(Packet* p)
@@ -749,8 +775,6 @@ const InspectApi pop_api =
     nullptr, // ssn
     nullptr  // reset
 };
-
-#undef BUILDING_SO  // FIXIT-L can't be linked dynamically yet
 
 #ifdef BUILDING_SO
 SO_PUBLIC const BaseApi* snort_plugins[] =

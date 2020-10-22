@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,8 +24,16 @@
 
 #include "service_detector.h"
 
-class ServiceDiscovery;
 class AppIdSession;
+class ServiceDiscovery;
+
+struct FpSMBData
+{
+    FpSMBData* next;
+    unsigned major;
+    unsigned minor;
+    uint32_t flags;
+};
 
 class NbssServiceDetector : public ServiceDetector
 {
@@ -47,12 +55,10 @@ class NbdgmServiceDetector : public ServiceDetector
 {
 public:
     NbdgmServiceDetector(ServiceDiscovery*);
-    ~NbdgmServiceDetector() override;
 
     int validate(AppIdDiscoveryArgs&) override;
 
-    static void AppIdFreeSMBData(snort::FpSMBData*);
-    void release_thread_resources() override;
+    static void AppIdFreeSMBData(FpSMBData*);
 
 private:
     void add_smb_info(AppIdSession&, unsigned major, unsigned minor, uint32_t flags);

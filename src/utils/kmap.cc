@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,43 +26,31 @@
 
 #include "kmap.h"
 
-#include <limits>
+#include <cassert>
 #include <string>
 
 #include "util.h"
 
 namespace snort
 {
-KMAP* KMapNew(KMapUserFreeFunc userfree)
+KMAP* KMapNew(KMapUserFreeFunc userfree, bool nc)
 {
     KMAP* km = (KMAP*)snort_calloc(sizeof(KMAP));
     km->userfree = userfree;
+    km->nocase = nc;
     return km;
 }
 
-/*
-*
-*/
-void KMapSetNoCase(KMAP* km, int flag)
-{
-    km->nocase = flag;
-}
-
-/*
-*   Free the list of key+data pair nodes - used by findfirst/next
-*/
 static int KMapFreeNodeList(KMAP* km)
 {
     for ( KEYNODE* k=km->keylist; k; )
     {
         if ( k->key )
-        {
             snort_free(k->key);
-        }
+
         if ( km->userfree && k->userdata )
-        {
             km->userfree(k->userdata);
-        }
+
         KEYNODE* kold = k;
         k = k->next;
         snort_free(kold);
@@ -71,30 +59,19 @@ static int KMapFreeNodeList(KMAP* km)
     return 0;
 }
 
-/*
-*     Recursively walk and free nodes
-*/
 static void KMapFreeNode(KMAP* km, KMAPNODE* r)
 {
     if ( r->sibling )
-    {
         KMapFreeNode(km, r->sibling);
-    }
 
     if ( r->child )
-    {
         KMapFreeNode(km, r->child);
-    }
 
     snort_free(r);
 }
 
-/*
-*  Free the KMAP and all of it's memory and nodes
-*/
 void KMapDelete(KMAP* km)
 {
-    /* Free the tree - one root node at a time */
     for (int i=0; i<256; i++)
     {
         KMAPNODE* r = km->root[i];
@@ -109,9 +86,6 @@ void KMapDelete(KMAP* km)
     snort_free(km);
 }
 
-/*
-*  Add key + data pair to the linked list of nodes
-*/
 static KEYNODE* KMapAddKeyNode(KMAP* km,void* key, int n, void* userdata)
 {
     KEYNODE* knode;
@@ -120,13 +94,13 @@ static KEYNODE* KMapAddKeyNode(KMAP* km,void* key, int n, void* userdata)
         return nullptr;
 
     knode = (KEYNODE*)snort_calloc(sizeof(KEYNODE));
-    knode->key = (unsigned char*)snort_calloc(n); // Alloc the key space
+    knode->key = (unsigned char*)snort_calloc(n);
 
-    memcpy(knode->key,key,n); // Copy the key
-    knode->nkey     = n;
+    memcpy(knode->key, key, n);
+    knode->nkey = n;
     knode->userdata = userdata;
 
-    if ( km->keylist ) // Insert at front of list
+    if ( km->keylist )
     {
         knode->next = km->keylist;
         km->keylist = knode;
@@ -139,9 +113,6 @@ static KEYNODE* KMapAddKeyNode(KMAP* km,void* key, int n, void* userdata)
     return knode;
 }
 
-/*
-*  Create a character node
-*/
 static KMAPNODE* KMapCreateNode(KMAP* km)
 {
     KMAPNODE* mn=(KMAPNODE*)snort_calloc(sizeof(KMAPNODE));
@@ -153,7 +124,6 @@ static KMAPNODE* KMapCreateNode(KMAP* km)
 *    key : ptr to bytes of data used to identify this item
 *          may be text string, or binary character sequence.
 *    n   : > 0 number of bytes in the key
-*          <=0 key is a null terminated  ascii string
 *    userdata - ptr to data to associate with this key
 *
 *   returns:
@@ -163,18 +133,11 @@ static KMAPNODE* KMapCreateNode(KMAP* km)
 */
 int KMapAdd(KMAP* km, void* key, int n, void* userdata)
 {
+    assert(n > 0);
+
     int type = 0;
     const unsigned char* P = (unsigned char*)key;
     std::string xkey;
-
-    if ( n <= 0 )
-    {
-        const std::size_t tmp_len = strlen( (char*)key);
-        if (tmp_len > std::numeric_limits<int>::max())
-            return -99;
-
-        n = (int)tmp_len;
-    }
 
     if ( km->nocase )
     {
@@ -186,7 +149,6 @@ int KMapAdd(KMAP* km, void* key, int n, void* userdata)
         P = (const unsigned char*)xkey.c_str();
     }
 
-    /* Save key size */
     int ksize = n;
     KMAPNODE* root;
 
@@ -196,8 +158,6 @@ int KMapAdd(KMAP* km, void* key, int n, void* userdata)
     if ( !km->root[ *P ] )
     {
         root = KMapCreateNode(km);
-        if ( !root )
-            return -1;
         km->root[ *P ] = root;
         root->nodechar = *P;
     }
@@ -250,8 +210,6 @@ int KMapAdd(KMAP* km, void* key, int n, void* userdata)
                 */
             //printf("added child branch nodechar = %c \n",*P);
             root->child= KMapCreateNode(km);
-            if ( !root->child )
-                return -1;
             root=root->child;
             root->nodechar  = *P;
             P++;
@@ -264,8 +222,6 @@ int KMapAdd(KMAP* km, void* key, int n, void* userdata)
                 */
             //printf("added sibling branch nodechar = %c \n",*P);
             root->sibling= KMapCreateNode(km);
-            if ( !root->sibling )
-                return -1;
             root=root->sibling;
             root->nodechar  = *P;
             P++;
@@ -280,8 +236,6 @@ int KMapAdd(KMAP* km, void* key, int n, void* userdata)
     {
         //printf("added child nodechar = %c \n",*P);
         root->child = KMapCreateNode(km);
-        if ( !root->child )
-            return -1;
         root=root->child;
         root->nodechar  = *P;
         P++;
@@ -297,8 +251,6 @@ int KMapAdd(KMAP* km, void* key, int n, void* userdata)
         return 1;
 
     root->knode = KMapAddKeyNode(km, key, ksize, userdata);
-    if ( !root->knode )
-        return -1;
 
     return 0;
 }
@@ -310,17 +262,10 @@ int KMapAdd(KMAP* km, void* key, int n, void* userdata)
 */
 void* KMapFind(KMAP* ks, void* key, int n)
 {
+    assert(n > 0);
+
     std::string xkey;
     const unsigned char* T = (unsigned char*)key;
-
-    if ( n <= 0 )
-    {
-        const std::size_t tmp_len = strlen( (char*)key);
-        if (tmp_len > std::numeric_limits<int>::max())
-            return nullptr;
-
-        n = (int)tmp_len;
-    }
 
     if ( ks->nocase )
     {
@@ -375,24 +320,16 @@ void* KMapFind(KMAP* ks, void* key, int n)
     return nullptr;
 }
 
-/*
-*
-*/
 void* KMapFindFirst(KMAP* km)
 {
     km->keynext = km->keylist;
 
     if (!km->keynext)
-    {
         return nullptr;
-    }
 
     return km->keynext->userdata;
 }
 
-/*
-*
-*/
 void* KMapFindNext(KMAP* km)
 {
     if ( !km->keynext )
@@ -407,75 +344,4 @@ void* KMapFindNext(KMAP* km)
 }
 
 } //namespace snort
-
-#ifdef KMAP_MAIN
-/*
-*
-*/
-using namespace snort;
-int main(int argc, char** argv)
-{
-    int i,n=10;
-    KMAP* km;
-    char* p;
-    char str[80];
-
-    printf("usage: kmap nkeys (default=10)\n\n");
-
-    km = KMapNew(free);    /* use 'free' to free 'userdata' */
-
-    KMapSetNoCase(km,1);  //need to add xlat....
-
-    if ( argc > 1 )
-    {
-        n = atoi(argv[1]);
-    }
-
-    for (i=1; i<=n; i++)
-    {
-        SnortSnprintf(str, sizeof(str), "KeyWord%d",i);
-        KMapAdd(km, str, 0 /* strlen(str) */, strupr(snort_strdup(str)) );
-        printf("Adding Key=%s\n",str);
-    }
-    printf("xmem: %u bytes, %d chars\n",xmalloc_bytes(),km->nchars);
-
-    printf("\nKey Find test...\n");
-    for (i=1; i<=n; i++)
-    {
-        SnortSnprintf(str, sizeof(str), "KeyWord%d",i);
-        p = (char*)KMapFind(km, str,  0 /*strlen(str) */);
-        if (p)
-            printf("key=%s, data=%*s\n",str,strlen(str),p);
-        else
-            printf("'%s' NOT found.\n",str);
-    }
-
-    KMapSetNoCase(km,0);  // this should fail all key searches
-    printf("\nKey Find test2...\n");
-    for (i=1; i<=n; i++)
-    {
-        SnortSnprintf(str, sizeof(str), "KeyWord%d",i);
-        p = (char*)KMapFind(km, str,  0 /*strlen(str) */);
-        if (p)
-            printf("key=%s, data=%*s\n",str,strlen(str),p);
-        else
-            printf("'%s' NOT found.\n",str);
-    }
-
-    printf("\nKey FindFirst/Next test...\n");
-    for (p = (char*)KMapFindFirst(km); p; p=(char*)KMapFindNext(km) )
-        printf("data=%s\n",p);
-
-    printf("\nKey FindFirst/Next test done.\n");
-
-    KMapDelete(km);
-
-    printf("xmem: %u bytes\n",xmalloc_bytes());
-
-    printf("normal pgm finish.\n");
-
-    return 0;
-}
-
-#endif
 

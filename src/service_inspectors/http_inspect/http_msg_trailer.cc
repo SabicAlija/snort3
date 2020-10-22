@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,15 +24,20 @@
 #include "http_msg_trailer.h"
 
 #include "http_api.h"
+#include "http_common.h"
+#include "http_enum.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 HttpMsgTrailer::HttpMsgTrailer(const uint8_t* buffer, const uint16_t buf_size,
-    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, Flow* flow_,
     const HttpParaList* params_) :
     HttpMsgHeadShared(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_)
 {
     transaction->set_trailer(this, source_id);
+    get_related_sections();
 }
 
 void HttpMsgTrailer::gen_events()
@@ -83,7 +88,6 @@ void HttpMsgTrailer::gen_events()
 void HttpMsgTrailer::update_flow()
 {
     session_data->half_reset(source_id);
-    session_data->section_type[source_id] = SEC__NOT_COMPUTE;
 }
 
 #ifdef REG_TEST

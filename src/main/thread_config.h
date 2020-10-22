@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,12 +20,16 @@
 #define THREAD_CONFIG_H
 
 #include <map>
+#include <string>
 
 #include "main/thread.h"
 
 struct CpuSet;
 
-class ThreadConfig
+namespace snort
+{
+
+class SO_PUBLIC ThreadConfig
 {
 public:
     static bool init();
@@ -37,7 +41,12 @@ public:
 
     ~ThreadConfig();
     void set_thread_affinity(SThreadType, unsigned id, CpuSet*);
+    void set_named_thread_affinity(const std::string&, CpuSet*);
     void implement_thread_affinity(SThreadType, unsigned id);
+    void implement_named_thread_affinity(const std::string& name);
+
+    static constexpr unsigned int DEFAULT_THREAD_ID = 0;
+
 private:
     struct TypeIdPair
     {
@@ -56,6 +65,8 @@ private:
         }
     };
     std::map<TypeIdPair, CpuSet*, TypeIdPairComparer> thread_affinity;
+    std::map<std::string, CpuSet*> named_thread_affinity;
 };
+}
 
 #endif

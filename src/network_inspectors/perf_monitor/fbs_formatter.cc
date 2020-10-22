@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,14 +31,6 @@
 
 #include "utils/endian.h"
 
-#ifdef UNIT_TEST
-#include <cstdio>
-#include <cstring>
-
-#include "catch/snort_catch.h"
-#include "utils/util.h"
-#endif
-
 using namespace std;
 
 typedef flatbuffers::Offset<flatbuffers::Table> TableOffset;
@@ -50,30 +42,30 @@ static string lowercase(string s)
     return s;
 }
 
-void FbsFormatter::register_field(const std::string& name, PegCount* value)
+void FbsFormatter::register_field(const string& name, PegCount* value)
 {
-    non_offset_names.push_back(name);
-    non_offset_values.push_back(value);
+    non_offset_names.emplace_back(name);
+    non_offset_values.emplace_back(value);
 }
 
-void FbsFormatter::register_field(const std::string& name, const char* value)
+void FbsFormatter::register_field(const string& name, const char* value)
 {
     FormatterValue fv;
     fv.s = value;
 
-    offset_names.push_back(name);
-    offset_types.push_back(FT_STRING);
-    offset_values.push_back(fv);
+    offset_names.emplace_back(name);
+    offset_types.emplace_back(FT_STRING);
+    offset_values.emplace_back(fv);
 }
 
-void FbsFormatter::register_field(const std::string& name, std::vector<PegCount>* value)
+void FbsFormatter::register_field(const string& name, vector<PegCount>* value)
 {
     FormatterValue fv;
     fv.ipc = value;
 
-    offset_names.push_back(name);
-    offset_types.push_back(FT_IDX_PEG_COUNT);
-    offset_values.push_back(fv);
+    offset_names.emplace_back(name);
+    offset_types.emplace_back(FT_IDX_PEG_COUNT);
+    offset_values.emplace_back(fv);
 }
 
 //Apply order to fields so that leaf nodes are created first in one pass
@@ -104,7 +96,7 @@ void FbsFormatter::commit_field_reorder()
     non_offset_values.clear();
 }
 
-void FbsFormatter::register_section(const std::string& section)
+void FbsFormatter::register_section(const string& section)
 {
     commit_field_reorder();
     PerfFormatter::register_section(section);
@@ -152,33 +144,37 @@ void FbsFormatter::finalize_fields()
     schema += get_tracker_name() + ";";
 
     flatbuffers::Parser parser;
-    assert(parser.Parse(schema.c_str())); // Above code is broken or bad peg names if this hits
-    parser.Serialize();
+#ifndef NDEBUG
+    bool parsed =
+#endif
+    parser.Parse(schema.c_str());
+    assert(parsed); // Above code is broken or bad peg names if this hits
 
+    parser.Serialize();
     auto& schema_builder = parser.builder_;
 
     auto reflection_schema = reflection::GetSchema(schema_builder.GetBufferPointer());
     auto root_fields = reflection_schema->root_table()->fields();
-    vtable_offsets.push_back(vector<flatbuffers::uoffset_t>());
+    vtable_offsets.emplace_back(vector<flatbuffers::uoffset_t>());
 
     for( unsigned i = 0; i < section_names.size(); i++ )
     {
-        vtable_offsets.push_back(vector<flatbuffers::uoffset_t>());
+        vtable_offsets.emplace_back(vector<flatbuffers::uoffset_t>());
 
         auto module_field = root_fields->LookupByKey(lowercase(section_names[i]).c_str());
-        vtable_offsets[0].push_back(module_field->offset());
+        vtable_offsets[0].emplace_back(module_field->offset());
 
         auto module_table = reflection_schema->objects()->Get(module_field->type()->index());
         for( unsigned j = 0; j < field_names[i].size(); j++ )
         {
             auto field = module_table->fields()->LookupByKey(lowercase(field_names[i][j]).c_str());
-            vtable_offsets[i + 1].push_back(field->offset());
+            vtable_offsets[i + 1].emplace_back(field->offset());
 
             if( types[i][j] == FT_IDX_PEG_COUNT )
             {
                 auto field_name = lowercase(field_names[i][j]) + "_map";
                 field = module_table->fields()->LookupByKey(field_name.c_str());
-                vtable_offsets[i + 1].push_back(field->offset());
+                vtable_offsets[i + 1].emplace_back(field->offset());
             }
         }
     }
@@ -241,8 +237,8 @@ void FbsFormatter::write(FILE* fh, time_t timestamp)
                         if( ipc[k] )
                         {
                             nz_found = true;
-                            map.push_back(k);
-                            mapped_ipc.push_back(ipc[k]);
+                            map.emplace_back(k);
+                            mapped_ipc.emplace_back(ipc[k]);
 
                             if( map.size() > nz_break_even )
                                 break;
@@ -313,13 +309,15 @@ void FbsFormatter::write(FILE* fh, time_t timestamp)
     fflush(fh);
 }
 
-#ifdef UNIT_TEST
+#ifdef CATCH_TEST_BUILD
+
+#include "catch/catch.hpp"
 
 static uint8_t* make_prefixed_schema(const char* schema)
 {
     size_t len = strlen(schema);
     uint32_t slen = htonl(len);
-    uint8_t* cooked = (uint8_t*)snort_alloc(slen + 8);
+    uint8_t* cooked = new uint8_t[slen + 8];
 
     memcpy(cooked, "FLTI", 4);
     memcpy(cooked + 4, &slen, 4);
@@ -331,14 +329,14 @@ static uint8_t* make_prefixed_schema(const char* schema)
 static bool test_file(FILE* fh, const uint8_t* cooked)
 {
     auto size = ftell(fh);
-    char* fake_file = (char*)snort_alloc(size + 1);
+    char* fake_file = new char[size + 1];
 
     rewind(fh);
     fread(fake_file, size, 1, fh);
 
     bool ret = memcmp(cooked, fake_file, size);
 
-    snort_free(fake_file);
+    delete[] fake_file;
 
     return ret;
 }
@@ -366,7 +364,7 @@ TEST_CASE("peg schema", "[FbsFormatter]")
     CHECK((test_file(fh, cooked) == true));
 
     fclose(fh);
-    snort_free(cooked);
+    delete[] cooked;
 }
 
 TEST_CASE("string schema", "[FbsFormatter]")
@@ -392,7 +390,7 @@ TEST_CASE("string schema", "[FbsFormatter]")
     CHECK((test_file(fh, cooked) == true));
 
     fclose(fh);
-    snort_free(cooked);
+    delete[] cooked;
 }
 
 TEST_CASE("vector schema", "[FbsFormatter]")
@@ -417,7 +415,7 @@ TEST_CASE("vector schema", "[FbsFormatter]")
     CHECK((test_file(fh, cooked) == true));
 
     fclose(fh);
-    snort_free(cooked);
+    delete[] cooked;
 }
 
 TEST_CASE("mixed schema", "[FbsFormatter]")
@@ -446,7 +444,7 @@ TEST_CASE("mixed schema", "[FbsFormatter]")
     CHECK((test_file(fh, cooked) == true));
 
     fclose(fh);
-    snort_free(cooked);
+    delete[] cooked;
 }
 
 #endif

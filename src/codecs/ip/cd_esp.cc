@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -47,10 +47,10 @@ static const Parameter esp_params[] =
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
-class EspModule : public CodecModule
+class EspModule : public BaseCodecModule
 {
 public:
-    EspModule() : CodecModule(CD_ESP_NAME, CD_ESP_HELP, esp_params) { }
+    EspModule() : BaseCodecModule(CD_ESP_NAME, CD_ESP_HELP, esp_params) { }
 
     const RuleMap* get_rules() const override
     { return esp_rules; }
@@ -82,7 +82,7 @@ constexpr uint32_t ESP_TRAILER_LEN = 2;
 } // anonymous namespace
 
 void EspCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ESP); }
+{ v.emplace_back(ProtocolId::ESP); }
 
 /*
  * Attempt to decode Encapsulated Security Payload.
@@ -97,7 +97,7 @@ bool EspCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
     uint8_t pad_length;
     uint8_t ip_proto;
 
-    if (!SnortConfig::esp_decoding())
+    if (!codec.conf->esp_decoding())
         return false;
 
     /* The ESP header contains a crypto Initialization Vector (IV) and
@@ -126,7 +126,7 @@ bool EspCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
     // must be called AFTER setting next_prot_id
     if (snort.ip_api.is_ip6())
     {
-        if ( SnortConfig::get_conf()->hit_ip6_maxopts(codec.ip6_extension_count) )
+        if ( codec.conf->hit_ip6_maxopts(codec.ip6_extension_count) )
         {
             codec_event(codec, DECODE_IP6_EXCESS_EXT_HDR);
             return false;

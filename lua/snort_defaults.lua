@@ -34,7 +34,7 @@ BLACK_LIST_PATH = '../lists'
 -- default networks
 ---------------------------------------------------------------------------
 
--- List of DNS servers on your network 
+-- List of DNS servers on your network
 DNS_SERVERS = HOME_NET
 
 -- List of ftp servers on your network
@@ -49,7 +49,7 @@ SIP_SERVERS = HOME_NET
 -- List of SMTP servers on your network
 SMTP_SERVERS = HOME_NET
 
--- List of sql servers on your network 
+-- List of sql servers on your network
 SQL_SERVERS = HOME_NET
 
 -- List of ssh servers on your network
@@ -57,23 +57,6 @@ SSH_SERVERS = HOME_NET
 
 -- List of telnet servers on your network
 TELNET_SERVERS = HOME_NET
-
--- other variables, these should not be modified
-AIM_SERVERS =
-[[
-64.12.24.0/23
-64.12.28.0/23
-64.12.161.0/24
-64.12.163.0/24
-64.12.200.0/24
-205.188.3.0/24
-205.188.5.0/24
-205.188.7.0/24
-205.188.9.0/24
-205.188.153.0/24
-205.188.179.0/24
-205.188.248.0/24
-]]
 
 ---------------------------------------------------------------------------
 -- default ports - used in Talos rules
@@ -89,7 +72,7 @@ HTTP_PORTS =
     3702 4343 4848 5250 6988 7000 7001 7144 7145 7510 7777 7779 8000 8008
     8014 8028 8080 8085 8088 8090 8118 8123 8180 8181 8243 8280 8300 8800
     8888 8899 9000 9060 9080 9090 9091 9443 9999 11371 34443 34444 41080
-    50002 55555 
+    50002 55555
 ]]
 
 -- List of ports you run mail servers on
@@ -108,6 +91,37 @@ SSH_PORTS = ' 22'
 FILE_DATA_PORTS = HTTP_PORTS .. MAIL_PORTS
 
 ---------------------------------------------------------------------------
+-- default variables
+---------------------------------------------------------------------------
+
+default_variables = {
+    RULE_PATH = RULE_PATH,
+    BUILTIN_RULE_PATH = BUILTIN_RULE_PATH,
+    PLUGIN_RULE_PATH = PLUGIN_RULE_PATH,
+    WHITE_LIST_PATH = WHITE_LIST_PATH,
+    BLACK_LIST_PATH = BLACK_LIST_PATH,
+
+    HOME_NET = HOME_NET,
+    EXTERNAL_NET = EXTERNAL_NET,
+    DNS_SERVERS = DNS_SERVERS,
+    FTP_SERVERS = FTP_SERVERS,
+    HTTP_SERVERS = HTTP_SERVERS,
+    SIP_SERVERS = SIP_SERVERS,
+    SMTP_SERVERS = SMTP_SERVERS,
+    SQL_SERVERS = SQL_SERVERS,
+    SSH_SERVERS = SSH_SERVERS,
+    TELNET_SERVERS = TELNET_SERVERS,
+
+    FTP_PORTS = FTP_PORTS,
+    HTTP_PORTS = HTTP_PORTS,
+    MAIL_PORTS = MAIL_PORTS,
+    ORACLE_PORTS = ORACLE_PORTS,
+    SIP_PORTS = SIP_PORTS,
+    SSH_PORTS = SSH_PORTS,
+    FILE_DATA_PORTS = FILE_DATA_PORTS,
+}
+
+---------------------------------------------------------------------------
 -- default ftp server
 ---------------------------------------------------------------------------
 
@@ -121,7 +135,7 @@ ftp_default_cmds =
     XSEM XSEN XSHA1 XSHA256
 ]]
 
-ftp_default_data_chan_cmds = 
+ftp_default_data_chan_cmds =
 [[
     PORT PASV LPRT LPSV EPRT EPSV
 ]]
@@ -131,28 +145,28 @@ ftp_default_data_xfer_cmds =
     RETR STOR STOU APPE LIST NLST
 ]]
 
-ftp_default_file_put_cmds = 
+ftp_default_file_put_cmds =
 [[
-    STOR STOU
+    STOR STOU APPE
 ]]
 
-ftp_default_file_get_cmds = 
+ftp_default_file_get_cmds =
 [[
     RETR
 ]]
 
-ftp_default_login_cmds = 
+ftp_default_login_cmds =
 [[
     USER PASS
 ]]
 
-ftp_default_encr_cmds = 
+ftp_default_encr_cmds =
 [[
     AUTH
 ]]
 
-ftp_format_commands = 
-[[ 
+ftp_format_commands =
+[[
     ACCT ADAT ALLO APPE AUTH CEL CLNT CMD CONF CWD DELE ENC EPRT EPSV ESTP
     HELP LANG LIST LPRT MACB MAIL MDTM MIC MKD MLSD MLST MODE NLST OPTS
     PASS PBSZ PORT PROT REST RETR RMD RNFR RNTO SDUP SITE SIZE SMNT STAT
@@ -193,7 +207,7 @@ ftp_command_specs =
 
     { command = 'ALLO', length = 200, format = '< int [ char R int ] >' },
     { command = 'EPRT', length = 400, format = '< extd_host_port >' },
-    { command = 'EPSV', format = '< [ { char 12 | char A char L char L } ] >' },
+    { command = 'EPSV', format = "< [ { '1' | '2' | 'ALL' } ] >" },
     { command = 'LPRT', length = 400, format = '< long_host_port >' },
     { command = 'MACB', format = '< string >' },
     { command = 'MDTM', format = '< [ date nnnnnnnnnnnnnn[.n[n[n]]] ] string >' },
@@ -201,8 +215,7 @@ ftp_command_specs =
     { command = 'PORT', length = 400, format = '< host_port >' },
     { command = 'PROT', format = '< char CSEP >' },
     { command = 'STRU', format = '< char FRPO [ string ] >' },
-    { command = 'TYPE', 
-      format = '< { char AE [ char NTC ] | char I | char L [ number ] } >' }
+    { command = 'TYPE', format = '< { char AE [ char NTC ] | char I | char L [ number ] } >' }
 }
 
 default_ftp_server =
@@ -240,20 +253,68 @@ smtp_default_data_cmds =
 
 smtp_default_normalize_cmds =
 [[
-    RCPT VRFY EXPN
+    ATRN AUTH BDAT CHUNKING DATA DEBUG EHLO EMAL ESAM ESND ESOM ETRN EVFY EXPN
+    HELO HELP IDENT MAIL NOOP ONEX QUEU QUIT RCPT RSET SAML SEND SOML STARTTLS
+    TICK TIME TURN TURNME VERB VRFY X-ADAT XADR XAUTH XCIR X-DRCP X-ERCP XEXCH50
+    X-EXCH50 X-EXPS XGEN XLICENSE X-LINK2STATE XQUE XSTA XTRN XUSR
 ]]
 
-smtp_default_valid_cmds =
-[[
-    ATRN AUTH BDAT DATA DEBUG EHLO EMAL ESAM ESND ESOM ETRN EVFY EXPN HELO
-    HELP IDENT MAIL NOOP ONEX QUEU QUIT RCPT RSET SAML SEND SIZE SOML
-    STARTTLS TICK TIME TURN TURNME VERB VRFY X-EXPS X-LINK2STATE XADR XAUTH
-    XCIR XEXCH50 XGEN XLICENSE XQUE XSTA XTRN XUSR
-]]
+smtp_default_valid_cmds = smtp_default_normalize_cmds
+
+smtp_default_alt_max_command_lines =
+{
+    { command = 'ATRN', length = 255, },
+    { command = 'AUTH', length = 246, },
+    { command = 'BDAT', length = 255, },
+    { command = 'DATA', length = 246, },
+    { command = 'DEBUG', length = 255, },
+    { command = 'EHLO', length = 500, },
+    { command = 'EMAL', length = 255, },
+    { command = 'ESAM', length = 255, },
+    { command = 'ESND', length = 255, },
+    { command = 'ESOM', length = 255, },
+    { command = 'ETRN', length = 500, },
+    { command = 'EVFY', length = 255, },
+    { command = 'EXPN', length = 255, },
+    { command = 'HELO', length = 500, },
+    { command = 'HELP', length = 500, },
+    { command = 'IDENT', length = 255, },
+    { command = 'MAIL', length = 260, },
+    { command = 'NOOP', length = 255, },
+    { command = 'ONEX', length = 246, },
+    { command = 'QUEU', length = 246, },
+    { command = 'QUIT', length = 246, },
+    { command = 'RCPT', length = 300, },
+    { command = 'RSET', length = 255, },
+    { command = 'SAML', length = 246, },
+    { command = 'SEND', length = 246, },
+    { command = 'SIZE', length = 255, },
+    { command = 'SOML', length = 246, },
+    { command = 'STARTTLS', length = 246, },
+    { command = 'TICK', length = 246, },
+    { command = 'TIME', length = 246, },
+    { command = 'TURN', length = 246, },
+    { command = 'TURNME', length = 246, },
+    { command = 'VERB', length = 246, },
+    { command = 'VRFY', length = 255, },
+    { command = 'XADR', length = 246, },
+    { command = 'XAUTH', length = 246, },
+    { command = 'XCIR', length = 246, },
+    { command = 'XEXCH50', length = 246, },
+    { command = 'X-EXPS', length = 246, },
+    { command = 'XGEN', length = 246, },
+    { command = 'XLICENSE', length = 246, },
+    { command = 'X-LINK2STATE', length = 246, },
+    { command = 'XQUE', length = 246, },
+    { command = 'XSTA', length = 246, },
+    { command = 'XTRN', length = 246, },
+    { command = 'XUSR', length = 246, }
+}
 
 default_smtp =
 {
     -- params not specified here get internal defaults
+    alt_max_command_line_len = smtp_default_alt_max_command_lines,
     auth_cmds = smtp_default_auth_cmds,
     binary_data_cmds = smtp_default_binary_data_cmds,
     data_cmds = smtp_default_data_cmds,
@@ -269,14 +330,13 @@ http_methods =  -- build from default_http_methods
 {
     'GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'TRACE', 'CONNECT',
     'VERSION_CONTROL', 'REPORT', 'CHECKOUT', 'CHECKIN', 'UNCHECKOUT',
-    'MKWORKSPACE', 'UPDATE', 'LABEL', 'MERGE', 'BASELINE_CONTROL',
+    'MKWORKSPACE', 'LABEL', 'MERGE', 'BASELINE_CONTROL',
     'MKACTIVITY', 'ORDERPATCH', 'ACL', 'PATCH', 'BIND', 'LINK',
     'MKCALENDAR', 'MKREDIRECTREF', 'REBIND', 'UNBIND', 'UNLINK',
     'UPDATEREDIRECTREF', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'COPY',
     'MOVE', 'LOCK', 'UNLOCK', 'SEARCH', 'BCOPY', 'BDELETE', 'BMOVE',
-    'BPROPFIND', 'BPROPPATCH', 'NOTIFY', 'POLL', 'SUBSCRIBE',
-    'UNSUBSCRIBE', 'X_MS_ENUMATTS',
-    --'OPTIONS',
+    'BPROPFIND', 'BPROPPATCH', 'POLL', 'UNSUBSCRIBE', 'X_MS_ENUMATTS',
+    --'NOTIFY', 'OPTIONS', 'SUBSCRIBE', 'UPDATE'
 }
 
 sip_methods =
@@ -294,12 +354,18 @@ telnet_commands =
     '|FF FC|', '|FF FD|', '|FF FE|', '|FF FF|'
 }
 
+
+netflow_versions =
+{
+    '|00 05|', '|00 09|'
+}
+
 default_wizard =
 {
     spells =
     {
         { service = 'ftp', proto = 'tcp', client_first = false,
-          to_client = { '220*FTP' } },
+          to_client = { '220*FTP', '220*FileZilla' } },
 
         { service = 'http', proto = 'tcp', client_first = true,
           to_server = http_methods, to_client = { 'HTTP/' } },
@@ -329,11 +395,15 @@ default_wizard =
     },
     hexes =
     {
-        { service = 'dnp3', proto = 'tcp', client_first = true, 
+        { service = 'dnp3', proto = 'tcp', client_first = true,
           to_server = { '|05 64|' }, to_client = { '|05 64|' } },
+
+        { service = 'netflow', proto = 'udp',  client_first = true,
+          to_server = netflow_versions },
 
         { service = 'http2', proto = 'tcp', client_first = true,
           to_server = { '|50 52 49 20 2a 20 48 54 54 50 2f 32 2e 30 0d 0a 0d 0a 53 4d 0d 0a 0d 0a|' } },
+
 --[[
         { service = 'modbus', proto = 'tcp', client_first = true,
           to_server = { '??|0 0|' } },
@@ -1109,4 +1179,27 @@ default_low_port_scan =
 
     icmp_sweep = icmp_low_sweep,
 }
+
+---------------------------------------------------------------------------
+-- default whitelist
+---------------------------------------------------------------------------
+default_whitelist =
+[[
+    ftp_command_specs default_ftp_server smtp_default_alt_max_command_lines
+    default_smtp http_methods sip_methods telnet_commands default_wizard
+    default_references default_classifications gtp_v0_msg gtp_v1_msg gtp_v2_msg
+    gtp_v0_info gtp_v1_info gtp_v2_info default_gtp tcp_low_ports
+    tcp_low_decoy tcp_low_sweep tcp_low_dist tcp_med_ports
+    tcp_med_decoy tcp_med_sweep tcp_med_dist tcp_hi_ports tcp_hi_decoy
+    tcp_hi_sweep tcp_hi_dist udp_low_ports udp_low_decoy udp_low_sweep
+    udp_low_dist udp_med_ports udp_med_decoy udp_med_sweep udp_med_dist
+    udp_hi_ports udp_hi_decoy udp_hi_sweep udp_hi_dist ip_low_proto
+    ip_low_decoy ip_low_sweep ip_low_dist ip_med_proto ip_med_decoy
+    ip_med_sweep ip_med_dist ip_hi_proto ip_hi_decoy ip_hi_sweep
+    ip_hi_dist icmp_low_sweep icmp_med_sweep icmp_hi_sweep
+    default_hi_port_scan default_med_port_scan default_low_port_scan
+    default_variables netflow_versions
+]]
+
+snort_whitelist_append(default_whitelist)
 

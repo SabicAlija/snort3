@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -68,15 +68,9 @@ AppInfoTableEntry* add_static_entry(AppId id, const char* name)
 
 TEST_GROUP(app_info_table)
 {
-    void setup()
-    {
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
-    }
-
-    void teardown()
+    void teardown() override
     {
         app_info_mgr.cleanup_appid_info_table();
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
 

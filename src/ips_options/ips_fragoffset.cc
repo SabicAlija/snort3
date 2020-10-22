@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 #include "framework/ips_option.h"
 #include "framework/module.h"
 #include "framework/range.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -56,21 +56,20 @@ private:
 
 uint32_t FragOffsetOption::hash() const
 {
-    uint32_t a,b,c;
+    uint32_t a = config.op;
+    uint32_t b = (uint32_t)config.min;
+    uint32_t c = (uint32_t)config.max;
 
-    a = config.op;
-    b = (uint32_t)config.min;
-    c = (uint32_t)config.max;
+    mix(a,b,c);
+    a += IpsOption::hash();
 
-    mix_str(a,b,c,get_name());
     finalize(a,b,c);
-
     return c;
 }
 
 bool FragOffsetOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const FragOffsetOption& rhs = (const FragOffsetOption&)ips;
@@ -79,7 +78,7 @@ bool FragOffsetOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus FragOffsetOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(fragOffsetPerfStats);
+    RuleProfile profile(fragOffsetPerfStats);
 
     if (!p->has_ip())
         return NO_MATCH;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -536,7 +536,8 @@ inprocess:
         return APPID_INPROCESS;
 
     case APPID_SUCCESS:
-        return add_service(args.asd, args.pkt, args.dir, APP_ID_SSH, ss->vendor, ss->version, nullptr);
+        return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_SSH,
+            ss->vendor, ss->version, nullptr);
 
     case APPID_NOMATCH:
 fail:

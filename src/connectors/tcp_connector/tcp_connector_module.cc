@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -83,10 +83,10 @@ bool TcpConnectorModule::set(const char*, Value& v, SnortConfig*)
         config->address = v.get_string();
 
     else if ( v.is("base_port") )
-        config->base_port = v.get_long();
+        config->base_port = v.get_uint16();
 
     else if ( v.is("setup") )
-        switch ( v.get_long() )
+        switch ( v.get_uint8() )
         {
         case 0:
         {
@@ -130,7 +130,7 @@ bool TcpConnectorModule::end(const char*, int idx, SnortConfig*)
 {
     if (idx != 0)
     {
-        config_set->push_back(config);
+        config_set->emplace_back(config);
         config = nullptr;
     }
 

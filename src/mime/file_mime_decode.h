@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -15,16 +15,21 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
-// sf_email_attach_decode.h author Bhagyashree Bantwal <bbantwal@cisco.com>
+// file_mime_decode.h author Bhagya Bantwal <bbantwal@cisco.com>
 
 #ifndef FILE_MIME_DECODE_H
 #define FILE_MIME_DECODE_H
 
 // Email attachment decoder, supports Base64, QP, UU, and Bit7/8
 
+#include "decompress/file_decomp.h"
 #include "framework/counts.h"
+#include "main/snort_types.h"
 #include "mime/decode_base.h"
 #include "mime/file_mime_config.h"
+
+namespace snort
+{
 
 enum DecodeType
 {
@@ -48,7 +53,7 @@ struct MimeStats
     PegCount bitenc_bytes;
 };
 
-class MimeDecode
+class SO_PUBLIC MimeDecode
 {
 public:
     MimeDecode(snort::DecodeConfig* conf);
@@ -71,11 +76,22 @@ public:
 
     DecodeType get_decode_type();
 
+    void file_decomp_reset();
+    void file_decomp_init();
+
+    DecodeResult decompress_data(const uint8_t* buf_in, uint32_t size_in,
+                                 const uint8_t*& buf_out, uint32_t& size_out);
+
+    static void init();
+
 private:
     DecodeType decode_type = DECODE_NONE;
     snort::DecodeConfig* config;
     DataDecode* decoder = nullptr;
+    fd_session_t* fd_state = nullptr;
 };
+
+} // namespace snort
 
 #endif
 

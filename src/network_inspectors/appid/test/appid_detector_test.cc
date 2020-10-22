@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,8 +36,18 @@
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
 
-Flow* flow = nullptr;
-AppIdSession* mock_session = nullptr;
+namespace snort
+{
+Inspector* InspectorManager::get_inspector(
+    char const*, bool, const snort::SnortConfig*) { return nullptr; }
+AppIdSessionApi::AppIdSessionApi(const AppIdSession*, const SfIp&) :
+    StashGenericObject(STASH_GENERIC_OBJECT_APPID) {}
+}
+
+void ApplicationDescriptor::set_id(
+    const Packet&, AppIdSession&, AppidSessionDirection, AppId, AppidChangeBits&) { }
+
+void AppIdHttpSession::set_http_change_bits(AppidChangeBits&, HttpFieldIds) {}
 
 class TestDetector : public AppIdDetector
 {
@@ -45,16 +55,21 @@ public:
     TestDetector() = default;
 
     void do_custom_init() override { }
+    void do_custom_reload() override { }
     int validate(AppIdDiscoveryArgs&) override { return 0; }
-    void register_appid(AppId, unsigned) override { }
-    void release_thread_resources() override { }
+    void register_appid(AppId, unsigned, OdpContext&) override { }
 };
 
 TEST_GROUP(appid_detector_tests)
 {
+    Flow* flow = nullptr;
+    AppIdSession* mock_session = nullptr;
+
     void setup() override
     {
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
+        SfIp ip;
+        mock_session = new AppIdSession(IpProtocol::TCP, &ip, 1492, dummy_appid_inspector,
+            dummy_appid_inspector.get_ctxt().get_odp_ctxt());
         flow = new Flow;
         flow->set_flow_data(mock_session);
     }
@@ -62,32 +77,19 @@ TEST_GROUP(appid_detector_tests)
     void teardown() override
     {
         delete flow;
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
+        delete &mock_session->get_api();
+        delete mock_session;
     }
 };
-
-TEST(appid_detector_tests, add_info)
-{
-    const char* info_url = "https://tools.ietf.org/html/rfc793";
-    AppIdDetector* ad = new TestDetector;
-    MockAppIdHttpSession* hsession = (MockAppIdHttpSession*)mock_session->get_http_session();
-    ad->add_info(*mock_session, info_url);
-    STRCMP_EQUAL(hsession->get_cfield(MISC_URL_FID), URL);
-    hsession->reset();
-    ad->add_info(*mock_session, info_url);
-    STRCMP_EQUAL(mock_session->get_http_session()->get_cfield(MISC_URL_FID), info_url);
-    delete ad;
-}
 
 TEST(appid_detector_tests, add_user)
 {
     const char* username = "snorty";
     AppIdDetector* ad = new TestDetector;
-    ad->add_user(*mock_session, username, APPID_UT_ID, true);
-    STRCMP_EQUAL(mock_session->client.get_username(), username);
-    CHECK_TRUE((mock_session->client.get_user_id() == APPID_UT_ID));
-    CHECK_TRUE((mock_session->get_session_flags(APPID_SESSION_LOGIN_SUCCEEDED)
-        & APPID_SESSION_LOGIN_SUCCEEDED));
+    AppidChangeBits cb;
+    ad->add_user(*mock_session, username, APPID_UT_ID, true, cb);
+    STRCMP_EQUAL(mock_session->get_client_user(), username);
+    CHECK_TRUE((mock_session->get_client_user_id() == APPID_UT_ID));
     delete ad;
 }
 
@@ -112,8 +114,6 @@ TEST(appid_detector_tests, get_code_string)
 int main(int argc, char** argv)
 {
     mock_init_appid_pegs();
-    mock_session = new AppIdSession(IpProtocol::TCP, nullptr, 1492, appid_inspector);
-    mock_session->get_http_session();
     int rc = CommandLineTestRunner::RunAllTests(argc, argv);
     mock_cleanup_appid_pegs();
     return rc;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -37,11 +37,8 @@ private:
     ACSM_STRUCT2* obj;
 
 public:
-    AcsMpse(SnortConfig*, const MpseAgent* agent)
-        : Mpse("ac_sparse")
-    {
-        obj = acsmNew2(agent, ACF_SPARSE);
-    }
+    AcsMpse(const MpseAgent* agent) : Mpse("ac_sparse")
+    { obj = acsmNew2(agent, ACF_SPARSE); }
 
     ~AcsMpse() override
     { if (obj) acsmFree2(obj); }
@@ -50,8 +47,7 @@ public:
     { obj->enable_dfa(); }
 
     int add_pattern(
-        SnortConfig*, const uint8_t* P, unsigned m,
-        const PatternDescriptor& desc, void* user) override
+        const uint8_t* P, unsigned m, const PatternDescriptor& desc, void* user) override
     {
         return acsmAddPattern2(obj, P, m, desc.no_case, desc.negated, user);
     }
@@ -72,7 +68,7 @@ public:
     int print_info() override
     { return acsmPrintDetailInfo2(obj); }
 
-    int get_pattern_count() override
+    int get_pattern_count() const override
     { return acsmPatternCount2(obj); }
 };
 
@@ -81,9 +77,9 @@ public:
 //-------------------------------------------------------------------------
 
 static Mpse* acs_ctor(
-    SnortConfig* sc, class Module*, const MpseAgent* agent)
+    const SnortConfig*, class Module*, const MpseAgent* agent)
 {
-    return new AcsMpse(sc, agent);
+    return new AcsMpse(agent);
 }
 
 static void acs_dtor(Mpse* p)
@@ -125,6 +121,7 @@ static const MpseApi acs_api =
     acs_dtor,
     acs_init,
     acs_print,
+    nullptr,
 };
 
 const BaseApi* se_ac_sparse = &acs_api.base;

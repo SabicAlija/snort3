@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -76,6 +76,8 @@ static const uint8_t AUTHEOC3[] = "AUTH \x00d\x00a";
 static const uint8_t AUTHEOC4[] = "AUTH \x00a";
 static const uint8_t STLSEOC[] = "STLS\x00d\x00a";
 static const uint8_t STLSEOC2[] = "STLS\x00a";
+static const uint8_t STLSEOC3[] = "STLS \x00d\x00a";
+static const uint8_t STLSEOC4[] = "STLS \x00a";
 
 enum Client_App_Pattern_Index
 {
@@ -90,6 +92,8 @@ enum Client_App_Pattern_Index
     PATTERN_AUTHEOC4,
     PATTERN_STLSEOC,
     PATTERN_STLSEOC2,
+    PATTERN_STLSEOC3,
+    PATTERN_STLSEOC4,
     PATTERN_POP3_OTHER // always last
 };
 
@@ -114,7 +118,7 @@ struct ServicePOP3Data
     unsigned count;
     const char* vendor;
     char version[MAX_VERSION_SIZE];
-    snort::AppIdServiceSubtype* subtype;
+    AppIdServiceSubtype* subtype;
     int error;
 };
 
@@ -140,6 +144,8 @@ static AppIdFlowContentPattern pop3_client_patterns[] =
     { AUTHEOC4, sizeof(AUTHEOC4)-1, 0, 1, 0 },
     { STLSEOC, sizeof(STLSEOC)-1,   0, 1, 0 },
     { STLSEOC2, sizeof(STLSEOC2)-1, 0, 1, 0 },
+    { STLSEOC3, sizeof(STLSEOC3)-1, 0, 1, 0 },
+    { STLSEOC4, sizeof(STLSEOC4)-1, 0, 1, 0 },
     /* These are represented by index >= PATTERN_POP3_OTHER */
     { DELE, sizeof(DELE)-1,         0, 1, 0 },
     { LISTC, sizeof(LISTC)-1,       0, 1, 0 },
@@ -211,7 +217,9 @@ Pop3ClientDetector::~Pop3ClientDetector()
 
 void Pop3ClientDetector::do_custom_init()
 {
-    cmd_matcher = new snort::SearchTool("ac_full", true);
+    if (cmd_matcher)
+        delete cmd_matcher;
+    cmd_matcher = new SearchTool;
 
     if ( !tcp_patterns.empty() )
     {
@@ -225,6 +233,12 @@ void Pop3ClientDetector::do_custom_init()
         }
     }
     cmd_matcher->prep();
+}
+
+void Pop3ClientDetector::do_custom_reload()
+{
+    assert(cmd_matcher);
+    cmd_matcher->reload();
 }
 
 static int pop3_pattern_match(void* id, void*, int match_end_pos, void* data, void*)
@@ -246,13 +260,9 @@ static void pop3_free_state(void* data)
         ServicePOP3Data* sd = &dd->server;
         while (sd->subtype)
         {
-            snort::AppIdServiceSubtype* sub = sd->subtype;
+            AppIdServiceSubtype* sub = sd->subtype;
             sd->subtype = sub->next;
-            if (sub->service)
-                snort_free((void*)sub->service);
-            if (sub->version)
-                snort_free((void*)sub->version);
-            snort_free(sub);
+            delete sub;
         }
         ClientPOP3Data* cd = &dd->client;
         if (cd->username)
@@ -283,11 +293,12 @@ static int pop3_check_line(const uint8_t** data, const uint8_t* end)
 }
 
 static int pop3_server_validate(POP3DetectorData* dd, const uint8_t* data, uint16_t size,
-    AppIdSession& asd, int server)
+    AppIdSession& asd, int server, AppidChangeBits& change_bits)
 {
     ServicePOP3Data* pd = &dd->server;
     const uint8_t* begin = nullptr;
 
+    assert(data);
     const uint8_t* end = data + size;
     char* v_end = pd->version + MAX_VERSION_SIZE - 1;
     switch (pd->state)
@@ -337,20 +348,20 @@ static int pop3_server_validate(POP3DetectorData* dd, const uint8_t* data, uint1
                 // we are potentially overriding the APP_ID_POP3 assessment that was made earlier.
                 asd.set_session_flags(APPID_SESSION_ENCRYPTED);
                 asd.clear_session_flags(APPID_SESSION_CLIENT_GETS_SERVER_PACKETS);
-                pop3_client_detector->add_app(asd, APP_ID_POP3S, APP_ID_POP3S, nullptr);
+                pop3_client_detector->add_app(asd, APP_ID_POP3S, APP_ID_POP3S, nullptr, change_bits);
             }
         }
         else if (dd->client.username) // possible only with non-TLS auth, therefore APP_ID_POP3
         {
             if (pd->error)
             {
-                pop3_service_detector->add_user(asd, dd->client.username, APP_ID_POP3, false);
+                pop3_service_detector->add_user(asd, dd->client.username, APP_ID_POP3, false, change_bits);
                 snort_free(dd->client.username);
                 dd->client.username = nullptr;
             }
             else
             {
-                pop3_service_detector->add_user(asd, dd->client.username, APP_ID_POP3, true);
+                pop3_service_detector->add_user(asd, dd->client.username, APP_ID_POP3, true, change_bits);
                 snort_free(dd->client.username);
                 dd->client.username = nullptr;
                 dd->need_continue = 0;
@@ -415,7 +426,7 @@ static int pop3_server_validate(POP3DetectorData* dd, const uint8_t* data, uint1
                 pd->vendor = ven_im;
             else if ((p=service_strstr(begin, len, (const unsigned char*)ven_po, sizeof(ven_po)-1)))
             {
-                snort::AppIdServiceSubtype* sub;
+                AppIdServiceSubtype* sub;
 
                 pd->vendor = ven_po;
                 p += (sizeof(ven_po) - 1);
@@ -486,13 +497,11 @@ static int pop3_server_validate(POP3DetectorData* dd, const uint8_t* data, uint1
                     ;
                 if (p == s || p >= line_end || !(*p))
                     goto ven_ver_done;
-                sub = (snort::AppIdServiceSubtype*)snort_calloc(sizeof(snort::AppIdServiceSubtype));
                 unsigned sub_len;
 
                 sub_len = p - s;
-                sub->service = (const char*)snort_calloc(sub_len+1);
-                memcpy(const_cast<char*>(sub->service), s, sub_len);
-                (const_cast<char*>(sub->service))[sub_len] = 0;
+                sub = new AppIdServiceSubtype();
+                sub->service.assign(reinterpret_cast<const char*>(s), sub_len);
                 sub->next = pd->subtype;
                 pd->subtype = sub;
                 if (line_end-p > (int)sizeof(subver_po)-1
@@ -504,9 +513,7 @@ static int pop3_server_validate(POP3DetectorData* dd, const uint8_t* data, uint1
                     if (p != s && p < line_end && *p)
                     {
                         sub_len = p - s;
-                        sub->version = (const char*)snort_calloc(sub_len+1);
-                        memcpy(const_cast<char*>(sub->version), s, sub_len);
-                        (const_cast<char*>(sub->version))[sub_len] = 0;
+                        sub->version.assign(reinterpret_cast<const char*>(s), sub_len);
                     }
                 }
             }
@@ -572,7 +579,7 @@ int Pop3ClientDetector::validate(AppIdDiscoveryArgs& args)
 
     if (args.dir == APP_ID_FROM_RESPONDER)
     {
-        if (pop3_server_validate(dd, args.data, args.size, args.asd, 0))
+        if (pop3_server_validate(dd, args.data, args.size, args.asd, 0, args.change_bits))
             args.asd.clear_session_flags(APPID_SESSION_CLIENT_GETS_SERVER_PACKETS);
         return APPID_INPROCESS;
     }
@@ -607,6 +614,8 @@ int Pop3ClientDetector::validate(AppIdDiscoveryArgs& args)
             {
             case PATTERN_STLSEOC:
             case PATTERN_STLSEOC2:
+            case PATTERN_STLSEOC3:
+            case PATTERN_STLSEOC4:
             {
                 /* If the STLS command succeeds we will be in a TLS negotiation state.
                    Wait for the "+OK" from the server using this STLS hybrid state. */
@@ -709,7 +718,7 @@ int Pop3ClientDetector::validate(AppIdDiscoveryArgs& args)
             if (pattern_index >= PATTERN_POP3_OTHER)
             {
                 // Still in non-secure mode and received a TRANSACTION-state command: POP3 found
-                add_app(args.asd, APP_ID_POP3, APP_ID_POP3, nullptr);
+                add_app(args.asd, APP_ID_POP3, APP_ID_POP3, nullptr, args.change_bits);
                 fd->detected = 1;
             }
             else
@@ -787,14 +796,14 @@ int Pop3ServiceDetector::validate(AppIdDiscoveryArgs& args)
             return APPID_SUCCESS;
     }
 
-    if (!pop3_server_validate(dd, args.data, args.size, args.asd, 1))
+    if (!pop3_server_validate(dd, args.data, args.size, args.asd, 1, args.change_bits))
     {
         if (pd->count >= POP3_COUNT_THRESHOLD
             && !args.asd.is_service_detected())
         {
             add_service_consume_subtype(args.asd, args.pkt, args.dir,
                 dd->client.state == POP3_CLIENT_STATE_STLS_CMD ? APP_ID_POP3S : APP_ID_POP3,
-                pd->vendor, pd->version[0] ? pd->version : nullptr, pd->subtype);
+                pd->vendor, pd->version[0] ? pd->version : nullptr, pd->subtype, args.change_bits);
             pd->subtype = nullptr;
             return APPID_SUCCESS;
         }

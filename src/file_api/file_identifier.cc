@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <cassert>
 
+#include "hash/ghash.h"
 #include "log/messages.h"
 #include "utils/util.h"
 
@@ -68,22 +69,17 @@ void FileMagicRule::clear()
 
 void FileIdentifier::init_merge_hash()
 {
-    identifier_merge_hash = snort::ghash_new(1000, sizeof(MergeNode), 0, nullptr);
-    assert(identifier_merge_hash);
+    identifier_merge_hash = new GHash(1000, sizeof(MergeNode), 0, nullptr);
 }
 
 FileIdentifier::~FileIdentifier()
 {
     /*Release memory used for identifiers*/
     for (auto mem_block:id_memory_blocks)
-    {
         snort_free(mem_block);
-    }
 
     if (identifier_merge_hash != nullptr)
-    {
-        ghash_delete(identifier_merge_hash);
-    }
+        delete identifier_merge_hash;
 }
 
 void* FileIdentifier::calloc_mem(size_t size)
@@ -91,7 +87,7 @@ void* FileIdentifier::calloc_mem(size_t size)
     void* ret = snort_calloc(size);
     memory_used += size;
     /*For memory management*/
-    id_memory_blocks.push_back(ret);
+    id_memory_blocks.emplace_back(ret);
     return ret;
 }
 
@@ -176,7 +172,7 @@ IdentifierNode* FileIdentifier::create_trie_from_magic(FileMagicRule& rule, uint
 
 /*This function examines whether to update the trie based on shared state*/
 
-bool FileIdentifier::update_next(IdentifierNode* start,IdentifierNode** next_ptr,
+bool FileIdentifier::update_next(IdentifierNode* start, IdentifierNode** next_ptr,
     IdentifierNode* append)
 {
     IdentifierNode* next = (*next_ptr);
@@ -195,7 +191,7 @@ bool FileIdentifier::update_next(IdentifierNode* start,IdentifierNode** next_ptr
         set_node_state_shared(append);
         return false;
     }
-    else if ((result = (IdentifierNode*)ghash_find(identifier_merge_hash, &merge_node)))
+    else if ((result = (IdentifierNode*)identifier_merge_hash->find(&merge_node)))
     {
         /*the same pointer has been processed, reuse it*/
         *next_ptr = result;
@@ -220,7 +216,7 @@ bool FileIdentifier::update_next(IdentifierNode* start,IdentifierNode** next_ptr
 
             set_node_state_shared(next);
             next = node;
-            ghash_add(identifier_merge_hash, &merge_node, next);
+            identifier_merge_hash->insert(&merge_node, next);
         }
         else if (next->state == ID_NODE_SHARED)
         {
@@ -230,7 +226,7 @@ bool FileIdentifier::update_next(IdentifierNode* start,IdentifierNode** next_ptr
             merge_node.append_node = append;
             next = clone_node(current_next);
             set_node_state_shared(next);
-            ghash_add(identifier_merge_hash, &merge_node, next);
+            identifier_merge_hash->insert(&merge_node, next);
         }
 
         *next_ptr = next;
@@ -363,7 +359,7 @@ uint32_t FileIdentifier::find_file_type_id(const uint8_t* buf, int len, uint64_t
     return file_type_id;
 }
 
-FileMagicRule* FileIdentifier::get_rule_from_id(uint32_t id)
+const FileMagicRule* FileIdentifier::get_rule_from_id(uint32_t id) const
 {
     if ((id < FILE_ID_MAX) && (file_magic_rules[id].id > 0))
     {
@@ -374,7 +370,7 @@ FileMagicRule* FileIdentifier::get_rule_from_id(uint32_t id)
 }
 
 void FileIdentifier::get_magic_rule_ids_from_type(const std::string& type,
-    const std::string& version, snort::FileTypeBitSet& ids_set)
+    const std::string& version, FileTypeBitSet& ids_set) const
 {
     ids_set.reset();
 
@@ -412,7 +408,7 @@ TEST_CASE ("FileIdRulePDF", "[FileMagic]")
     FileMagicRule rule;
 
     rule.type = "pdf";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 1;
 
     FileIdentifier rc;
@@ -436,7 +432,7 @@ TEST_CASE ("FileIdRuleUnknow", "[FileMagic]")
     FileMagicRule rule;
 
     rule.type = "pdf";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 1;
 
     FileIdentifier rc;
@@ -461,7 +457,7 @@ TEST_CASE ("FileIdRuleEXE", "[FileMagic]")
     FileMagicRule rule;
 
     rule.type = "exe";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 1;
 
     FileIdentifier rc;
@@ -473,7 +469,7 @@ TEST_CASE ("FileIdRuleEXE", "[FileMagic]")
 
     rule.clear();
     rule.type = "exe";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 3;
 
     rc.insert_file_rule(rule);
@@ -494,7 +490,7 @@ TEST_CASE ("FileIdRulePDFEXE", "[FileMagic]")
     FileMagicRule rule;
 
     rule.type = "exe";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 1;
 
     FileIdentifier rc;
@@ -506,7 +502,7 @@ TEST_CASE ("FileIdRulePDFEXE", "[FileMagic]")
 
     rule.clear();
     rule.type = "exe";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 3;
 
     rc.insert_file_rule(rule);
@@ -528,7 +524,7 @@ TEST_CASE ("FileIdRuleFirst", "[FileMagic]")
     FileMagicRule rule;
 
     rule.type = "exe";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 1;
 
     FileIdentifier rc;
@@ -540,7 +536,7 @@ TEST_CASE ("FileIdRuleFirst", "[FileMagic]")
 
     rule.clear();
     rule.type = "exe";
-    rule.file_magics.push_back(magic);
+    rule.file_magics.emplace_back(magic);
     rule.id = 3;
 
     rc.insert_file_rule(rule);

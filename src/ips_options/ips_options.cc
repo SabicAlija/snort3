@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -48,11 +48,14 @@ extern const BaseApi* ips_so;
 extern const BaseApi* ips_ack[];
 extern const BaseApi* ips_asn1[];
 extern const BaseApi* ips_base64[];
+extern const BaseApi* ips_ber_data[];
+extern const BaseApi* ips_ber_skip[];
 extern const BaseApi* ips_byte_extract[];
 extern const BaseApi* ips_byte_jump[];
 extern const BaseApi* ips_byte_math[];
 extern const BaseApi* ips_byte_test[];
 extern const BaseApi* ips_cvs[];
+extern const BaseApi* ips_enable[];
 extern const BaseApi* ips_file_type[];
 extern const BaseApi* ips_flags[];
 extern const BaseApi* ips_fragbits[];
@@ -74,7 +77,6 @@ extern const BaseApi* ips_rem[];
 extern const BaseApi* ips_rev[];
 extern const BaseApi* ips_rpc[];
 extern const BaseApi* ips_seq[];
-extern const BaseApi* ips_session[];
 extern const BaseApi* ips_sid[];
 extern const BaseApi* ips_soid[];
 extern const BaseApi* ips_target[];
@@ -118,11 +120,14 @@ void load_ips_options()
     PluginManager::load_plugins(ips_ack);
     PluginManager::load_plugins(ips_asn1);
     PluginManager::load_plugins(ips_base64);
+    PluginManager::load_plugins(ips_ber_data);
+    PluginManager::load_plugins(ips_ber_skip);
     PluginManager::load_plugins(ips_byte_extract);
     PluginManager::load_plugins(ips_byte_jump);
     PluginManager::load_plugins(ips_byte_math);
     PluginManager::load_plugins(ips_byte_test);
     PluginManager::load_plugins(ips_cvs);
+    PluginManager::load_plugins(ips_enable);
     PluginManager::load_plugins(ips_file_type);
     PluginManager::load_plugins(ips_flags);
     PluginManager::load_plugins(ips_fragbits);
@@ -144,7 +149,6 @@ void load_ips_options()
     PluginManager::load_plugins(ips_rev);
     PluginManager::load_plugins(ips_rpc);
     PluginManager::load_plugins(ips_seq);
-    PluginManager::load_plugins(ips_session);
     PluginManager::load_plugins(ips_sid);
     PluginManager::load_plugins(ips_soid);
     PluginManager::load_plugins(ips_target);

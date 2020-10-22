@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,6 +30,7 @@
 #include "request.h"
 #include "shell.h"
 
+using namespace snort;
 using namespace std;
 
 //------------------------------------------------------------------------
@@ -61,8 +62,8 @@ void ControlConn::configure() const
 
 int ControlConn::shell_execute(int& current_fd, Request*& current_request)
 {
-    if ( !request->read(fd) )
-        return fd;
+    if ( !request->read() )
+        return -1;
 
     current_fd = fd;
     current_request = request;
@@ -91,14 +92,11 @@ void ControlConn::unblock()
         ControlMgmt::delete_control(fd);
 }
 
-bool ControlConn::send_queued_response()
+void ControlConn::send_queued_response()
 {
-    if ( !request->send_queued_response() )
-    {
-        ControlMgmt::delete_control(fd);
-        return false;
-    }
-    return true;
+#ifdef SHELL
+    request->send_queued_response();
+#endif
 }
 
 // FIXIT-L would like to flush prompt w/o \n

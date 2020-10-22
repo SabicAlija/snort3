@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -48,8 +48,10 @@ static void LogBuffer(const char* s, const uint8_t* p, unsigned n)
     if ( !p )
         return;
 
-    if ( n > SnortConfig::get_conf()->event_trace_max )
-        n = SnortConfig::get_conf()->event_trace_max;
+    const SnortConfig* sc = SnortConfig::get_conf();
+
+    if ( n > sc->event_trace_max )
+        n = sc->event_trace_max;
 
     for ( idx = 0; idx < n; idx++)
     {
@@ -84,9 +86,9 @@ void EventTrace_Log(const Packet* p, const OptTreeNode* otn, int action)
         event_id, otn->sigInfo.gid, otn->sigInfo.sid, otn->sigInfo.rev, acts);
 
     TextLog_Print(tlog,
-        "Pkt=%lu, Sec=%u.%6u, Len=%u, Cap=%u\n",
-        p->context->packet_number, p->pkth->ts.tv_sec, p->pkth->ts.tv_usec,
-        p->pkth->pktlen, p->pkth->caplen);
+        "Pkt=" STDu64 ", Sec=%lu.%6lu, Len=%u, Cap=%u\n",
+        p->context->packet_number, (long)p->pkth->ts.tv_sec, (long)p->pkth->ts.tv_usec,
+        p->pkth->pktlen, p->pktlen);
 
     TextLog_Print(tlog,
         "Pkt Bits: Flags=0x%X, Proto=0x%X, Err=0x%X\n",
@@ -96,7 +98,6 @@ void EventTrace_Log(const Packet* p, const OptTreeNode* otn, int action)
         "Pkt Cnts: Dsz=%u, Alt=%u\n",
         (unsigned)p->dsize, (unsigned)p->alt_dsize);
 
-    // FIXIT-L delete alt_dsize (only set by OHI)
     uint16_t n = p->alt_dsize > 0 ? p->alt_dsize : p->dsize;
     LogBuffer("Packet", p->data, n);
 
@@ -105,7 +106,9 @@ void EventTrace_Log(const Packet* p, const OptTreeNode* otn, int action)
 
 void EventTrace_Init()
 {
-    if ( SnortConfig::get_conf()->event_trace_max > 0 )
+    const SnortConfig* sc = SnortConfig::get_conf();
+
+    if ( sc->event_trace_max > 0 )
     {
         time_t now = time(nullptr);
         char time_buf[26];
@@ -113,7 +116,7 @@ void EventTrace_Init()
 
         tlog = TextLog_Init ("event_trace.txt", 4*1024, 8*1024*1024);
         TextLog_Print(tlog, "\nTrace started at %s", time_buf);
-        TextLog_Print(tlog, "Trace max_data is %u bytes\n", SnortConfig::get_conf()->event_trace_max);
+        TextLog_Print(tlog, "Trace max_data is %u bytes\n", sc->event_trace_max);
     }
 }
 

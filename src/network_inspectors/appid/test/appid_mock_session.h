@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -54,13 +54,16 @@ AppIdServiceSubtype APPID_UT_SERVICE_SUBTYPE = { nullptr, APPID_UT_SERVICE,
                                                  APPID_UT_SERVICE_VERSION };
 
 unsigned AppIdSession::inspector_id = 0;
+std::mutex AppIdSession::inferred_svcs_lock;
+uint16_t AppIdSession::inferred_svcs_ver = 0;
+uint32_t OdpContext::next_version = 0;
 
 class MockAppIdDnsSession : public AppIdDnsSession
 {
 public:
     MockAppIdDnsSession()
     {
-        host = (char*)APPID_ID_UT_DNS_HOST;
+        host = (const char*) APPID_ID_UT_DNS_HOST;
         host_offset = APPID_UT_DNS_HOST_OFFSET;
         record_type = APPID_UT_DNS_PATTERN_CNAME_REC;
         response_type = APPID_UT_DNS_NOERROR;
@@ -68,165 +71,128 @@ public:
     }
 };
 
-AppIdSession::AppIdSession(IpProtocol, const SfIp*, uint16_t, AppIdInspector& inspector)
-    : FlowData(inspector_id, &inspector), inspector(inspector)
+AppIdConfig::~AppIdConfig() { }
+OdpContext::OdpContext(const AppIdConfig&, snort::SnortConfig*) { }
+OdpContext::~OdpContext() { }
+
+static AppIdConfig stub_config;
+static AppIdContext stub_ctxt(stub_config);
+static OdpContext stub_odp_ctxt(stub_config, nullptr);
+OdpContext* AppIdContext::odp_ctxt = &stub_odp_ctxt;
+AppIdSession::AppIdSession(IpProtocol proto, const SfIp* ip, uint16_t, AppIdInspector& inspector,
+    OdpContext&) : FlowData(inspector_id, &inspector), config(stub_config),
+    protocol(proto), api(*(new AppIdSessionApi(this, *ip))), odp_ctxt(stub_odp_ctxt)
 {
-    common.flow_type = APPID_FLOW_TYPE_NORMAL;
+    odp_ctxt_version = odp_ctxt.get_version();
     service_port = APPID_UT_SERVICE_PORT;
+    AppidChangeBits change_bits;
 
-    client.update_user(APPID_UT_ID, APPID_UT_USERNAME);
-    client.set_version(APPID_UT_CLIENT_VERSION);
+    set_client_user(APPID_UT_ID, APPID_UT_USERNAME, change_bits);
+    set_client_version(APPID_UT_CLIENT_VERSION, change_bits);
 
-    service.set_vendor(APPID_UT_SERVICE_VENDOR);
-    service.set_version(APPID_UT_SERVICE_VERSION);
-    subtype = &APPID_UT_SERVICE_SUBTYPE;
-
-    search_support_type = UNKNOWN_SEARCH_ENGINE;
+    set_service_vendor(APPID_UT_SERVICE_VENDOR, change_bits);
+    set_service_version(APPID_UT_SERVICE_VERSION, change_bits);
+    add_service_subtype(*(new AppIdServiceSubtype(APPID_UT_SERVICE_SUBTYPE)), change_bits);
 
     tsession = new TlsSession;
-    tsession->tls_host = (char*)APPID_UT_TLS_HOST;
 
     service_ip.pton(AF_INET, APPID_UT_SERVICE_IP_ADDR);
-    common.initiator_ip.pton(AF_INET, APPID_UT_INITIATOR_IP_ADDR);
+    api.initiator_ip.pton(AF_INET, APPID_UT_INITIATOR_IP_ADDR);
 
     netbios_name = snort_strdup(APPID_UT_NETBIOS_NAME);
 
-    dsession = new MockAppIdDnsSession;
+    api.dsession = new MockAppIdDnsSession;
     tp_app_id = APPID_UT_ID;
-    service.set_id(APPID_UT_ID + 1);
+    set_service_id(APPID_UT_ID + 1, odp_ctxt);
     client_inferred_service_id = APPID_UT_ID + 2;
-    service.set_port_service_id(APPID_UT_ID + 3);
-    payload.set_id(APPID_UT_ID + 4);
+    set_port_service_id(APPID_UT_ID + 3);
+    set_payload_id(APPID_UT_ID + 4);
     tp_payload_app_id = APPID_UT_ID + 5;
-    client.set_id(APPID_UT_ID + 6);
+    set_client_id(APPID_UT_ID + 6);
     misc_app_id = APPID_UT_ID + 7;
 }
 
 AppIdSession::~AppIdSession()
 {
-    delete hsession;
     delete tsession;
-    delete dsession;
     if (netbios_name)
         snort_free(netbios_name);
 }
 
-DHCPInfo* dhcp_info = nullptr;
-DHCPData* dhcp_data = nullptr;
-FpSMBData* smb_data = nullptr;
-
-void* AppIdSession::get_flow_data(unsigned)
+void* AppIdSession::get_flow_data(unsigned) const
 {
     return nullptr;
 }
 
-int AppIdSession::add_flow_data(void* data, unsigned type, AppIdFreeFCN)
+int AppIdSession::add_flow_data(void*, unsigned, AppIdFreeFCN)
 {
-    if ( type == APPID_SESSION_DATA_DHCP_FP_DATA )
-    {
-        dhcp_data = (DHCPData*)data;
-        set_session_flags(APPID_SESSION_HAS_DHCP_FP);
-    }
-    else if (  type == APPID_SESSION_DATA_DHCP_INFO )
-    {
-        dhcp_info = (DHCPInfo*)data;
-        set_session_flags(APPID_SESSION_HAS_DHCP_INFO);
-    }
-    else if ( type == APPID_SESSION_DATA_SMB_DATA )
-    {
-        smb_data = (FpSMBData*)data;
-        set_session_flags(APPID_SESSION_HAS_SMB_INFO);
-    }
     return 0;
 }
 
-void* AppIdSession::remove_flow_data(unsigned type)
+AppId AppIdSession::pick_service_app_id() const
 {
-    void* data = nullptr;
-
-    if ( type == APPID_SESSION_DATA_DHCP_FP_DATA )
-    {
-        data = dhcp_data;
-        dhcp_data = nullptr;
-        clear_session_flags(APPID_SESSION_HAS_DHCP_FP);
-    }
-    else if (  type == APPID_SESSION_DATA_DHCP_INFO )
-    {
-        data = dhcp_info;
-        dhcp_info = nullptr;
-        clear_session_flags(APPID_SESSION_HAS_DHCP_INFO);
-    }
-    else if ( type == APPID_SESSION_DATA_SMB_DATA )
-    {
-        data = smb_data;
-        smb_data = nullptr;
-        clear_session_flags(APPID_SESSION_HAS_SMB_INFO);
-    }
-
-    return data;
+    return get_service_id();
 }
 
-void AppIdSession::set_application_ids(AppId, AppId, AppId, AppId) { }
+AppId AppIdSession::pick_ss_misc_app_id() const
+{
+    return misc_app_id;
+}
 
-AppId AppIdSession::pick_service_app_id()
+AppId AppIdSession::pick_ss_client_app_id() const
+{
+    return get_client_id();
+}
+
+AppId AppIdSession::pick_ss_payload_app_id() const
+{
+    return get_payload_id();
+}
+
+AppId AppIdSession::pick_ss_referred_payload_app_id() const
 {
     return APPID_UT_ID;
 }
 
-AppId AppIdSession::pick_misc_app_id()
-{
-    return APPID_UT_ID;
-}
-
-AppId AppIdSession::pick_client_app_id()
-{
-    return APPID_UT_ID;
-}
-
-AppId AppIdSession::pick_payload_app_id()
-{
-    return APPID_UT_ID;
-}
-
-AppId AppIdSession::pick_referred_payload_app_id()
-{
-    return APPID_UT_ID;
-}
-
-void AppIdSession::get_application_ids(AppId&, AppId&, AppId&, AppId&) { }
-
-void AppIdSession::get_application_ids(AppId&, AppId&, AppId&) { }
-
-AppId AppIdSession::get_application_ids_service() { return APPID_UT_ID; }
-
-AppId AppIdSession::get_application_ids_client() { return APPID_UT_ID; }
-
-AppId AppIdSession::get_application_ids_payload() { return APPID_UT_ID; }
-
-AppId AppIdSession::get_application_ids_misc() { return APPID_UT_ID; }
-
-AppId AppIdSession::pick_only_service_app_id()
-{
-    return APPID_UT_ID;
-}
-
-bool AppIdSession::is_ssl_session_decrypted()
+bool AppIdSession::is_ssl_session_decrypted() const
 {
     return is_session_decrypted;
 }
 
-AppIdHttpSession* AppIdSession::get_http_session()
+AppIdHttpSession* AppIdSession::create_http_session(uint32_t)
 {
-    if ( !hsession )
-        hsession = new MockAppIdHttpSession(*this);
+    AppIdHttpSession* hsession = new MockAppIdHttpSession(*this);
+    AppidChangeBits change_bits;
+
+    hsession->client.set_id(APPID_UT_ID);
+    hsession->client.set_version(APPID_UT_CLIENT_VERSION, change_bits);
+    hsession->payload.set_id(APPID_UT_ID);
+    hsession->misc_app_id = APPID_UT_ID;
+    hsession->referred_payload_app_id = APPID_UT_ID;
+    api.hsessions.push_back(hsession);
     return hsession;
 }
 
-AppIdDnsSession* AppIdSession::get_dns_session()
+AppIdHttpSession* AppIdSession::get_matching_http_session(uint32_t stream_id) const
 {
-    if ( !dsession )
-        dsession = new MockAppIdDnsSession();
-    return dsession;
+    for (uint32_t stream_index=0; stream_index < api.hsessions.size(); stream_index++)
+    {
+        if (stream_id == api.hsessions[stream_index]->get_http2_stream_id())
+            return api.hsessions[stream_index];
+    }
+    return nullptr;
+}
+
+AppIdDnsSession* AppIdSession::create_dns_session()
+{
+    if ( !api.dsession )
+        api.dsession = new MockAppIdDnsSession();
+    return api.dsession;
+}
+
+AppIdDnsSession* AppIdSession::get_dns_session() const
+{
+    return api.dsession;
 }
 
 bool AppIdSession::is_tp_appid_done() const

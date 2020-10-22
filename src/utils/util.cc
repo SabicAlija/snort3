@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -63,6 +63,10 @@ extern "C" {
 
 #include "util_cstring.h"
 
+#ifdef UNIT_TEST
+#include "catch/snort_catch.h"
+#endif
+
 using namespace snort;
 
 /****************************************************************************
@@ -82,35 +86,18 @@ void StoreSnortInfoStrings()
 #undef SNORT_VERSION_STRING
 #undef SNORT_VERSION_STRLEN
 
-/****************************************************************************
- *
- * Function: DisplayBanner()
- *
- * Purpose:  Show valuable proggie info
- *
- * Arguments: None.
- *
- * Returns: 0 all the time
- *
- ****************************************************************************/
 int DisplayBanner()
 {
-    const char* info = getenv("HOSTTYPE");
-
-    if ( !info )
-        info="from 2.9.11";  // last sync with head
-
     const char* ljv = LUAJIT_VERSION;
     while ( *ljv && !isdigit(*ljv) )
         ++ljv;
 
     LogMessage("\n");
     LogMessage("   ,,_     -*> Snort++ <*-\n");
-    LogMessage("  o\"  )~   Version %s (Build %s) %s\n",
-        VERSION, BUILD, info);
+    LogMessage("  o\"  )~   Version %s (Build %s)\n", VERSION, BUILD);
     LogMessage("   ''''    By Martin Roesch & The Snort Team\n");
     LogMessage("           http://snort.org/contact#team\n");
-    LogMessage("           Copyright (C) 2014-2018 Cisco and/or its affiliates."
+    LogMessage("           Copyright (C) 2014-2020 Cisco and/or its affiliates."
                            " All rights reserved.\n");
     LogMessage("           Copyright (C) 1998-2013 Sourcefire, Inc., et al.\n");
     LogMessage("           Using DAQ version %s\n", daq_version_string());
@@ -133,91 +120,16 @@ int DisplayBanner()
     return 0;
 }
 
-/****************************************************************************
- *
- * Function: ts_print(const struct, char *)
- *
- * Purpose: Generate a time stamp and stuff it in a buffer.  This one has
- *          millisecond precision.  Oh yeah, I ripped this code off from
- *          TCPdump, props to those guys.
- *
- * Arguments: timeval => clock struct coming out of libpcap
- *            timebuf => buffer to stuff timestamp into
- *
- * Returns: void function
- *
- ****************************************************************************/
-void ts_print(const struct timeval* tvp, char* timebuf)
-{
-    struct timeval tv;
-    struct timezone tz;
-
-    /* if null was passed, we use current time */
-    if (!tvp)
-    {
-        /* manual page (for linux) says tz is never used, so.. */
-        memset((char*)&tz, 0, sizeof(tz));
-        gettimeofday(&tv, &tz);
-        tvp = &tv;
-    }
-
-    int localzone = SnortConfig::get_conf()->thiszone;
-
-    /*
-    **  If we're doing UTC, then make sure that the timezone is correct.
-    */
-    if (SnortConfig::output_use_utc())
-        localzone = 0;
-
-    int s = (tvp->tv_sec + localzone) % 86400;
-    time_t Time = (tvp->tv_sec + localzone) - s;
-
-    struct tm ttm;
-    struct tm* lt = gmtime_r(&Time, &ttm);
-
-    if ( !lt )
-    {
-        (void)SnortSnprintf(timebuf, TIMEBUF_SIZE, "%lu", tvp->tv_sec);
-
-    }
-    else if (SnortConfig::output_include_year())
-    {
-        int year = (lt->tm_year >= 100) ? (lt->tm_year - 100) : lt->tm_year;
-
-        (void)SnortSnprintf(timebuf, TIMEBUF_SIZE,
-            "%02d/%02d/%02d-%02d:%02d:%02d.%06u",
-            year, lt->tm_mon + 1, lt->tm_mday,
-            s / 3600, (s % 3600) / 60, s % 60,
-            (u_int)tvp->tv_usec);
-    }
-    else
-    {
-        (void)SnortSnprintf(timebuf, TIMEBUF_SIZE,
-            "%02d/%02d-%02d:%02d:%02d.%06u", lt->tm_mon + 1,
-            lt->tm_mday, s / 3600, (s % 3600) / 60, s % 60,
-            (u_int)tvp->tv_usec);
-    }
-}
-
-/****************************************************************************
- *
- * Function: gmt2local(time_t)
- *
- * Purpose: Figures out how to adjust the current clock reading based on the
- *          timezone you're in.  Ripped off from TCPdump.
- *
- * Arguments: time_t => offset from GMT
- *
- * Returns: offset seconds from GMT
- *
- ****************************************************************************/
+// get offset seconds from GMT
 int gmt2local(time_t t)
 {
     if (t == 0)
         t = time(nullptr);
 
     struct tm gmt;
-    gmtime_r(&t, &gmt);
+    struct tm* lt = gmtime_r(&t, &gmt);
+    if (lt == nullptr)
+        return 0;
 
     struct tm loc;
     localtime_r(&t, &loc);
@@ -240,14 +152,16 @@ static FILE* pid_file = nullptr;
 
 void CreatePidFile(pid_t pid)
 {
-    SnortConfig::get_conf()->pid_filename = SnortConfig::get_conf()->log_dir;
-    SnortConfig::get_conf()->pid_filename += "/snort.pid";
+    SnortConfig* sc = SnortConfig::get_main_conf();
+
+    sc->pid_filename = sc->log_dir;
+    sc->pid_filename += "/snort.pid";
 
     std::string pid_lockfilename;
 
-    if ( !SnortConfig::no_lock_pid_file() )
+    if ( !sc->no_lock_pid_file() )
     {
-        pid_lockfilename = SnortConfig::get_conf()->pid_filename;
+        pid_lockfilename = sc->pid_filename;
         pid_lockfilename += ".lck";
 
         /* First, lock the PID file */
@@ -267,43 +181,33 @@ void CreatePidFile(pid_t pid)
             {
                 ClosePidFile();
                 ParseError("Failed to Lock PID File \"%s\" for PID \"%d\"",
-                    SnortConfig::get_conf()->pid_filename.c_str(), (int)pid);
+                    sc->pid_filename.c_str(), (int)pid);
                 return;
             }
         }
     }
 
     /* Okay, were able to lock PID file, now open and write PID */
-    pid_file = fopen(SnortConfig::get_conf()->pid_filename.c_str(), "w");
+    pid_file = fopen(sc->pid_filename.c_str(), "w");
     if (pid_file)
     {
         LogMessage("Writing PID \"%d\" to file \"%s\"\n", (int)pid,
-            SnortConfig::get_conf()->pid_filename.c_str());
+            sc->pid_filename.c_str());
         fprintf(pid_file, "%d\n", (int)pid);
         fflush(pid_file);
     }
     else
     {
+        fclose(pid_lockfile);
         const char* error = get_error(errno);
-        ErrorMessage("Failed to create pid file %s, Error: %s",
-            SnortConfig::get_conf()->pid_filename.c_str(), error);
-        SnortConfig::get_conf()->pid_filename.clear();
+        ErrorMessage("Failed to create pid file %s, Error: %s\n",
+            sc->pid_filename.c_str(), error);
+        sc->pid_filename.clear();
     }
     if ( !pid_lockfilename.empty() )
         unlink(pid_lockfilename.c_str());
 }
 
-/****************************************************************************
- *
- * Function: ClosePidFile(char *)
- *
- * Purpose:  Releases lock on a PID file
- *
- * Arguments: None
- *
- * Returns: void function
- *
- ****************************************************************************/
 void ClosePidFile()
 {
     if (pid_file)
@@ -318,29 +222,12 @@ void ClosePidFile()
     }
 }
 
-/****************************************************************************
- *
- * Function: SetUidGid()
- *
- * Purpose:  Sets safe UserID and GroupID if needed
- *
- * Arguments: none
- *
- * Returns: void function
- *
- ****************************************************************************/
+// set safe UserID and GroupID, if needed
 bool SetUidGid(int user_id, int group_id)
 {
     // Were any changes requested?
     if (group_id == -1 && user_id == -1)
         return true;
-
-    // FIXIT-L Move this check to Snort::drop_privileges()
-    if (!SFDAQ::unprivileged())
-    {
-        ParseError("Cannot drop privileges - %s DAQ does not support unprivileged operation.\n", SFDAQ::get_type());
-        return false;
-    }
 
     if (group_id != -1)
     {
@@ -365,18 +252,7 @@ bool SetUidGid(int user_id, int group_id)
     return true;
 }
 
-/****************************************************************************
- *
- * Function: InitGroups()
- *
- * Purpose:  Sets the groups of the process based on the UserID with the
- *           GroupID added
- *
- * Arguments: none
- *
- * Returns: void function
- *
- ****************************************************************************/
+// set the groups of the process based on the UserID with the GroupID added
 void InitGroups(int user_id, int group_id)
 {
     if ((user_id != -1) && (getuid() == 0))
@@ -445,25 +321,22 @@ void CleanupProtoNames()
     }
 }
 
-/****************************************************************************
- *
- * Function: read_infile(const char* key, const char* file)
- *
- * Purpose: Reads the BPF filters in from a file.  Ripped from tcpdump.
- *
- * Arguments: fname => the name of the file containing the BPF filters
- *
- * Returns: the processed BPF string
- *
- ****************************************************************************/
+// read the BPF filters in from a file, return the processed BPF string
 std::string read_infile(const char* key, const char* fname)
 {
     int fd = open(fname, O_RDONLY);
     struct stat buf;
 
+    if (fd < 0)
+    {
+        ErrorMessage("Failed to open file: %s with error: %s", fname, get_error(errno));
+        return "";
+    }
+
     if (fstat(fd, &buf) < 0)
     {
         ParseError("can't stat %s: %s", fname, get_error(errno));
+        close(fd);
         return "";
     }
 
@@ -471,6 +344,7 @@ std::string read_infile(const char* key, const char* fname)
     if (!S_ISREG(buf.st_mode) )
     {
         ParseError("not a regular file: %s", fname);
+        close(fd);
         return "";
     }
 
@@ -488,9 +362,10 @@ std::string read_infile(const char* key, const char* fname)
     else
     {
         ParseError("can't open file %s = %s: %s", key, fname, get_error(errno));
-        return "";  
+        close(fd);
+        return "";
     }
-
+    close(fd);
     return line;
 }
 
@@ -519,9 +394,7 @@ static char* GetAbsolutePath(const char* dir, PathBuf& buf)
     return buf;
 }
 
-/**
- * Chroot and adjust the SnortConfig::get_conf()->log_dir reference
- */
+// Chroot and adjust the log_dir reference
 bool EnterChroot(std::string& root_dir, std::string& log_dir)
 {
     if (log_dir.empty())
@@ -605,8 +478,7 @@ const char* get_error(int errnum)
 {
     static THREAD_LOCAL char buf[128];
 
-#if (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE < 200112L && \
-        defined(_XOPEN_SOURCE) && _XOPEN_SOURCE < 600) || _GNU_SOURCE
+#if defined(HAVE_GNU_STRERROR_R)
     return strerror_r(errnum, buf, sizeof(buf));
 #else
     (void)strerror_r(errnum, buf, sizeof(buf));
@@ -636,6 +508,69 @@ char* snort_strdup(const char* str)
     return p;
 }
 
+void ts_print(const struct timeval* tvp, char* timebuf, bool yyyymmdd)
+{
+    struct timeval tv;
+    struct timezone tz;
+
+    // if null was passed, use current time
+    if (!tvp)
+    {
+        // manual page (for linux) says tz is never used, so..
+        memset((char*)&tz, 0, sizeof(tz));
+        gettimeofday(&tv, &tz);
+        tvp = &tv;
+    }
+
+    const SnortConfig* sc = SnortConfig::get_conf();
+    int localzone = sc->thiszone;
+
+    // If we're doing UTC, then make sure that the timezone is correct.
+    if (sc->output_use_utc())
+        localzone = 0;
+
+    int s = (tvp->tv_sec + localzone) % SECONDS_PER_DAY;
+    time_t Time = (tvp->tv_sec + localzone) - s;
+
+    struct tm ttm;
+    struct tm* lt = gmtime_r(&Time, &ttm);
+
+    if ( !lt )
+    {
+        (void)SnortSnprintf(timebuf, TIMEBUF_SIZE, "%lu", tvp->tv_sec);
+
+    }
+    else if (sc->output_include_year())
+    {
+        int year = (lt->tm_year >= 100) ? (lt->tm_year - 100) : lt->tm_year;
+
+        (void)SnortSnprintf(timebuf, TIMEBUF_SIZE,
+            "%02d/%02d/%02d-%02d:%02d:%02d.%06u",
+            year, lt->tm_mon + 1, lt->tm_mday,
+            s / 3600, (s % 3600) / 60, s % 60,
+            (unsigned)tvp->tv_usec);
+    }
+    else if (yyyymmdd)
+    {
+        (void)SnortSnprintf(timebuf, TIMEBUF_SIZE,
+            "%04d-%02d-%02d %02d:%02d:%02d.%06u",
+            lt->tm_year + 1900, lt->tm_mon + 1, lt->tm_mday,
+            s / 3600, (s % 3600) / 60, s % 60,
+            (unsigned)tvp->tv_usec);
+    }
+    else
+    {
+        (void)SnortSnprintf(timebuf, TIMEBUF_SIZE,
+            "%02d/%02d-%02d:%02d:%02d.%06u", lt->tm_mon + 1,
+            lt->tm_mday, s / 3600, (s % 3600) / 60, s % 60,
+            (unsigned)tvp->tv_usec);
+    }
+}
 }
 
-
+#ifdef UNIT_TEST
+TEST_CASE("gmt2local_time_out_of_range", "[util]")
+{
+    REQUIRE((gmt2local(0xffffffff1fff2f)==0));
+}
+#endif

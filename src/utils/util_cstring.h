@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -109,7 +109,7 @@ inline int SnortStrToU32(const char* buffer, char** endptr,
         buffer++;
 
     // If all spaces or a negative sign is found, return error.
-    // XXX May also want to exclude '+' as well.
+    // May want to exclude '+' as well.
     if ((*buffer == '\0') || (*buffer == '-'))
         return -1;
 

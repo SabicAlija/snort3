@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,11 +25,15 @@
 
 #include "flow/flow.h"
 #include "main/snort_types.h"
+#include "utils/event_gen.h"
 
 #include "file_api.h"
 #include "file_module.h"
 #include "file_policy.h"
 
+#include <map>
+
+using FileEventGen = EventGen<EVENT__MAX_VALUE, EVENT__NONE, FILE_ID_GID>;
 
 namespace snort
 {
@@ -43,6 +47,7 @@ public:
     ~FileInspect() override;
     void eval(Packet*) override { }
     bool configure(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     FileConfig* config;
 };
 
@@ -65,12 +70,19 @@ public:
 
     void set_current_file_context(FileContext*);
 
-    // Get file context based on file id, create it if not existed
-    FileContext* get_file_context(uint64_t file_id, bool to_create);
+    // Get file context based on file id, create it if does not exist
+    FileContext* get_file_context(uint64_t file_id, bool to_create,
+        uint64_t multi_file_processing_id=0);
+    // Get a partially processed file context from the flow object
+    FileContext* get_partially_processed_context(uint64_t file_id);
+    // Remove a file from the flow object when processing is complete
+    void remove_processed_file_context(uint64_t file_id);
+
+    void remove_processed_file_context(uint64_t file_id, uint64_t multi_file_processing_id);
 
     uint64_t get_new_file_instance();
 
-    void set_file_name(const uint8_t* fname, uint32_t name_size);
+    void set_file_name(const uint8_t* fname, uint32_t name_size, uint64_t file_id=0);
 
     void set_sig_gen_state( bool enable )
     {
@@ -80,17 +92,21 @@ public:
     void add_pending_file(uint64_t file_id);
 
     // This is used when there is only one file per session
-    bool file_process(const uint8_t* file_data, int data_size, FilePosition,
+    bool file_process(Packet* p, const uint8_t* file_data, int data_size, FilePosition,
         bool upload, size_t file_index = 0);
 
     // This is used for each file context. Support multiple files per session
-    bool file_process(uint64_t file_id, const uint8_t* file_data,
-        int data_size, uint64_t offset, FileDirection);
+    bool file_process(Packet* p, uint64_t file_id, const uint8_t* file_data,
+        int data_size, uint64_t offset, FileDirection, uint64_t multi_file_processing_id=0,
+        FilePosition=SNORT_FILE_POSITION_UNKNOWN);
 
     static unsigned file_flow_data_id;
 
     void set_file_policy(FilePolicyBase* fp) { file_policy = fp; }
     FilePolicyBase* get_file_policy() { return file_policy; }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 private:
     void init_file_context(FileDirection, FileContext*);
@@ -102,6 +118,10 @@ private:
     bool gen_signature = false;
     Flow* flow = nullptr;
     FilePolicyBase* file_policy = nullptr;
+
+    std::unordered_map<uint64_t, FileContext*> partially_processed_contexts;
+    bool current_context_delete_pending = false;
+    FileEventGen events;
 };
 }
 #endif

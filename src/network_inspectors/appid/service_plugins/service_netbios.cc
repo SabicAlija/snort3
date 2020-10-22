@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,9 +25,11 @@
 
 #include "service_netbios.h"
 
+#include "protocols/packet.h"
+#include "utils/endian.h"
+
 #include "app_info_table.h"
 #include "dcerpc.h"
-#include "protocols/packet.h"
 
 using namespace snort;
 
@@ -74,8 +76,6 @@ enum NBSSState
 
 #define NBDGM_ERROR_CODE_MIN    0x82
 #define NBDGM_ERROR_CODE_MAX    0x84
-
-#define min(x,y) ((x)<(y) ? (x) : (y))
 
 #define FINGERPRINT_UDP_FLAGS_XENIX 0x00000800
 #define FINGERPRINT_UDP_FLAGS_NT    0x00001000
@@ -277,9 +277,6 @@ struct NBDgmError
 };
 
 #pragma pack()
-
-// FIXIT-L - make this a class member var
-static THREAD_LOCAL FpSMBData* smb_data_free_list = nullptr;
 
 static int netbios_validate_name_and_decode(const uint8_t** data,
     const uint8_t* const begin,
@@ -548,7 +545,7 @@ int NbnsServiceDetector::validate(AppIdDiscoveryArgs& args)
     }
 
 success:
-    return add_service(args.asd, args.pkt, dir, APP_ID_NETBIOS_NS);
+    return add_service(args.change_bits, args.asd, args.pkt, dir, APP_ID_NETBIOS_NS);
 
 inprocess:
     service_inprocess(args.asd, args.pkt, dir);
@@ -652,7 +649,7 @@ static inline void smb_find_domain(const uint8_t* data, uint16_t size, const int
         return;
     data += wc;
     size -= wc;
-    byte_count = LETOHS(data);
+    byte_count = LETOHS_UNALIGNED(data);
     data += sizeof(byte_count);
     size -= sizeof(byte_count);
     if (size < byte_count)
@@ -663,7 +660,7 @@ static inline void smb_find_domain(const uint8_t* data, uint16_t size, const int
     {
         if (wc == 8)
         {
-            uint16_t sec_len = LETOHS(&resp->sec_len);
+            uint16_t sec_len = LETOHS_UNALIGNED(&resp->sec_len);
             if (sec_len >= byte_count)
                 return;
             data += sec_len;
@@ -683,7 +680,7 @@ static inline void smb_find_domain(const uint8_t* data, uint16_t size, const int
     {
         if (wc == 34)
         {
-            capabilities = LETOHL(&np->capabilities);
+            capabilities = LETOHL_UNALIGNED(&np->capabilities);
             if (capabilities & SERVICE_SMB_CAPABILITIES_EXTENDED_SECURITY)
                 return;
             unicode = (capabilities & SERVICE_SMB_CAPABILITIES_UNICODE) || unicode;
@@ -863,7 +860,7 @@ int NbssServiceDetector::validate(AppIdDiscoveryArgs& args)
                 }
                 else if (tmp >= 4 && nd->length >= 4 &&
                     !(*((const uint32_t*)data)) &&
-                    dcerpc_validate(data+4, ((int)min(tmp, nd->length)) - 4) > 0)
+                    dcerpc_validate(data+4, ((int)std::min(tmp, nd->length)) - 4) > 0)
                 {
                     nd->serviceAppId = APP_ID_DCE_RPC;
                     nd->miscAppId = APP_ID_NETBIOS_SSN;
@@ -925,7 +922,7 @@ int NbssServiceDetector::validate(AppIdDiscoveryArgs& args)
                 }
                 else if (tmp >= 4 && nd->length >= 4 &&
                     !(*((const uint32_t*)data)) &&
-                    !(dcerpc_validate(data+4, ((int)min(tmp, nd->length)) - 4) > 0))
+                    !(dcerpc_validate(data+4, ((int)std::min(tmp, nd->length)) - 4) > 0))
                 {
                     nd->serviceAppId = APP_ID_DCE_RPC;
                     nd->miscAppId = APP_ID_NETBIOS_SSN;
@@ -983,7 +980,7 @@ int NbssServiceDetector::validate(AppIdDiscoveryArgs& args)
         goto inprocess;
 
     if ( !args.asd.is_service_detected() )
-        if ( add_service(args.asd, args.pkt, dir, nd->serviceAppId) == APPID_SUCCESS )
+        if ( add_service(args.change_bits, args.asd, args.pkt, dir, nd->serviceAppId) == APPID_SUCCESS )
             add_miscellaneous_info(args.asd, nd->miscAppId);
     return APPID_SUCCESS;
 
@@ -1016,22 +1013,6 @@ NbdgmServiceDetector::NbdgmServiceDetector(ServiceDiscovery* sd)
     };
 
     handler->register_detector(name, this, proto);
-}
-
-NbdgmServiceDetector::~NbdgmServiceDetector()
-{
-    release_thread_resources();
-}
-
-void NbdgmServiceDetector::release_thread_resources()
-{
-    FpSMBData* sd;
-
-    while ((sd = smb_data_free_list))
-    {
-        smb_data_free_list = sd->next;
-        snort_free(sd);
-    }
 }
 
 int NbdgmServiceDetector::validate(AppIdDiscoveryArgs& args)
@@ -1128,7 +1109,7 @@ int NbdgmServiceDetector::validate(AppIdDiscoveryArgs& args)
             {
                 goto not_mailslot;
             }
-            server_type = LETOHL(&browser->server_type);
+            server_type = LETOHL_UNALIGNED(&browser->server_type);
             add_smb_info(args.asd, browser->major, browser->minor, server_type);
         }
 not_mailslot:
@@ -1166,7 +1147,7 @@ success:
     {
         if ( dir == APP_ID_FROM_RESPONDER )
         {
-            if ( add_service(args.asd, args.pkt, dir, serviceAppId) == APPID_SUCCESS )
+            if ( add_service(args.change_bits, args.asd, args.pkt, dir, serviceAppId) == APPID_SUCCESS )
                 add_miscellaneous_info(args.asd, miscAppId);
         }
     }
@@ -1185,14 +1166,9 @@ void NbdgmServiceDetector::add_smb_info(AppIdSession& asd, unsigned major, unsig
 
     if ( flags & FINGERPRINT_UDP_FLAGS_XENIX )
         return;
-
-    if ( smb_data_free_list )
-    {
-        sd = smb_data_free_list;
-        smb_data_free_list = sd->next;
-    }
-    else
-        sd = (FpSMBData*)snort_calloc(sizeof(FpSMBData));
+    if ( asd.get_session_flags(APPID_SESSION_HAS_SMB_INFO) )
+        return;
+    sd = (FpSMBData*)snort_calloc(sizeof(FpSMBData));
 
     if ( asd.add_flow_data(sd, APPID_SESSION_DATA_SMB_DATA, (AppIdFreeFCN)AppIdFreeSMBData) )
     {
@@ -1208,10 +1184,6 @@ void NbdgmServiceDetector::add_smb_info(AppIdSession& asd, unsigned major, unsig
 
 void NbdgmServiceDetector::AppIdFreeSMBData(FpSMBData* sd)
 {
-    if ( sd )
-    {
-        sd->next = smb_data_free_list;
-        smb_data_free_list = sd;
-    }
+    snort_free(sd);
 }
 

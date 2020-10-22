@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 
 enum class IpProtocol : uint8_t;
 
+class AppIdContext;
 class AppIdSession;
 
 namespace snort
@@ -51,15 +52,41 @@ class SO_PUBLIC AppIdApi
 public:
     SO_PRIVATE AppIdApi() = default;
 
-    AppIdSession* get_appid_session(Flow& flow);
-    const char* get_application_name(AppId app_id);
-    const char* get_application_name(Flow& flow, bool from_client);
-    AppId get_application_id(const char* appName);
-    uint32_t produce_ha_state(Flow& flow, uint8_t* buf);
+    AppIdSession* get_appid_session(const Flow& flow);
+    const char* get_application_name(AppId app_id, OdpContext& odp_ctxt);
+    const char* get_application_name(AppId app_id, const Flow& flow);
+    const char* get_application_name(const Flow& flow, bool from_client);
+    AppId get_application_id(const char* appName, const AppIdContext& ctxt);
+    uint32_t produce_ha_state(const Flow& flow, uint8_t* buf);
     uint32_t consume_ha_state(Flow& flow, const uint8_t* buf, uint8_t length, IpProtocol,
         SfIp*, uint16_t initiatorPort);
-    AppIdSessionApi* create_appid_session_api(Flow& flow);
-    void free_appid_session_api(AppIdSessionApi* api);
+    bool ssl_app_group_id_lookup(Flow* flow, const char*, const char*, const char*,
+        const char*, bool, AppId& service_id, AppId& client_id, AppId& payload_id);
+    const AppIdSessionApi* get_appid_session_api(const Flow& flow) const;
+    bool is_inspection_needed(const Inspector& g) const;
+
+    bool is_service_http_type(AppId service_id) const
+    {
+        switch (service_id)
+        {
+            case APP_ID_HTTP:
+            case APP_ID_HTTPS:
+            case APP_ID_HTTP2:
+            case APP_ID_FTPS:
+            case APP_ID_IMAPS:
+            case APP_ID_IRCS:
+            case APP_ID_LDAPS:
+            case APP_ID_NNTPS:
+            case APP_ID_POP3S:
+            case APP_ID_SMTPS:
+            case APP_ID_SSHELL:
+            case APP_ID_SSL:
+            case APP_ID_QUIC:
+                return true;
+        }
+
+        return false;
+    }
 };
 
 SO_PUBLIC extern AppIdApi appid_api;

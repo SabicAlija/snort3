@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,90 +40,31 @@
 
 #include "ftp_cmd_lookup.h"
 
+#include <cassert>
+
 #include "ft_main.h"
 #include "ftpp_return_codes.h"
 
 using namespace snort;
 
-/*
- * Function: ftp_cmd_lookup_init(CMD_LOOKUP **CmdLookup)
- *
- * Purpose: Initialize the cmd_lookup structure.
- *
- *          We need to initialize the cmd_lookup structure for
- *          the FTP command configuration.  Don't want a NULL pointer
- *          flying around, when we have to look for FTP commands.
- *
- * Arguments: CmdLookup         => pointer to the pointer of the cmd
- *                                 lookup structure.
- *
- * Returns: int => return code indicating error or success
- *
- */
 int ftp_cmd_lookup_init(CMD_LOOKUP** CmdLookup)
 {
-    KMAP* km = KMapNew((KMapUserFreeFunc)CleanupFTPCMDConf);
-    *CmdLookup = km;
-    if (*CmdLookup == nullptr)
-    {
-        return FTPP_MEM_ALLOC_FAIL;
-    }
-
-    km->nocase = 1;
-
+    *CmdLookup = KMapNew((KMapUserFreeFunc)CleanupFTPCMDConf, true);
     return FTPP_SUCCESS;
 }
 
-/*
- * Function: ftp_cmd_lookup_cleanup(CMD_LOOKUP **CmdLookup)
- *
- * Purpose: Free the cmd_lookup structure.
- *          We need to free the cmd_lookup structure.
- *
- * Arguments: CmdLookup     => pointer to the pointer of the cmd
- *                             lookup structure.
- *
- * Returns: int => return code indicating error or success
- *
- */
 int ftp_cmd_lookup_cleanup(CMD_LOOKUP** CmdLookup)
 {
-    KMAP* km;
+    assert(CmdLookup);
 
-    if (CmdLookup == nullptr)
-        return FTPP_INVALID_ARG;
-
-    km = *CmdLookup;
-
-    if (km)
+    if ( *CmdLookup )
     {
-        KMapDelete(km);
+        KMapDelete(*CmdLookup);
         *CmdLookup = nullptr;
     }
-
     return FTPP_SUCCESS;
 }
 
-/*
- * Function: ftp_cmd_lookup_add(CMD_LOOKUP *CmdLookup,
- *                                 char *ip, int len,
- *                                 FTP_CMD_CONF *FTPCmd)
- *
- * Purpose: Add a cmd configuration to the list.
- *          We add these keys like you would normally think to add
- *          them, because on low endian machines the least significant
- *          byte is compared first.  This is what we want to compare
- *          IPs backward, doesn't work on high endian machines, but oh
- *          well.  Our platform is Intel.  FIXIT-L say what? endian madness
- *
- * Arguments: CmdLookup    => a pointer to the lookup structure
- *            cmd          => the ftp cmd
- *            len          => Length of the cmd
- *            FTPCmd       => a pointer to the cmd configuration structure
- *
- * Returns: int => return code indicating error or success
- *
- */
 int ftp_cmd_lookup_add(CMD_LOOKUP* CmdLookup, const char* cmd, int len,
     FTP_CMD_CONF* FTPCmd)
 {

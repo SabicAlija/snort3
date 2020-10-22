@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -53,17 +53,8 @@ void PortObjectItemFree(PortObjectItem* poi)
 */
 PortObjectItem* PortObjectItemDup(PortObjectItem* poi)
 {
-    PortObjectItem* poinew;
-
-    if ( !poi )
-        return nullptr;
-
-    poinew = PortObjectItemNew();
-    if ( !poinew )
-        return nullptr;
-
-    memcpy(poinew,poi,sizeof(PortObjectItem));
-
+    PortObjectItem* poinew = PortObjectItemNew();
+    memcpy(poinew,poi, sizeof(PortObjectItem));
     return poinew;
 }
 

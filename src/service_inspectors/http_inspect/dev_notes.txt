@@ -2,9 +2,41 @@ The new Snort HTTP inspector (HI) is divided into two major parts. The HttpStrea
 (splitter) accepts TCP payload data from Stream and subdivides it into message sections.
 HttpInspect (inspector) processes individual message sections.
 
-Splitter finish() is called by the framework when the TCP connection closes (including pruning).
+Splitter finish() is called by Stream when the TCP connection closes (including pruning).
 It serves several specialized purposes in cases where the HTTP message is truncated (ends
 unexpectedly).
+
+The nature of splitting allows packets to be forwarded before they are aggregated into a message
+section and inspected. Detained inspection is a feature that allows the splitter to designate
+to Stream packets that are too risky to forward without being inspected. These packets are detained
+until such time as inspection is completed. The design is based on the principle that detaining
+one packet in a TCP stream effectively blocks all subsequent packets from being reassembled and
+delivered to a target application. Once a packet is detained no attempt is made to detain
+additional packets.
+
+The core functions of detained inspection are implemented in the message body cutters. They search
+for the beginning of Javascripts by finding the string "<script". The raw packet containing the 't'
+will be detained as well the beginning of every subsequent message section. No attempt is made to
+find the end of a script--it is assumed to continue through the rest of the message body. The
+cutter will decompress gzip data to search for "<script". This unzip is unrelated and in addition
+to the unzip done in reassemble(). The decision was made to accept the performance cost of
+unzipping twice to avoid using memory to store uncompressed data waiting for reassembly.
+
+Splitter init_partial_flush() is called by Stream when a previously detained packet must be dropped
+or released immediately. It sets up reassembly and inspection of a partial message section
+containing all available data. Once inspection of this partial message section is complete, for
+most of HI it is as if it never happened. scan() continues to split the original message section
+with all the original data. The inspector will perform a completely new inspection of the full
+message section. Only reassemble() knows that something different is happening. Stream only
+delivers message data for reassembly once. reassemble() stores data received for a partial
+inspection and prepends it to the buffer for the next inspection.
+
+Script detection is a different feature developed to solve the same problem. The scanning mechanism
+developed for detained inspection is repurposed to look for the end-of-script tag "</script>". When
+one is found an immediate partial inspection is performed. This avoids the adverse network
+consequences of detaining packets at the performance and memory cost of doing a much larger number
+of partial inspections. Code features that support both approaches are referred to as accelerated
+blocking.
 
 HttpFlowData is a data class representing all HI information relating to a flow. It serves as
 persistent memory between invocations of HI by the framework. It also glues together the inspector,
@@ -25,7 +57,7 @@ processed together. There are seven types of message section:
 7. Trailers (all header lines following a chunked body as a group)
 
 Message sections are represented by message section objects that contain and process them. There
-are eleven message section classes that inherit as follows. An asterisk denotes a virtual class.
+are twelve message section classes that inherit as follows. An asterisk denotes a virtual class.
 
 1. HttpMsgSection* - top level with all common elements
 2. HttpMsgStart* : HttpMsgSection - common elements of request and status
@@ -38,6 +70,7 @@ are eleven message section classes that inherit as follows. An asterisk denotes 
 9. HttpMsgBodyCl : HttpMsgBody
 10. HttpMsgBodyChunk : HttpMsgBody
 11. HttpMsgBodyOld : HttpMsgBody
+12. HttpMsgBodyH2 : HttpMsgBody
 
 An HttpTransaction is a container that keeps all the sections of a message together and associates
 the request message with the response message. Transactions may be organized into pipelines when an
@@ -48,9 +81,22 @@ because the corresponding request is unknown or unavailable.
 The attach_my_transaction() factory method contains all the logic that makes this work. There are
 many corner cases. Don't mess with it until you fully understand it.
 
-Message sections implement the Just-In-Time (JIT) principle for work products. A mimimum of
+Message sections implement the Just-In-Time (JIT) principle for work products. A minimum of
 essential processing is done under process(). Other work products are derived and stored the first
 time detection or some other customer asks for them.
+
+HI also supports defining custom "x-forwarded-for" type headers. In a multi-vendor world, it is
+quite possible that the header name carrying the original client IP could be vendor-specific. This
+is due to the absence of standardization which would otherwise standardize the header name. In such
+a scenario, it is important to provide a configuration with which such x-forwarded-for type headers
+can be introduced to HI. The headers can be introduced with the xff_headers configuration. The default
+value of this configuration is "x-forwarded-for true-client-ip". The default definition introduces
+the two commonly known "x-forwarded-for" type headers and is preferred in the same order by the
+inspector as they are defined, e.g "x-forwarded-for" will be preferred than "true-client-ip" if
+both headers are present in the stream. Every HTTP Header is mapped to an ID internally. The
+custom headers are mapped to a dynamically generated ID and the mapping is appended at the end
+of the mapping of the known HTTP headers. Every HI instance can have its own list of custom
+headers and thus an instance of HTTP header mapping list is also associated with an HI instance.
 
 The Field class is an important tool for managing JIT. It consists of a pointer to a raw message
 field or derived work product with a length field. Various negative length values specify the
@@ -88,7 +134,7 @@ URI normalization is performed during HttpUri construction in four steps.
 
 Step 1: Identify the type of URI.
 
-NHI recognizes four types of URI:
+HI recognizes four types of URI:
 
 1. Asterisk: a lone ‘*’ character signifying that the request does not refer to any resource in
 particular. Often used with the OPTIONS method. This is not normalized.
@@ -127,7 +173,7 @@ This allows rules to be written against a normalized whole URI as is done in 2.X
 The procedures for normalizing the individual pieces are mostly identical to 2.X. Some points
 warrant mention:
 
-1. NHI considers it to be normal for reserved characters to be percent encoded and does not
+1. HI considers it to be normal for reserved characters to be percent encoded and does not
 generate an alert. The 119/1 alert is used only for unreserved characters that are found to be
 percent encoded. The ignore_unreserved configuration option allows the user to specify a list of
 unreserved characters that are exempt from this alert.
@@ -140,9 +186,17 @@ simplify_path.
 
 Test tool usage instructions:
 
-The HI internal test tool is the HttpTestInput class. It allows the developer to write tests that
+The HI test tool consists of two features. test_output provides extensive information about the
+inner workings of HI. It is strongly focused on showing work products (Fields) rather than being a
+tracing feature. Given a problematic pcap, the developer can see what the input is, how HI
+interprets it, and what the output to rule options will be. Several related configuration options
+(see help) allow the developer to customize the output.
+
+test_input is provided by the HttpTestInput class. It allows the developer to write tests that
 simulate HTTP messages split into TCP segments at specified points. The tests cover all of splitter
-and inspector and the impact on downstream customers such as detection and file processing.
+and inspector and the impact on downstream customers such as detection and file processing. The
+test_input option activates a modified form of test_output. It is not necessary to also specify
+test_output.
 
 The test input comes from the file http_test_msgs.txt in the current directory. Enter HTTP test
 message text as you want it to be presented to the StreamSplitter.
@@ -156,30 +210,42 @@ Each paragraph represents a TCP segment. The splitter can be tested by putting m
 the same paragraph (splitter must split) or continuing a section in the next paragraph (splitter
 must search and reassemble).
 
-Lines beginning with # are comments. Lines beginning with @ are commands. This does not apply to
-lines in the middle of a paragraph.
+Lines beginning with # are comments. Lines beginning with @ are commands. These do not apply to
+lines in the middle of a paragraph. Lines that begin with $ are insert commands - a special class of
+commands that may be used within a paragraph to insert data into the message buffer.
 
 Commands:
   @break resets HTTP Inspect data structures and begins a new test. Use it liberally to prevent
      unrelated tests from interfering with each other.
-  @tcpclose simulates a half-duplex TCP close following the next paragraph of data.
+  @tcpclose simulates a half-duplex TCP close.
   @request and @response set the message direction. Applies to subsequent paragraphs until changed.
      The initial direction is always request and the break command resets the direction to request.
-  @fill <decimal number> create a paragraph consisting of <number> octets of auto-fill data
-     ABCDEFGHIJABC ... Primarily useful for chunk testing.
+  @partial causes a partial flush, simulating a retransmission of a detained packet
   @fileset <pathname> specifies a file from which the tool will read data into the message buffer.
      This may be used to include a zipped or other binary file into a message body. Data is read
-     beginning at the start of the file.
-  @fileread <decimal number> read the specified number of bytes from the included file into the
-     message buffer. Each read corresponds to one TCP section.
+     beginning at the start of the file. The file is closed automatically whenever a new file is
+     set or there is a break command.
   @fileskip <decimal number> skips over the specified number of bytes in the included file. This
      must be a positive number. To move backward do a new fileset and skip forward from the
      beginning.
-  @fileclose resets the current file to none. Closing is done automatically whenever a new file is
-     set or there is a break command. An explicit close is only necessary when you want to revert
-     to generated fill data (see below).
   @<decimal number> sets the test number and hence the test output file name. Applies to subsequent
      sections until changed. Don't reuse numbers.
+
+Insert commands:
+  $fill <decimal number> create a paragraph consisting of <number> octets of auto-fill data
+     ABCDEFGHIJABC ....
+  $fileread <decimal number> read the specified number of bytes from the included file into the
+     message buffer. Each read corresponds to one TCP section.
+  $h2preface creates the HTTP/2 connection preface "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+  $h2frameheader <frame_type> <frame_length> <flags> <stream_id> generates an HTTP/2 frame header.
+    The frame type may be the frame type name in all lowercase or the numeric frame type code:
+      (data|headers|priority|rst_stream|settings|push_promise|ping|goaway|window_update|
+      continuation|{0:9})
+    The frame length is the length of the frame payload, may be in decimal or test tool hex value
+      (\xnn, see below under escape sequence for more details)
+    The frame flags are represented as a single test tool hex byte (\xnn)
+    The stream id is optional. If provided it must be a decimal number. If not included it defaults
+      to 0.
 
 Escape sequences begin with '\'. They may be used within a paragraph or to begin a paragraph.
   \r - carriage return
@@ -188,28 +254,24 @@ Escape sequences begin with '\'. They may be used within a paragraph or to begin
   \\ - backslash
   \# - #
   \@ - @
+  \$ - $
   \xnn or \Xnn - where nn is a two-digit hexadecimal number. Insert an arbitrary 8-bit number as
      the next character. a-f and A-F are both acceptable.
 
 Data is separated into segments for presentation to the splitter whenever a paragraph ends (blank
 line).
 
-Whenever a segment contains insufficient data to make up a body, fill data will be provided to
-make up the difference based on the Content-Length field. Specifically, flushing more data than in
-the current segment will trigger filling. The user should include at least one character of body
-data either as part of the previous header segment or at the beginning of a new segment following
-the headers. Fill data will be read from the currently included file. If no included file is
-currently set the fill data will be generated in the pattern ABC...XYZABC...
-
-The current chunk reassembly algorithm does not flush data beyond the current segment. The fill
-feature does not work with chunked bodies but the fill command can be used.
-
-Fill data will not be provided for a paragraph that is preceded by tcpclose. The body will
-terminate at the end of the paragraph.
+When the inspector aborts the connection (scan() returns StreamSplitter::ABORT) it does not expect
+to receive any more input from stream on that connection in that direction. Accordingly the test
+tool should not send it any more input. A paragraph of test input expected to result in an abort
+should be the last paragraph. The developer should either start a new test (@break, etc.) or at
+least reverse the direction and not send any more data in the original direction. Sending more data
+after an abort is likely to lead to confusing output that has no bearing on the test.
 
 This test tool does not implement the feature of being hardened against bad input. If you write a
 badly formatted or improper test case the program may assert or crash. The responsibility is on the
-developer to get it right. Currently that is the best use of resources.
+developer to get it right.
 
-Test input is currently designed for single-threaded operation only.
+The test tool is designed for single-threaded operation only.
 
+The test tool is only available when compiled with REG_TEST.

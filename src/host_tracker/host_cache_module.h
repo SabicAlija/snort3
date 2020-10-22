@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,34 +24,53 @@
 //  Loads host cache configuration data.
 
 #include "framework/module.h"
+#include "main/snort.h"
+#include "main/snort_config.h"
 
-#define host_cache_help \
-    "configure hosts"
+#include "host_cache.h"
+
+#define HOST_CACHE_NAME "host_cache"
+#define HOST_CACHE_HELP "global LRU cache of host_tracker data about hosts"
+
+class HostCacheReloadTuner : public snort::ReloadResourceTuner
+{
+public:
+    explicit HostCacheReloadTuner(size_t memcap) : memcap(memcap) { }
+    bool tinit() override
+    { return host_cache.reload_resize(memcap); }
+
+    bool tune_idle_context() override
+    { return host_cache.reload_prune(memcap, max_work_idle); }
+
+    bool tune_packet_context() override
+    { return host_cache.reload_prune(memcap, max_work); }
+
+private:
+    size_t memcap;
+};
 
 class HostCacheModule : public snort::Module
 {
 public:
-    HostCacheModule() : snort::Module("host_cache", host_cache_help, host_cache_params, true)
-    {
-    }
+    HostCacheModule();
+    ~HostCacheModule() override;
 
-    bool begin(const char*, int, snort::SnortConfig*) override;
     bool end(const char*, int, snort::SnortConfig*) override;
     bool set(const char*, snort::Value&, snort::SnortConfig*) override;
 
+    const snort::Command* get_commands() const override;
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
-
     void sum_stats(bool) override;
 
     Usage get_usage() const override
     { return GLOBAL; }
 
-private:
-    static const snort::Parameter host_cache_params[];
-    static const snort::Parameter service_params[];
+    void log_host_cache(const char* file_name, bool verbose = false);
 
-    uint32_t host_cache_size;
+private:
+    const char* dump_file = nullptr;
+    size_t memcap = 0;
 };
 
 #endif

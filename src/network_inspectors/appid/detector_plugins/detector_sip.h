@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,23 +27,12 @@
 #include "framework/data_bus.h"
 #include "pub_sub/sip_events.h"
 
+#include "appid_module.h"
+
 namespace snort
 {
 class Flow;
 }
-
-struct SipUaUserData
-{
-    AppId ClientAppId;
-    char* clientVersion;
-};
-
-struct DetectorAppSipPattern
-{
-    tMlpPattern pattern;
-    SipUaUserData userData;
-    DetectorAppSipPattern* next;
-};
 
 class SipEventHandler;
 
@@ -51,19 +40,9 @@ class SipUdpClientDetector : public ClientDetector
 {
 public:
     SipUdpClientDetector(ClientDiscovery*);
-    ~SipUdpClientDetector() override;
+    ~SipUdpClientDetector() override { }
 
     int validate(AppIdDiscoveryArgs&) override;
-
-    void finalize() override;
-
-    // FIXIT-L revisit init so it's not split between static methods and constructor
-    static int sipUaPatternAdd(AppId, const char* clientVersion, const char* uaPattern);
-    static int sipServerPatternAdd(AppId, const char* clientVersion, const char* uaPattern);
-
-private:
-    static const int PATTERN_PART_MAX = 10;
-    tMlmpPattern patterns[PATTERN_PART_MAX];
 };
 
 class SipTcpClientDetector : public ClientDetector
@@ -84,7 +63,7 @@ public:
 
 private:
     void createRtpFlow(AppIdSession&, const snort::Packet*, const snort::SfIp* cliIp,
-        uint16_t cliPort, const snort::SfIp* srvIp, uint16_t srvPort, IpProtocol, int16_t app_id);
+        uint16_t cliPort, const snort::SfIp* srvIp, uint16_t srvPort, IpProtocol);
 };
 
 class SipEventHandler : public snort::DataHandler
@@ -96,18 +75,18 @@ public:
         return new SipEventHandler;
     }
 
-    void set_client(SipUdpClientDetector* cd) { SipEventHandler::client = cd; }
-    void set_service(SipServiceDetector* sd) { SipEventHandler::service = sd; }
+    static void set_client(SipUdpClientDetector* cd) { SipEventHandler::client = cd; }
+    static void set_service(SipServiceDetector* sd) { SipEventHandler::service = sd; }
 
-    void subscribe()
-    { snort::DataBus::subscribe(SIP_EVENT_TYPE_SIP_DIALOG_KEY, this); }
+    void subscribe(snort::SnortConfig* sc)
+    { snort::DataBus::subscribe_global(SIP_EVENT_TYPE_SIP_DIALOG_KEY, this, sc); }
 
     void handle(snort::DataEvent&, snort::Flow*) override;
 
 private:
-    SipEventHandler() = default;
-    void client_handler(SipEvent&, AppIdSession&);
-    void service_handler(SipEvent&, AppIdSession&);
+    SipEventHandler() : DataHandler(MOD_NAME) { }
+    void client_handler(SipEvent&, AppIdSession&, AppidChangeBits&);
+    void service_handler(SipEvent&, AppIdSession&, AppidChangeBits&);
 
     static SipUdpClientDetector* client;
     static SipServiceDetector* service;

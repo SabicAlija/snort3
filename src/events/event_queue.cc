@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -35,7 +35,7 @@
 **           event (gid,sid pair).  This is now required to get events
 **           to be logged. The decoders and preprocessors are still
 **           configured independently, which allows them to inspect and
-**           call the alerting functions DetectionEngine::queue_event. 
+**           call the alerting functions DetectionEngine::queue_event.
 **
 **           Any event that has no otn associated with it's gid,sid pair
 **           will/should not alert, even if the preprocessor or decoder is

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,7 +23,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "protocols/ssl.h"
@@ -61,7 +61,7 @@ public:
     EvalStatus eval(Cursor&, Packet*) override;
 
 private:
-    SslVersionRuleOptionData svod;
+    SslVersionRuleOptionData svod = {};
 };
 
 //-------------------------------------------------------------------------
@@ -70,21 +70,17 @@ private:
 
 uint32_t SslVersionOption::hash() const
 {
-    uint32_t a,b,c;
+    uint32_t a = svod.flags;
+    uint32_t b = svod.mask;
+    uint32_t c = IpsOption::hash();
 
-    a = svod.flags;
-    b = svod.mask;
-    c = 0;
-
-    mix_str(a,b,c,get_name());
     finalize(a,b,c);
-
     return c;
 }
 
 bool SslVersionOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const SslVersionOption& rhs = (const SslVersionOption&)ips;
@@ -98,7 +94,7 @@ bool SslVersionOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus SslVersionOption::eval(Cursor&, Packet* pkt)
 {
-    Profile profile(sslVersionRuleOptionPerfStats);
+    RuleProfile profile(sslVersionRuleOptionPerfStats);
 
     if ( !(pkt->packet_flags & PKT_REBUILT_STREAM) && !pkt->is_full_pdu() )
         return NO_MATCH;
@@ -171,7 +167,7 @@ public:
     { return DETECT; }
 
 public:
-    SslVersionRuleOptionData svod;
+    SslVersionRuleOptionData svod = {};
 };
 
 bool SslVersionModule::begin(const char*, int, SnortConfig*)

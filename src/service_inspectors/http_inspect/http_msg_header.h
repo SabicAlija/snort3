@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,6 +22,7 @@
 
 #include "file_api/file_api.h"
 
+#include "http_common.h"
 #include "http_enum.h"
 #include "http_field.h"
 #include "http_msg_head_shared.h"
@@ -34,31 +35,36 @@ class HttpMsgHeader : public HttpMsgHeadShared
 {
 public:
     HttpMsgHeader(const uint8_t* buffer, const uint16_t buf_size, HttpFlowData* session_data_,
-        HttpEnums::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+        HttpCommon::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
         const HttpParaList* params_);
     HttpEnums::InspectSection get_inspection_section() const override
-        { return detection_section ? HttpEnums::IS_DETECTION : HttpEnums::IS_NONE; }
+        { return HttpEnums::IS_HEADER; }
+    bool detection_required() const override { return true; }
     void update_flow() override;
     void gen_events() override;
     void publish() override;
     const Field& get_true_ip();
     const Field& get_true_ip_addr();
 
+    // The multi_file_processing_id is unique for each file transferred within a single connection
+    // and is used by file processing to store partially processed file contexts in the flow data.
+    void set_multi_file_processing_id(const uint64_t transaction_id, const uint32_t stream_id);
+    uint64_t get_multi_file_processing_id() { return multi_file_processing_id; }
+
 private:
     void prepare_body();
     void setup_file_processing();
     void setup_encoding_decompression();
     void setup_utf_decoding();
-    void setup_pdf_swf_decompression();
+    void setup_file_decompression();
 
     // Dummy configurations to support MIME processing
-    MailLogConfig mime_conf;
-    snort::DecodeConfig decode_conf;
+    snort::MailLogConfig mime_conf;
 
     Field true_ip;
     Field true_ip_addr;
 
-    bool detection_section = true;
+    uint64_t multi_file_processing_id = 0;
 
 #ifdef REG_TEST
     void print_section(FILE* output) override;

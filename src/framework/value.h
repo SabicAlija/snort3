@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <sstream>
 
 #include "framework/bits.h"
 #include "framework/parameter.h"
@@ -41,18 +42,45 @@ public:
     enum ValueType { VT_BOOL, VT_NUM, VT_STR };
 
     Value(bool b)
-    { set(b); init(); }
+    { set(b); }
 
     Value(double d)
-    { set(d); init(); }
+    { set(d); }
 
     Value(const char* s)
-    { set(s); init(); }
+    { set(s); set_origin(s); }
 
-    ValueType get_type()
+    Value(const Value& v) :
+        type(v.type),
+        num(v.num),
+        str(v.str),
+        origin_str(v.origin_str),
+        ss(nullptr),
+        param(v.param)
+    {}
+
+    Value& operator=(const Value& v)
+    {
+        if ( this == &v )
+            return *this;
+
+        delete ss;
+        ss = nullptr;
+
+        type = v.type;
+        num = v.num;
+        str = v.str;
+        origin_str = v.origin_str;
+        param = v.param;
+
+        return *this;
+    }
+
+    ValueType get_type() const
     { return type; }
 
-    ~Value();
+    ~Value()
+    { delete ss; }
 
     void set(bool b)
     { type = VT_BOOL; num = b ? 1 : 0; str.clear(); }
@@ -66,6 +94,9 @@ public:
     void set(const char* s)
     { type = VT_STR; str = s; num = 0; }
 
+    void set_origin(const char* val)
+    { origin_str = val; }
+
     void set(const uint8_t* s, unsigned len)
     { type = VT_STR; str.assign((const char*)s, len); num = 0; }
 
@@ -75,31 +106,60 @@ public:
     void set_enum(unsigned u)
     { type = VT_NUM; num = u;  }
 
-    void set_aux(unsigned u)
-    { num = u; }
+    void set_aux(uint64_t u)
+    { num = (double)u; }
 
     const char* get_name() const
     { return param ? param->name : nullptr; }
 
-    bool is(const char* s)
+    bool is(const char* s) const
     { return param ? !strcmp(param->name, s) : false; }
+
+    bool has_default() const
+    { return param ? param->deflt != nullptr : false; }
 
     bool get_bool() const
     { return num != 0; }
 
-    long get_long() const
+    long get_long() const  // FIXIT-L to be removed
     { return (long)num; }
+
+    size_t get_size() const
+    { return (size_t)num; }
+
+    uint8_t get_uint8() const
+    { return (uint8_t)num; }
+
+    int16_t get_int16() const
+    { return (int16_t)num; }
+
+    uint16_t get_uint16() const
+    { return (uint16_t)num; }
+
+    int32_t get_int32() const
+    { return (int32_t)num; }
+
+    uint32_t get_uint32() const
+    { return (uint32_t)num; }
+
+    int64_t get_int64() const
+    { return (int64_t)num; }
+
+    uint64_t get_uint64() const
+    { return (uint64_t)num; }
 
     double get_real() const
     { return num; }
 
     const uint8_t* get_buffer(unsigned& n) const
-    { n = str.size(); return (const uint8_t*)str.data(); }
+    { n = (unsigned)str.size(); return (const uint8_t*)str.data(); }
 
     const char* get_string() const
     { return str.c_str(); }
 
-    const char* get_as_string();
+    std::string get_as_string() const;
+    Parameter::Type get_param_type() const;
+    std::string get_origin_string() const;
 
     bool strtol(long&) const;
     bool strtol(long&, const std::string&) const;
@@ -142,15 +202,12 @@ public:
     void update_mask(uint64_t& mask, uint64_t flag, bool invert = false);
 
 private:
-    void init()
-    { param = nullptr; ss = nullptr; }
-
-private:
     ValueType type;
     double num;
     std::string str;
-    std::stringstream* ss;
-    const Parameter* param;
+    std::string origin_str;
+    std::stringstream* ss = nullptr;
+    const Parameter* param = nullptr;
 };
 }
 #endif

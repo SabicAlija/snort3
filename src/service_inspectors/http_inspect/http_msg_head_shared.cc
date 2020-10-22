@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,7 +23,16 @@
 
 #include "http_msg_head_shared.h"
 
+#include "hash/hash_key_operations.h"
+#include "utils/util_cstring.h"
+
+#include "http_common.h"
+#include "http_enum.h"
+#include "http_msg_request.h"
+
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 HttpMsgHeadShared::~HttpMsgHeadShared()
 {
@@ -69,9 +78,7 @@ void HttpMsgHeadShared::create_norm_head_list()
             {
                 headers_present[header_name_id[j]] = true;
                 NormalizedHeader* tmp_ptr = norm_heads;
-                norm_heads = new NormalizedHeader(header_name_id[j]);
-                norm_heads->next = tmp_ptr;
-                norm_heads->count = 1;
+                norm_heads = new NormalizedHeader(tmp_ptr, 1, header_name_id[j]);
             }
         }
     }
@@ -83,9 +90,14 @@ void HttpMsgHeadShared::parse_header_block()
     int32_t bytes_used = 0;
     num_headers = 0;
     int32_t num_seps;
-    // session_data->num_head_lines is computed without consideration of wrapping and may overstate
-    // actual number of headers. Rely on num_headers which is calculated correctly.
+
+    // The number of header lines in a message may be zero
     header_line = new Field[session_data->num_head_lines[source_id]];
+
+    // session_data->num_head_lines is computed by HttpStreamSplitter without consideration of
+    // wrapping and may occasionally overstate the actual number of headers. That was OK for
+    // allocating space for the header_line array, but henceforth rely on num_headers which is
+    // calculated correctly.
     while (bytes_used < msg_text.length())
     {
         assert(num_headers < session_data->num_head_lines[source_id]);
@@ -227,7 +239,7 @@ void HttpMsgHeadShared::derive_header_name_id(int index)
             create_event(EVENT_HEAD_NAME_WHITESPACE);
         }
     }
-    header_name_id[index] = (HeaderId)str_to_code(lower_name, lower_length, header_list);
+    header_name_id[index] = (HeaderId)str_to_code(lower_name, lower_length, params->header_list);
     delete[] lower_name;
 }
 
@@ -293,7 +305,8 @@ const Field& HttpMsgHeadShared::get_classic_raw_header()
 
 const Field& HttpMsgHeadShared::get_classic_norm_header()
 {
-    return classic_normalize(get_classic_raw_header(), classic_norm_header, params->uri_param);
+    return classic_normalize(get_classic_raw_header(), classic_norm_header,
+        false, params->uri_param);
 }
 
 const Field& HttpMsgHeadShared::get_classic_raw_cookie()
@@ -304,7 +317,8 @@ const Field& HttpMsgHeadShared::get_classic_raw_cookie()
 
 const Field& HttpMsgHeadShared::get_classic_norm_cookie()
 {
-    return classic_normalize(get_classic_raw_cookie(), classic_norm_cookie, params->uri_param);
+    return classic_normalize(get_classic_raw_cookie(), classic_norm_cookie,
+        false, params->uri_param);
 }
 
 const Field& HttpMsgHeadShared::get_header_value_raw(HeaderId header_id) const
@@ -329,9 +343,223 @@ const Field& HttpMsgHeadShared::get_header_value_norm(HeaderId header_id)
     if (node == nullptr)
         return Field::FIELD_NULL;
     header_norms[header_id]->normalize(header_id, node->count,
-        transaction->get_infractions(source_id), transaction->get_events(source_id),
+        transaction->get_infractions(source_id), session_data->events[source_id],
         header_name_id, header_value, num_headers, node->norm);
     return node->norm;
+}
+
+// For downloads we use the hash of the URL if it exists. For uploads we use a hash of the filename
+// parameter in the Content-Disposition header, if one exists. Otherwise the file_index is 0,
+// meaning the file verdict will not be cached.
+uint64_t HttpMsgHeadShared::get_file_cache_index()
+{
+    if (file_cache_index_computed)
+        return file_cache_index;
+
+    if (source_id == SRC_SERVER)
+    {
+        if ((request != nullptr) and (request->get_http_uri() != nullptr))
+        {
+            const Field& abs_path = request->get_http_uri()->get_abs_path();
+            if (abs_path.length() > 0)
+            {
+                file_cache_index = str_to_hash(abs_path.start(), abs_path.length());
+            }
+        }
+    }
+    else
+    {
+        const Field& cd_filename = get_content_disposition_filename();
+        if (cd_filename.length() > 0)
+            file_cache_index = str_to_hash(cd_filename.start(), cd_filename.length());
+    }
+    file_cache_index_computed = true; 
+
+    return file_cache_index;
+}
+
+const Field& HttpMsgHeadShared::get_content_disposition_filename()
+{
+    if (content_disposition_filename.length() == STAT_NOT_COMPUTE)
+        extract_filename_from_content_disposition();
+
+    return content_disposition_filename;
+}
+
+// Extract the filename from the content-disposition header
+void HttpMsgHeadShared::extract_filename_from_content_disposition()
+{
+    const Field& cont_disp = get_header_value_raw(HEAD_CONTENT_DISPOSITION);
+
+    const uint8_t* cur = cont_disp.start();
+    const uint8_t* const end = cont_disp.start() + cont_disp.length();
+    const uint8_t* fname_begin = nullptr;
+    const uint8_t* fname_end = nullptr;
+    bool char_set = false;
+    enum {
+        CD_STATE_START,
+        CD_STATE_BEFORE_VAL,
+        CD_STATE_VAL,
+        CD_STATE_QUOTED_VAL,
+        CD_STATE_BEFORE_EXT_VAL,
+        CD_STATE_CHARSET,
+        CD_STATE_LANGUAGE,
+        CD_STATE_EXT_VAL,
+        CD_STATE_FINAL,
+        CD_STATE_PROBLEM
+    };
+    const char *cd_file1 = "filename";
+    const char *cd_file2 = "filename*";
+    const char* filename_str_start = nullptr;
+
+    if (cont_disp.length() <= 0)
+    {
+        content_disposition_filename.set(STAT_NOT_PRESENT);
+        return;
+    }
+    uint8_t state = CD_STATE_START;
+
+    while (cur < end and state != CD_STATE_PROBLEM)
+    {
+        switch (state)
+        {
+            case CD_STATE_START:
+                if ((filename_str_start = SnortStrcasestr((const char*)cur, end - cur, cd_file2)))
+                {
+                    state = CD_STATE_BEFORE_EXT_VAL;
+                    cur = (const uint8_t*)filename_str_start + strlen(cd_file2) - 1;
+                }
+                else if ((filename_str_start = SnortStrcasestr((const char*)cur, end - cur,
+                    cd_file1)))
+                {
+                    state = CD_STATE_BEFORE_VAL;
+                    cur = (const uint8_t*)filename_str_start + strlen(cd_file1) - 1;
+                }
+                else
+                {
+                    content_disposition_filename.set(STAT_NOT_PRESENT);
+                    return;
+                }
+                break;
+            case CD_STATE_BEFORE_VAL:
+                if (*cur == '=')
+                    state = CD_STATE_VAL;
+                else if (*cur != ' ')
+                    state = CD_STATE_START;
+                break;
+            case CD_STATE_VAL:
+                if (!fname_begin && *cur == '"')
+                    state = CD_STATE_QUOTED_VAL;
+                else if (*cur == ';' || *cur == '\r' || *cur == '\n' || *cur == ' ' || *cur == '\t')
+                {
+                    if (fname_begin)
+                    {
+                        fname_end = cur;
+                        state =  CD_STATE_FINAL;
+                    }
+                }
+                else if (!fname_begin)
+                    fname_begin = cur;
+                break;
+            case CD_STATE_QUOTED_VAL:
+                if (!fname_begin)
+                    fname_begin = cur;
+                if (*cur == '"' )
+                {
+                    fname_end = cur;
+                    state =  CD_STATE_FINAL;
+                }
+                break;
+            case CD_STATE_BEFORE_EXT_VAL:
+                if (*cur == '=')
+                    state = CD_STATE_CHARSET;
+                else if (*cur != ' ')
+                    state = CD_STATE_START;
+                break;
+            case CD_STATE_CHARSET:
+                if (*cur == '\'')
+                {
+                    if (!char_set)
+                    {
+                        state = CD_STATE_PROBLEM;
+                        break;
+                    }
+                    else
+                        state = CD_STATE_LANGUAGE;
+                }
+                else if (!char_set)
+                {
+                    // Ignore space before the ext-value
+                    while (cur < end && *cur == ' ')
+                        cur++;
+                    if (cur < end)
+                    {
+                        if (!strncasecmp((const char*) cur, "UTF-8", 5))
+                            cur += 5;
+                        else if (!strncasecmp((const char*) cur, "ISO-8859-1", 10))
+                            cur += 10;
+                        else if (!strncasecmp((const char*) cur, "mime-charset", 12))
+                            cur += 12;
+                        else
+                        {
+                            state = CD_STATE_PROBLEM;
+                            break;
+                        }
+                        char_set = true;
+                        continue;
+                    }
+                }
+                else
+                {
+                    state = CD_STATE_PROBLEM;
+                    break;
+                }
+                break;
+            case CD_STATE_LANGUAGE:
+                if (*cur == '\'')
+                    state = CD_STATE_EXT_VAL;
+                break;
+            case CD_STATE_EXT_VAL:
+                if(*cur == ';' || *cur == '\r' || *cur == '\n' || *cur == ' ' || *cur == '\t')
+                {
+                    fname_end = cur;
+                    state = CD_STATE_FINAL;
+                }
+                else if (!fname_begin)
+                    fname_begin = cur;
+                break;
+            case CD_STATE_FINAL:
+                if (fname_begin && fname_end)
+                {
+                    content_disposition_filename.set(fname_end-fname_begin, fname_begin);
+                    return;
+                }
+                // fallthrough
+            default:
+                state = CD_STATE_PROBLEM;
+                break;
+        }
+        cur++;
+    }
+    switch (state)
+    {
+        case CD_STATE_FINAL:
+        case CD_STATE_VAL:
+        case CD_STATE_EXT_VAL:
+            if (fname_begin)
+            {
+                if (!fname_end)
+                    fname_end = end;
+                content_disposition_filename.set(fname_end-fname_begin, fname_begin);
+                break;
+            }
+            // fallthrough
+        default:
+            add_infraction(INF_MALFORMED_CD_FILENAME);
+            create_event(EVENT_MALFORMED_CD_FILENAME);
+            content_disposition_filename.set(STAT_PROBLEMATIC);
+            break;
+    }
 }
 
 #ifdef REG_TEST

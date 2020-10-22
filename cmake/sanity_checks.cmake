@@ -1,9 +1,10 @@
+include(CheckCXXSourceCompiles)
 include(CheckIncludeFileCXX)
 include(CheckFunctionExists)
+include(CheckLibraryExists)
 include(CheckSymbolExists)
 include(CheckTypeSize)
-include(CheckLibraryExists)
-include(CheckCXXSourceCompiles)
+include(CMakePushCheckState)
 
 include (TestBigEndian)
 test_big_endian(WORDS_BIGENDIAN)
@@ -12,10 +13,46 @@ test_big_endian(WORDS_BIGENDIAN)
 # Checks for system library functions
 #--------------------------------------------------------------------------
 
-check_function_exists(mallinfo HAVE_MALLINFO)
 check_function_exists(malloc_trim HAVE_MALLOC_TRIM)
 check_function_exists(memrchr HAVE_MEMRCHR)
 check_function_exists(sigaction HAVE_SIGACTION)
+check_function_exists(basename_r HAVE_BASENAME_R)
+
+check_cxx_source_compiles(
+    "
+    #include <string.h>
+    #include <errno.h>
+
+    void check(char c) {}
+
+    int main()
+    {
+        char buffer[1024];
+	/* This will not compile if strerror_r does not return a char* */
+	check(strerror_r(EACCES, buffer, sizeof(buffer))[0]);
+	return 0;
+    }
+    "
+    HAVE_GNU_STRERROR_R)
+
+# vvvvvvvvv  GETRPCENT TEST vvvvvvvvv
+cmake_push_check_state(RESET)
+if ( CMAKE_SYSTEM_NAME STREQUAL SunOS )
+    set(CMAKE_REQUIRED_LIBRARIES nsl)
+endif ()
+check_function_exists(getrpcent HAVE_GETRPCENT)
+if (NOT HAVE_GETRPCENT)
+    find_package(TIRPC)
+    set(CMAKE_REQUIRED_LIBRARIES ${TIRPC_LIBRARIES})
+    check_function_exists(getrpcent HAVE_TIRPC_GETRPCENT)
+    if (HAVE_TIRPC_GETRPCENT)
+        set(USE_TIRPC TRUE)
+    else()
+        message(SEND_ERROR "Couldn't find an RPC program number database implementation!")
+    endif()
+endif()
+cmake_pop_check_state()
+# ^^^^^^^^^  GETRPCENT TEST ^^^^^^^^^
 
 #--------------------------------------------------------------------------
 # Checks for typedefs, structures, and compiler characteristics.
@@ -95,6 +132,13 @@ endif()
 # set library variables
 if (HS_FOUND)
     check_library_exists (${HS_LIBRARIES} hs_scan "" HAVE_HYPERSCAN)
+    if (HAVE_HYPERSCAN)
+        cmake_push_check_state(RESET)
+        set(CMAKE_REQUIRED_INCLUDES ${HS_INCLUDE_DIRS})
+        set(CMAKE_REQUIRED_LIBRARIES ${HS_LIBRARIES})
+        check_function_exists(hs_compile_lit HAVE_HS_COMPILE_LIT)
+        cmake_pop_check_state()
+    endif()
 endif()
 
 if (DEFINED LIBLZMA_LIBRARIES)
@@ -104,4 +148,18 @@ endif()
 if (ICONV_FOUND)
     # Not actually a sanity check at the moment...
     set (HAVE_ICONV "1")
+endif()
+
+if (LIBUNWIND_FOUND)
+    # We don't actually use backtrace from libunwind, but it's basically the
+    # only symbol guaranteed to be present.
+    check_library_exists (${LIBUNWIND_LIBRARIES} backtrace "" HAVE_LIBUNWIND)
+endif()
+
+if (SAFEC_FOUND)
+    check_library_exists (${SAFEC_LIBRARIES} printf_s "" HAVE_SAFEC)
+endif()
+
+if (UUID_FOUND)
+    check_library_exists ("${UUID_LIBRARY}" uuid_parse "" HAVE_UUID)
 endif()

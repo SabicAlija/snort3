@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ struct SSH_PROTO_CONF
 struct SshStats
 {
     PegCount total_packets;
+    PegCount total_bytes;
     PegCount concurrent_sessions;
     PegCount max_concurrent_sessions;
 };

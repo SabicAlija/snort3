@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 
 #include "telnet.h"
 
+#include "detection/detection_engine.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -79,19 +80,16 @@ static int SnortTelnet(TELNET_PROTO_CONF* telnet_config, TELNET_SESSION* Telnets
 
     if ( telnet_config->normalize )
     {
-        int ret = normalize_telnet(Telnetsession, p, iInspectMode,
-            FTPP_APPLY_TNC_ERASE_CMDS);
+        DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
+        int ret = normalize_telnet(Telnetsession, p, buf, iInspectMode,
+            FTPP_APPLY_TNC_ERASE_CMDS, false);
 
         if ( ret == FTPP_SUCCESS || ret == FTPP_NORMALIZED )
-        {
-            NoProfile exclude(telnetPerfStats);
             do_detection(p);
-        }
     }
 
     else
     {
-        NoProfile exclude(telnetPerfStats);
         do_detection(p);
     }
 
@@ -176,36 +174,6 @@ static int snort_telnet(TELNET_PROTO_CONF* GlobalConf, Packet* p)
     return FTPP_INVALID_PROTO;
 }
 
-/*
- * Function: PrintTelnetConf(TELNET_PROTO_CONF *TelnetConf,
- *                          char *Option)
- *
- * Purpose: Prints the telnet configuration
- *
- * Arguments: TelnetConf    => pointer to the telnet configuration
- *
- * Returns: int     => an error code integer (0 = success,
- *                     >0 = non-fatal error, <0 = fatal error)
- *
- */
-static int PrintTelnetConf(TELNET_PROTO_CONF* TelnetConf)
-{
-    if (!TelnetConf)
-    {
-        return FTPP_INVALID_ARG;
-    }
-
-    LogMessage("    TELNET CONFIG:\n");
-    LogMessage("      Are You There Threshold: %d\n",
-        TelnetConf->ayt_threshold);
-    LogMessage("      Normalize: %s\n", TelnetConf->normalize ? "YES" : "NO");
-    PrintConfOpt(TelnetConf->detect_encrypted, "Check for Encrypted Traffic");
-    LogMessage("      Continue to check encrypted data: %s\n",
-        TelnetConf->check_encrypted_data ? "YES" : "NO");
-
-    return FTPP_SUCCESS;
-}
-
 //-------------------------------------------------------------------------
 // class stuff
 //-------------------------------------------------------------------------
@@ -217,7 +185,7 @@ public:
     ~Telnet() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     bool get_buf(InspectionBuffer::Type, Packet*, InspectionBuffer&) override;
@@ -243,9 +211,15 @@ bool Telnet::configure(SnortConfig* sc)
     return !TelnetCheckConfigs(sc, config);
 }
 
-void Telnet::show(SnortConfig*)
+void Telnet::show(const SnortConfig*) const
 {
-    PrintTelnetConf(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_value("ayt_attack_thresh", config->ayt_threshold);
+    ConfigLogger::log_flag("check_encrypted", config->detect_encrypted);
+    ConfigLogger::log_flag("encrypted_traffic", config->check_encrypted_data);
+    ConfigLogger::log_flag("normalize", config->normalize);
 }
 
 void Telnet::eval(Packet* p)

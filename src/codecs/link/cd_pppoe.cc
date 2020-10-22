@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -63,10 +63,10 @@ static const RuleMap pppoe_rules[] =
 #define pppoe_help \
     "support for point-to-point protocol over ethernet"
 
-class PPPoEModule : public CodecModule
+class PPPoEModule : public BaseCodecModule
 {
 public:
-    PPPoEModule() : CodecModule(CD_PPPOE_NAME, pppoe_help) { }
+    PPPoEModule() : BaseCodecModule(CD_PPPOE_NAME, pppoe_help) { }
 
     const RuleMap* get_rules() const override
     { return pppoe_rules; }
@@ -150,7 +150,7 @@ public:
     PPPoEDiscCodec() : PPPoECodec(CD_PPPOEPKT_DISC_NAME, PppoepktType::DISCOVERY) { }
 
     void get_protocol_ids(std::vector<ProtocolId>& v) override
-    { v.push_back(ProtocolId::ETHERTYPE_PPPOE_DISC); }
+    { v.emplace_back(ProtocolId::ETHERTYPE_PPPOE_DISC); }
 };
 
 class PPPoESessCodec : public PPPoECodec
@@ -159,7 +159,7 @@ public:
     PPPoESessCodec() : PPPoECodec(CD_PPPOEPKT_SESS_NAME, PppoepktType::SESSION) { }
 
     void get_protocol_ids(std::vector<ProtocolId>& v) override
-    { v.push_back(ProtocolId::ETHERTYPE_PPPOE_SESS); }
+    { v.emplace_back(ProtocolId::ETHERTYPE_PPPOE_SESS); }
 };
 } // namespace
 

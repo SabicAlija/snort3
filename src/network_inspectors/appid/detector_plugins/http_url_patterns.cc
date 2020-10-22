@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -313,14 +313,6 @@ static int match_query_elements(tMlpPattern* packetData, tMlpPattern* userPatter
     return copySize;
 }
 
-HttpPatternMatchers* HttpPatternMatchers::get_instance()
-{
-    static HttpPatternMatchers* http_matchers;
-    if (!http_matchers)
-        http_matchers = new HttpPatternMatchers;
-    return http_matchers;
-}
-
 static void free_app_url_patterns(std::vector<DetectorAppUrlPattern*>& url_patterns)
 {
     for (auto* pattern: url_patterns)
@@ -371,11 +363,6 @@ HttpPatternMatchers::~HttpPatternMatchers()
     free_http_patterns(content_type_patterns);
     free_chp_app_elements();
 
-    delete field_matcher;
-
-    for (size_t i = 0; i < NUM_HTTP_FIELDS; i++)
-        delete chp_matchers[i];
-
     for (auto* pattern : host_url_patterns)
         delete pattern;
     host_url_patterns.clear();
@@ -404,15 +391,15 @@ void HttpPatternMatchers::insert_http_pattern(enum httpPatternType pType,
     switch (pType)
     {
     case HTTP_PAYLOAD:
-        host_payload_patterns.push_back(pattern);
+        host_payload_patterns.emplace_back(pattern);
         break;
 
     case HTTP_URL:
-        url_patterns.push_back(pattern);
+        url_patterns.emplace_back(pattern);
         break;
 
     case HTTP_USER_AGENT:
-        client_agent_patterns.push_back(pattern);
+        client_agent_patterns.emplace_back(pattern);
         break;
     }
 }
@@ -421,8 +408,6 @@ void HttpPatternMatchers::remove_http_patterns_for_id(AppId id)
 {
     // Walk the list of all the patterns we have inserted, searching for this appIdInstance and
     // free them.
-    // The purpose is for the 14 and 15 to be used together to only set the
-    // APPINFO_FLAG_SEARCH_ENGINE flag
     // If the reserved pattern is not used, it is a mixed use case and should just behave normally.
     CHPListElement* chpa = nullptr;
     CHPListElement* prev_chpa = nullptr;
@@ -464,17 +449,17 @@ void HttpPatternMatchers::remove_http_patterns_for_id(AppId id)
 
 void HttpPatternMatchers::insert_content_type_pattern(DetectorHTTPPattern& pattern)
 {
-    content_type_patterns.push_back(pattern);
+    content_type_patterns.emplace_back(pattern);
 }
 
 void HttpPatternMatchers::insert_url_pattern(DetectorAppUrlPattern* pattern)
 {
-    app_url_patterns.push_back(pattern);
+    app_url_patterns.emplace_back(pattern);
 }
 
 void HttpPatternMatchers::insert_rtmp_url_pattern(DetectorAppUrlPattern* pattern)
 {
-    rtmp_url_patterns.push_back(pattern);
+    rtmp_url_patterns.emplace_back(pattern);
 }
 
 void HttpPatternMatchers::insert_app_url_pattern(DetectorAppUrlPattern* pattern)
@@ -488,7 +473,7 @@ int HttpPatternMatchers::add_mlmp_pattern(tMlmpTree* matcher, DetectorHTTPPatter
 
     HostUrlDetectorPattern* detector = new HostUrlDetectorPattern(pattern.pattern,
         pattern.pattern_size);
-    host_url_patterns.push_back(detector);
+    host_url_patterns.emplace_back(detector);
 
     detector->payload_id = pattern.payload_id;
     detector->service_id = pattern.service_id;
@@ -516,7 +501,7 @@ int HttpPatternMatchers::add_mlmp_pattern(tMlmpTree* matcher, DetectorAppUrlPatt
 
     HostUrlDetectorPattern* detector = new HostUrlDetectorPattern(pattern.patterns.host.pattern,
         pattern.patterns.host.patternSize);
-    host_url_patterns.push_back(detector);
+    host_url_patterns.emplace_back(detector);
 
     if (pattern.patterns.path.pattern)
     {
@@ -589,7 +574,8 @@ static int chp_pattern_match(void* id, void*, int match_end_pos, void* data, voi
     ChpMatchDescriptor* cmd = (ChpMatchDescriptor*)data;
     CHPAction* target = (CHPAction*)id;
 
-    cmd->chp_matches[cmd->cur_ptype].push_back({ target, match_end_pos - target->psize });
+    cmd->chp_matches[cmd->cur_ptype].emplace_back( MatchedCHPAction{ target,
+        match_end_pos - target->psize } );
     return 0;
 }
 
@@ -602,8 +588,8 @@ static inline void chp_add_candidate_to_tally(CHPMatchTally& match_tally, CHPApp
             return;
         }
 
-    match_tally.push_back({ chpapp, chpapp->key_pattern_length_sum,
-                            chpapp->key_pattern_count - 1 });
+    match_tally.emplace_back( CHPMatchCandidate{ chpapp, chpapp->key_pattern_length_sum,
+        chpapp->key_pattern_count - 1 } );
 }
 
 // In addition to creating the linked list of matching actions this function will
@@ -651,7 +637,7 @@ static int http_pattern_match(void* id, void*, int match_end_pos, void* data, vo
         return 0;
 }
 
-int HttpPatternMatchers::process_host_patterns(DetectorHTTPPatterns patterns)
+int HttpPatternMatchers::process_host_patterns(DetectorHTTPPatterns& patterns)
 {
     if (!host_url_matcher)
         host_url_matcher = mlmpCreate();
@@ -675,15 +661,12 @@ int HttpPatternMatchers::process_host_patterns(DetectorHTTPPatterns patterns)
 
 int HttpPatternMatchers::process_chp_list(CHPListElement* chplist)
 {
-    for (size_t i = 0; i < NUM_HTTP_FIELDS; i++)
-        chp_matchers[i] = new snort::SearchTool("ac_full", true);
-
     for (CHPListElement* chpe = chplist; chpe; chpe = chpe->next)
-        chp_matchers[chpe->chp_action.ptype]->add(chpe->chp_action.pattern,
+        chp_matchers[chpe->chp_action.ptype].add(chpe->chp_action.pattern,
             chpe->chp_action.psize, &chpe->chp_action, true);
 
     for (size_t i = 0; i < NUM_HTTP_FIELDS; i++)
-        chp_matchers[i]->prep();
+        chp_matchers[i].prep();
 
     return 1;
 }
@@ -699,13 +682,6 @@ int HttpPatternMatchers::process_chp_list(CHPListElement* chplist)
 #define HTTP_FIELD_PREFIX_COOKIE    "\r\nCookie: "
 #define HTTP_FIELD_PREFIX_COOKIE_SIZE (sizeof(HTTP_FIELD_PREFIX_COOKIE)-1)
 
-typedef struct _FIELD_PATTERN
-{
-    const uint8_t* data;
-    HttpFieldIds patternType;
-    unsigned length;
-} FieldPattern;
-
 static FieldPattern http_field_patterns[] =
 {
     { (const uint8_t*)HTTP_FIELD_PREFIX_URI, REQ_URI_FID, HTTP_FIELD_PREFIX_URI_SIZE },
@@ -716,20 +692,17 @@ static FieldPattern http_field_patterns[] =
       HTTP_FIELD_PREFIX_USER_AGENT_SIZE },
 };
 
-static snort::SearchTool* process_http_field_patterns(FieldPattern* patternList,
+void HttpPatternMatchers::process_http_field_patterns(FieldPattern* patternList,
     size_t patternListCount)
 {
-    snort::SearchTool* patternMatcher = new snort::SearchTool("ac_full", true);
-
-    for (size_t i=0; i < patternListCount; i++)
-        patternMatcher->add( (const char*)patternList[i].data, patternList[i].length,
+    for (size_t i = 0; i < patternListCount; i++)
+        field_matcher.add( (const char*)patternList[i].data, patternList[i].length,
             &patternList[i], false);
 
-    patternMatcher->prep();
-    return patternMatcher;
+    field_matcher.prep();
 }
 
-static void process_patterns(snort::SearchTool& matcher, DetectorHTTPPatterns& patterns, bool
+static void process_patterns(SearchTool& matcher, DetectorHTTPPatterns& patterns, bool
     last = true)
 {
     for (auto& pat: patterns)
@@ -739,7 +712,7 @@ static void process_patterns(snort::SearchTool& matcher, DetectorHTTPPatterns& p
         matcher.prep();
 }
 
-int HttpPatternMatchers::finalize()
+int HttpPatternMatchers::finalize_patterns()
 {
     process_patterns(via_matcher, static_via_http_detector_patterns);
     process_patterns(url_matcher, url_patterns);
@@ -753,11 +726,26 @@ int HttpPatternMatchers::finalize()
     process_patterns(content_type_matcher, content_type_patterns);
 
     uint32_t numPatterns = sizeof(http_field_patterns) / sizeof(*http_field_patterns);
-    field_matcher = process_http_field_patterns(http_field_patterns, numPatterns);
+    process_http_field_patterns(http_field_patterns, numPatterns);
 
     process_chp_list(chpList);
 
     return 0;
+}
+
+void HttpPatternMatchers::reload_patterns()
+{
+    via_matcher.reload();
+    url_matcher.reload();
+    client_agent_matcher.reload();
+    assert(host_url_matcher);
+    mlmp_reload_patterns(*host_url_matcher);
+    assert(rtmp_host_url_matcher);
+    mlmp_reload_patterns(*rtmp_host_url_matcher);
+    content_type_matcher.reload();
+    field_matcher.reload();
+    for (size_t i = 0; i < NUM_HTTP_FIELDS; i++)
+        chp_matchers[i].reload();
 }
 
 typedef struct fieldPatternData_t
@@ -788,8 +776,8 @@ static int http_field_pattern_match(void* id, void*, int match_end_pos, void* da
     return 1;
 }
 
-//  FIXIT-M: Is this still necessary now that we use inspection events?
-void HttpPatternMatchers::get_http_offsets(snort::Packet* pkt, AppIdHttpSession* hsession)
+// FIXIT-RC: Is this still necessary now that we use inspection events?
+void HttpPatternMatchers::get_http_offsets(Packet* pkt, AppIdHttpSession* hsession)
 {
     constexpr auto MIN_HTTP_REQ_HEADER_SIZE = (sizeof("GET /\r\n\r\n") - 1);
     static const uint8_t crlfcrlf[] = "\r\n\r\n";
@@ -799,9 +787,9 @@ void HttpPatternMatchers::get_http_offsets(snort::Packet* pkt, AppIdHttpSession*
 
     for (int fieldId = REQ_AGENT_FID; fieldId <= REQ_COOKIE_FID; fieldId++)
     {
-	pair_t off;
-	if ( hsession->get_offset(fieldId, off.first, off.second) )
-	    hsession->set_offset(fieldId, 0, off.second);
+        pair_t off;
+        if ( hsession->get_offset(fieldId, off.first, off.second) )
+            hsession->set_offset(fieldId, 0, off.second);
     }
 
     if (!pkt->data || pkt->dsize < MIN_HTTP_REQ_HEADER_SIZE)
@@ -816,7 +804,7 @@ void HttpPatternMatchers::get_http_offsets(snort::Packet* pkt, AppIdHttpSession*
 
     headerEnd += crlfcrlfLen;
     patternMatchData.length = (unsigned)(headerEnd - pkt->data);
-    field_matcher->find_all((const char*)pkt->data, patternMatchData.length,
+    field_matcher.find_all((const char*)pkt->data, patternMatchData.length,
         &http_field_pattern_match, false, (void*)(&patternMatchData));
 }
 
@@ -828,52 +816,6 @@ static inline void free_matched_patterns(MatchedPatterns* mp)
         mp = mp->next;
         snort_free(tmp);
     }
-}
-
-static void rewrite_chp(const char* buf, int bs, int start, int psize, char* adata,
-    const char** outbuf, int insert)
-{
-    int maxs, bufcont, as;
-    char* copyPtr;
-
-    // special behavior for insert vs. rewrite
-    if (insert)
-    {
-        // we don't want to insert a string that is already present
-        if (!adata || strcasestr((const char*)buf, adata))
-            return;
-
-        start += psize;
-        bufcont = start;
-        as = strlen(adata);
-        maxs = bs+as;
-    }
-    else
-    {
-        if (adata)
-        {
-            // we also don't want to replace a string with an identical one.
-            if (!strncmp(buf+start,adata,psize))
-                return;
-
-            as = strlen(adata);
-        }
-        else
-            as = 0;
-
-        bufcont = start+psize;
-        maxs = bs+(as-psize);
-    }
-
-    *outbuf = copyPtr = (char*)snort_calloc(maxs + 1);
-    memcpy(copyPtr, buf, start);
-    copyPtr += start;
-    if (adata)
-    {
-        memcpy(copyPtr, adata, as);
-        copyPtr += as;
-    }
-    memcpy(copyPtr, buf+bufcont, bs-bufcont);
 }
 
 static char* normalize_userid(char* user)
@@ -974,23 +916,21 @@ static void extract_chp(const char* buf, int bs, int start, int psize, char* ada
 void HttpPatternMatchers::scan_key_chp(ChpMatchDescriptor& cmd)
 {
     unsigned i = cmd.cur_ptype;
-    chp_matchers[i]->find_all(cmd.buffer[i], cmd.length[i], &chp_key_pattern_match,
+    chp_matchers[i].find_all(cmd.buffer[i], cmd.length[i], &chp_key_pattern_match,
         false, (void*)&cmd);
     cmd.sort_chp_matches();
 }
 
 AppId HttpPatternMatchers::scan_chp(ChpMatchDescriptor& cmd, char** version, char** user,
-    int* total_found, AppIdHttpSession* hsession, const AppIdModuleConfig* mod_config)
+    int* total_found, AppIdHttpSession* hsession, const OdpContext& odp_ctxt)
 {
-    MatchedCHPAction* insert_sweep2 = nullptr;
-    bool inhibit_modify = false;
     AppId ret = APP_ID_NONE;
     unsigned pt = cmd.cur_ptype;
 
     if ( pt > MAX_KEY_PATTERN )
     {
         // There is no previous attempt to match generated by scan_key_chp()
-        chp_matchers[pt]->find_all(cmd.buffer[pt], cmd.length[pt], &chp_pattern_match, false,
+        chp_matchers[pt].find_all(cmd.buffer[pt], cmd.length[pt], &chp_pattern_match, false,
             (void*)&cmd);
     }
 
@@ -998,9 +938,6 @@ AppId HttpPatternMatchers::scan_chp(ChpMatchDescriptor& cmd, char** version, cha
         return APP_ID_NONE;
     else
         cmd.sort_chp_matches();
-
-    if (!mod_config->safe_search_enabled)
-        cmd.chp_rewritten[pt] = nullptr;
 
     for ( auto& tmp: cmd.chp_matches[pt] )
     {
@@ -1024,8 +961,6 @@ AppId HttpPatternMatchers::scan_chp(ChpMatchDescriptor& cmd, char** version, cha
                 break;
 
             case ALTERNATE_APPID:     // an "optional" action that doesn't count towards totals
-            case REWRITE_FIELD:       // handled when the action completes successfully
-            case INSERT_FIELD:        // handled when the action completes successfully
                 break;
             }
             if ( !ret )
@@ -1043,45 +978,12 @@ AppId HttpPatternMatchers::scan_chp(ChpMatchDescriptor& cmd, char** version, cha
             hsession->set_skip_simple_detect(true);
             break;
         case EXTRACT_USER:
-            if ( !*user && !mod_config->chp_userid_disabled )
+            if ( !*user && !odp_ctxt.chp_userid_disabled )
             {
                 extract_chp(cmd.buffer[pt], cmd.length[pt], tmp.start_match_pos, match->psize,
                     match->action_data, user);
                 if ( *user )
                     *user = normalize_userid(*user);
-            }
-            break;
-        case REWRITE_FIELD:
-            if ( !inhibit_modify && !cmd.chp_rewritten[pt] )
-            {
-                // The field supports rewrites, and a rewrite hasn't happened.
-                rewrite_chp(cmd.buffer[pt], cmd.length[pt], tmp.start_match_pos, match->psize,
-                    match->action_data, &cmd.chp_rewritten[pt], 0);
-                (*total_found)++;
-                inhibit_modify = true;
-            }
-            break;
-        case INSERT_FIELD:
-            if ( !inhibit_modify && !insert_sweep2 )
-            {
-                if (match->action_data)
-                {
-                    // because this insert is the first one we have come across
-                    // we only need to remember this ONE for later.
-                    insert_sweep2 = &tmp;
-                }
-                else
-                {
-                    // This is an attempt to "insert nothing"; call it a match
-                    // The side effect is to set the inhibit_modify true
-
-                    // Note that an attempt to "rewrite with identical string"
-                    // is NOT equivalent to an "insert nothing" because of case-
-                    //  insensitive pattern matching
-
-                    inhibit_modify = true;
-                    (*total_found)++;
-                }
             }
             break;
 
@@ -1094,29 +996,12 @@ AppId HttpPatternMatchers::scan_chp(ChpMatchDescriptor& cmd, char** version, cha
             hsession->set_chp_hold_flow(true);
             break;
 
-        case GET_OFFSETS_FROM_REBUILT:
-            hsession->set_rebuilt_offsets(true);
-            hsession->set_chp_hold_flow(true);
-            break;
-
-        case SEARCH_UNSUPPORTED:
         case NO_ACTION:
             hsession->set_skip_simple_detect(true);
             break;
         default:
             break;
         }
-    }
-
-    // non-nullptr insert_sweep2 indicates the insert action we will use.
-    if ( !inhibit_modify && insert_sweep2 && !cmd.chp_rewritten[pt] )
-    {
-        // We will take the first INSERT_FIELD with an action string,
-        // which was decided with the setting of insert_sweep2.
-        rewrite_chp(cmd.buffer[pt], cmd.length[pt], insert_sweep2->start_match_pos,
-            insert_sweep2->mpattern->psize, insert_sweep2->mpattern->action_data,
-            &cmd.chp_rewritten[pt], 1);     // insert
-        (*total_found)++;
     }
 
     cmd.chp_matches[pt].clear();
@@ -1567,9 +1452,9 @@ AppId HttpPatternMatchers::get_appid_by_content_type(const char* data, int size)
 #define URL_SCHEME_END_PATTERN "://"
 #define URL_SCHEME_MAX_LEN     (sizeof("https://")-1)
 
-bool HttpPatternMatchers::get_appid_from_url(char* host, const char* url, char** version,
+bool HttpPatternMatchers::get_appid_from_url(const char* host, const char* url, char** version,
     const char* referer, AppId* ClientAppId, AppId* serviceAppId, AppId* payloadAppId,
-    AppId* referredPayloadAppId, bool from_rtmp)
+    AppId* referredPayloadAppId, bool from_rtmp, OdpContext& odp_ctxt)
 {
     char* temp_host = nullptr;
     tMlmpPattern patterns[3];
@@ -1599,7 +1484,7 @@ bool HttpPatternMatchers::get_appid_from_url(char* host, const char* url, char**
     int host_len;
     if (!host)
     {
-        host = (char*)strchr(url, '/');
+        host = strchr(url, '/');
         if (host != nullptr)
             host_len = host - url;
         else
@@ -1628,11 +1513,18 @@ bool HttpPatternMatchers::get_appid_from_url(char* host, const char* url, char**
             snort_free(temp_host);
             return false;
         }
-        path_len = url_len - host_len;
-        path = url + host_len;
+        path = strchr(url, '/');
+        if (path)
+            path_len = url + url_len - path;
     }
 
-    patterns[0].pattern = (uint8_t*)host;
+    if (!path_len)
+    {
+        path = "/";
+        path_len = 1;
+    }
+
+    patterns[0].pattern = (const uint8_t*)host;
     patterns[0].patternSize = host_len;
     patterns[1].pattern = (const uint8_t*)path;
     patterns[1].patternSize = path_len;
@@ -1669,7 +1561,7 @@ bool HttpPatternMatchers::get_appid_from_url(char* host, const char* url, char**
 
     /* if referred_id feature id disabled, referer will be null */
     if ( referer and (referer[0] != '\0') and (!payload_found or
-        AppInfoManager::get_instance().get_app_info_flags(data->payload_id,
+        odp_ctxt.get_app_info_mgr().get_app_info_flags(data->payload_id,
         APPINFO_FLAG_REFERRED)) )
     {
         const char* referer_start = referer;
@@ -1722,7 +1614,7 @@ bool HttpPatternMatchers::get_appid_from_url(char* host, const char* url, char**
 }
 
 void HttpPatternMatchers::get_server_vendor_version(const char* data, int len, char** version,
-    char** vendor, snort::AppIdServiceSubtype** subtype)
+    char** vendor, AppIdServiceSubtype** subtype)
 {
     int vendor_len = len;
 
@@ -1761,21 +1653,11 @@ void HttpPatternMatchers::get_server_vendor_version(const char* data, int len, c
                 {
                     if ( subname && subname_len > 0 && subver && *subname )
                     {
-                        snort::AppIdServiceSubtype* sub =
-                            (snort::AppIdServiceSubtype*)snort_calloc(
-                            sizeof(snort::AppIdServiceSubtype));
-                        char* tmp = (char*)snort_calloc(subname_len + 1);
-                        memcpy(tmp, subname, subname_len);
-                        tmp[subname_len] = 0;
-                        sub->service = tmp;
+                        AppIdServiceSubtype* sub = new AppIdServiceSubtype();
+                        sub->service.assign(subname, subname_len);
                         int subver_len = p - subver;
                         if (subver_len > 0 && *subver)
-                        {
-                            tmp = (char*)snort_calloc(subver_len + 1);
-                            memcpy(tmp, subver, subver_len);
-                            tmp[subver_len] = 0;
-                            sub->version = tmp;
-                        }
+                            sub->version.assign(subver, subver_len);
                         sub->next = *subtype;
                         *subtype = sub;
                     }
@@ -1795,21 +1677,12 @@ void HttpPatternMatchers::get_server_vendor_version(const char* data, int len, c
 
         if ( subname && subname_len > 0 && subver && *subname )
         {
-            snort::AppIdServiceSubtype* sub =
-                (snort::AppIdServiceSubtype*)snort_calloc(sizeof(snort::AppIdServiceSubtype));
-            char* tmp = (char*)snort_calloc(subname_len + 1);
-            memcpy(tmp, subname, subname_len);
-            tmp[subname_len] = 0;
-            sub->service = tmp;
+            AppIdServiceSubtype* sub = new AppIdServiceSubtype();
+            sub->service.assign(subname, subname_len);
 
             int subver_len = p - subver;
             if ( subver_len > 0 && *subver )
-            {
-                tmp = (char*)snort_calloc(subver_len + 1);
-                memcpy(tmp, subver, subver_len);
-                tmp[subver_len] = 0;
-                sub->version = tmp;
-            }
+                sub->version.assign(subver, subver_len);
             sub->next = *subtype;
             *subtype = sub;
         }
@@ -1861,7 +1734,7 @@ uint32_t HttpPatternMatchers::parse_multiple_http_patterns(const char* pattern,
             for (unsigned i = 0; i <= partNum; i++)
                 snort_free((void*)parts[i].pattern);
 
-            snort::ErrorMessage("Failed to allocate memory");
+            ErrorMessage("Failed to allocate memory");
             return 0;
         }
         partNum++;

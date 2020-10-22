@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -23,6 +23,7 @@
 
 #include <arpa/inet.h>
 #include <cstdio>
+#include <string>
 #include <ctime>
 
 #include "main/snort_types.h"
@@ -37,8 +38,9 @@
 
 enum WarningGroup
 {
-    WARN_DAQ, WARN_CONF, WARN_VARS, WARN_SYMBOLS, WARN_SCRIPTS,
-    WARN_HOSTS, WARN_RULES, WARN_FLOWBITS, WARN_PLUGINS,
+    WARN_DAQ, WARN_CONF, WARN_CONF_STRICT, WARN_VARS,
+    WARN_SYMBOLS, WARN_SCRIPTS, WARN_HOSTS, WARN_RULES,
+    WARN_FLOWBITS, WARN_PLUGINS,
 #ifdef PIGLET
     WARN_PIGLET,
 #endif
@@ -48,20 +50,46 @@ enum WarningGroup
 void reset_parse_errors();
 unsigned get_parse_errors();
 unsigned get_parse_warnings();
+void reset_reload_errors();
+unsigned get_reload_errors();
+std::string& get_reload_errors_description();
 
 namespace snort
 {
-SO_PUBLIC void ParseMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
 SO_PUBLIC void ParseWarning(WarningGroup, const char*, ...) __attribute__((format (printf, 2, 3)));
 SO_PUBLIC void ParseError(const char*, ...) __attribute__((format (printf, 1, 2)));
+SO_PUBLIC void ReloadError(const char*, ...) __attribute__((format (printf, 1, 2)));
 [[noreturn]] SO_PUBLIC void ParseAbort(const char*, ...) __attribute__((format (printf, 1, 2)));
 
 SO_PUBLIC void LogMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
-SO_PUBLIC void LogMessage(FILE* fh, const char*, ...) __attribute__((format (printf, 2, 3)));
+SO_PUBLIC void LogMessage(FILE*, const char*, ...) __attribute__((format (printf, 2, 3)));
 SO_PUBLIC void WarningMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
 SO_PUBLIC void ErrorMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
 
-// FIXIT-M do not call FatalError() during runtime
+class SO_PUBLIC ConfigLogger final
+{
+public:
+    ConfigLogger() = delete;
+    static void log_option(const char* caption);
+    static bool log_flag(const char* caption, bool flag, bool subopt = false);
+    static void log_limit(const char* caption, int val, int unlim, bool subopt = false);
+    static void log_limit(const char* caption, int val, int unlim, int disable, bool subopt = false);
+    static void log_limit(const char* caption, int64_t val, int64_t unlim, bool subopt = false);
+    static void log_value(const char* caption, int n, const char* descr, bool subopt = false);
+    static void log_value(const char* caption, int32_t n, bool subopt = false);
+    static void log_value(const char* caption, uint32_t n, bool subopt = false);
+    static void log_value(const char* caption, int64_t n, bool subopt = false);
+    static void log_value(const char* caption, uint64_t n, bool subopt = false);
+    static void log_value(const char* caption, double n, bool subopt = false);
+    static void log_value(const char* caption, const char* str, bool subopt = false);
+    static void log_list(const char* caption, const char* list, const char* prefix = " ", bool subopt = false);
+    static void log_list(const char* list);
+private:
+    static constexpr int indention = 25;
+    static constexpr int max_line_len = 75;
+};
+
+// FIXIT-RC do not call FatalError() during runtime
 [[noreturn]] SO_PUBLIC void FatalError(const char*, ...) __attribute__((format (printf, 1, 2)));
 
 NORETURN_ASSERT void log_safec_error(const char*, void*, int);

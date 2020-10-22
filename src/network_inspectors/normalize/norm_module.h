@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -37,7 +37,6 @@ public:
 
     bool set(const char*, snort::Value&, snort::SnortConfig*) override;
     bool begin(const char*, int, snort::SnortConfig*) override;
-    bool end(const char*, int, snort::SnortConfig*) override;
 
     snort::ProfileStats* get_profile() const override;
     const PegInfo* get_pegs() const override;
@@ -50,8 +49,8 @@ public:
     { return INSPECT; }
 
 private:
-    bool set_ip4(const char*, snort::Value&, snort::SnortConfig*);
-    bool set_tcp(const char*, snort::Value&, snort::SnortConfig*);
+    bool set_ip4(const char*, const snort::Value&, snort::SnortConfig*);
+    bool set_tcp(const char*, const snort::Value&, snort::SnortConfig*);
 
     void add_test_peg(const PegInfo&) const;
 

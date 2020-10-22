@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -185,8 +185,8 @@ bool Binding::convert(std::istringstream& data_stream)
         {
             Converter bind_cv;
 
-            // This will ensure that the final ouput file contains
-            // lua syntax - even if their are only rules in the file
+            // This will ensure that the final output file contains
+            // lua syntax - even if there are only rules in the file
             bind_cv.get_table_api().open_top_level_table("ips");
             bind_cv.get_table_api().close_table();
 
@@ -213,12 +213,6 @@ bool Binding::convert(std::istringstream& data_stream)
 
     bind.set_use_file(file, is_ips ? Binder::IT_IPS : Binder::IT_FILE);
 
-    // FIXIT-H this resets network config by forcing network policy to swap with ips selection
-    if ( is_ips )
-    {
-        net_bind.set_use_file(file, Binder::IT_NETWORK);
-        net_bind.print_binding(true);
-    }
     return rc;
 }
 

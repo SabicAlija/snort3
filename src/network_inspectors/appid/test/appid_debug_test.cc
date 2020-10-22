@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -43,16 +43,27 @@ unsigned get_instance_id() { return 3; }
 
 FlowData::FlowData(unsigned, Inspector*) { }
 FlowData::~FlowData() = default;
+AppIdSessionApi::AppIdSessionApi(const AppIdSession* asd, const SfIp& ip) :
+    StashGenericObject(STASH_GENERIC_OBJECT_APPID), asd(asd), initiator_ip(ip) {}
 }
 
+void ApplicationDescriptor::set_id(const Packet&, AppIdSession&, AppidSessionDirection, AppId, AppidChangeBits&) { }
 class AppIdInspector
 {
 public:
     AppIdInspector() = default;
 };
 
-AppIdSession::AppIdSession(IpProtocol, const SfIp*, uint16_t, AppIdInspector& inspector)
-    : FlowData(0), inspector(inspector) { }
+AppIdConfig::~AppIdConfig() { }
+OdpContext::OdpContext(const AppIdConfig&, snort::SnortConfig*) { }
+OdpContext::~OdpContext() { }
+
+AppIdConfig stub_config;
+AppIdContext stub_ctxt(stub_config);
+OdpContext stub_odp_ctxt(stub_config, nullptr);
+AppIdSession::AppIdSession(IpProtocol, const SfIp* ip, uint16_t, AppIdInspector&, OdpContext&)
+    : FlowData(0), config(stub_config), api(*(new AppIdSessionApi(this, *ip))),
+    odp_ctxt(stub_odp_ctxt) { }
 AppIdSession::~AppIdSession() = default;
 
 // Utility functions
@@ -61,7 +72,6 @@ static void SetConstraints(IpProtocol protocol,    // use IpProtocol::PROTO_NOT_
                 const char* sipstr, uint16_t sport, const char* dipstr, uint16_t dport,
                 AppIdDebugSessionConstraints& constraints)
 {
-    SfIp sip, dip;
     if (sipstr)
     {
         constraints.sip.set(sipstr);
@@ -105,19 +115,18 @@ TEST(appid_debug, basic_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("10.1.2.3");
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("10.1.2.3");
     dip.set("10.9.8.7");
     uint16_t sport = 48620;
     uint16_t dport = 80;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = sport;
-    session.common.initiator_ip = sip;
+    session.initiator_port = sport;
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -126,6 +135,8 @@ TEST(appid_debug, basic_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Test matching a packet in reverse direction (from constraints).
@@ -139,18 +150,17 @@ TEST(appid_debug, reverse_direction_activate_test)
 
     SfIp sip;
     SfIp dip;
+    dip.set("10.1.2.3");
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &dip, 0, inspector, stub_odp_ctxt);
     // This packet...
     sip.set("10.9.8.7");    // this would be a reply back
-    dip.set("10.1.2.3");
     uint16_t sport = 80;
     uint16_t dport = 48620;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = dport;    // session initiator is now dst
-    session.common.initiator_ip = dip;
+    session.initiator_port = dport;    // session initiator is now dst
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -159,6 +169,8 @@ TEST(appid_debug, reverse_direction_activate_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Test IPv6 matches.
@@ -172,19 +184,18 @@ TEST(appid_debug, ipv6_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("2001:db8:85a3::8a2e:370:7334");    // IPv6
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("2001:db8:85a3::8a2e:370:7334");    // IPv6
     dip.set("2001:db8:85a3::8a2e:370:7335");
     uint16_t sport = 1234;
     uint16_t dport = 443;
     IpProtocol protocol = IpProtocol::UDP;    // also threw in UDP and address space ID for kicks
     uint16_t address_space_id = 100;
     // The session...
-    session.common.initiator_port = sport;
-    session.common.initiator_ip = sip;
+    session.initiator_port = sport;
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 6, address_space_id, &session, false);
@@ -199,6 +210,8 @@ TEST(appid_debug, ipv6_test)
             "2001:db8:85a3::8a2e:370:7335 443 17 AS=100 ID=3";
 #endif
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Test matching on session initiator IP (rather than port).
@@ -211,19 +224,18 @@ TEST(appid_debug, no_initiator_port_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("10.1.2.3");
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("10.1.2.3");
     dip.set("10.9.8.7");
     uint16_t sport = 48620;
     uint16_t dport = 80;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = 0;    // no initiator port yet (uses IPs)
-    session.common.initiator_ip = sip;
+    session.initiator_port = 0;    // no initiator port yet (uses IPs)
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -232,6 +244,8 @@ TEST(appid_debug, no_initiator_port_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Test matching on session initiator IP (reverse direction packet).
@@ -245,18 +259,17 @@ TEST(appid_debug, no_initiator_port_reversed_test)
 
     SfIp sip;
     SfIp dip;
+    dip.set("10.1.2.3");
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &dip, 0, inspector, stub_odp_ctxt);
     // This packet...
     sip.set("10.9.8.7");
-    dip.set("10.1.2.3");
     uint16_t sport = 80;
     uint16_t dport = 48620;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = 0;    // no initiator port yet (uses IPs)... and reversed packet dir from above
-    session.common.initiator_ip = dip;
+    session.initiator_port = 0;    // no initiator port yet (uses IPs)... and reversed packet dir from above
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -265,6 +278,8 @@ TEST(appid_debug, no_initiator_port_reversed_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Check for null session pointer (won't activate).
@@ -312,23 +327,24 @@ TEST(appid_debug, no_match_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("10.1.2.3");
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("10.1.2.3");
     dip.set("10.9.8.7");
     uint16_t sport = 48620;
     uint16_t dport = 80;
     IpProtocol protocol = IpProtocol::UDP;    // but this packet is UDP instead
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = sport;
-    session.common.initiator_ip = sip;
+    session.initiator_port = sport;
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
     CHECK_EQUAL(appidDebug->is_active(), false);    // not active (no match)
+
+    delete &session.get_api();
 }
 
 // Set all constraints (must match all).
@@ -341,19 +357,18 @@ TEST(appid_debug, all_constraints_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("10.1.2.3");
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("10.1.2.3");
     dip.set("10.9.8.7");
     uint16_t sport = 48620;
     uint16_t dport = 80;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = sport;
-    session.common.initiator_ip = sip;
+    session.initiator_port = sport;
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -362,6 +377,8 @@ TEST(appid_debug, all_constraints_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Only set protocol in constraints.
@@ -374,19 +391,18 @@ TEST(appid_debug, just_proto_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("10.1.2.3");
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("10.1.2.3");
     dip.set("10.9.8.7");
     uint16_t sport = 48620;
     uint16_t dport = 80;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = sport;
-    session.common.initiator_ip = sip;
+    session.initiator_port = sport;
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -395,6 +411,8 @@ TEST(appid_debug, just_proto_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Only set IP in constraints.
@@ -407,19 +425,18 @@ TEST(appid_debug, just_ip_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("10.1.2.3");
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("10.1.2.3");
     dip.set("10.9.8.7");
     uint16_t sport = 48620;
     uint16_t dport = 80;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = sport;
-    session.common.initiator_ip = sip;
+    session.initiator_port = sport;
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -428,6 +445,8 @@ TEST(appid_debug, just_ip_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 // Only set port in constraints.
@@ -440,19 +459,18 @@ TEST(appid_debug, just_port_test)
     CHECK_EQUAL(appidDebug->is_enabled(), true);
 
     SfIp sip;
+    sip.set("10.1.2.3");
     SfIp dip;
     AppIdInspector inspector;
-    AppIdSession session(IpProtocol::PROTO_NOT_SET, nullptr, 0, inspector);
+    AppIdSession session(IpProtocol::PROTO_NOT_SET, &sip, 0, inspector, stub_odp_ctxt);
     // This packet...
-    sip.set("10.1.2.3");
     dip.set("10.9.8.7");
     uint16_t sport = 48620;
     uint16_t dport = 80;
     IpProtocol protocol = IpProtocol::TCP;
     uint16_t address_space_id = 0;
     // The session...
-    session.common.initiator_port = sport;
-    session.common.initiator_ip = sip;
+    session.initiator_port = sport;
     // activate()
     appidDebug->activate(sip.get_ip6_ptr(), dip.get_ip6_ptr(), sport, dport,
         protocol, 4, address_space_id, &session, false);
@@ -461,6 +479,8 @@ TEST(appid_debug, just_port_test)
     // get_debug_session()
     const char* str = "10.1.2.3 48620 -> 10.9.8.7 80 6 AS=0 ID=3";
     CHECK_TRUE(strcmp(appidDebug->get_debug_session(), str) == 0);
+
+    delete &session.get_api();
 }
 
 int main(int argc, char** argv)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -40,12 +40,6 @@ StreamIcmpConfig::StreamIcmpConfig()
     session_timeout = 30;
 }
 
-static void icmp_show(StreamIcmpConfig* pc)
-{
-    LogMessage("Stream ICMP config:\n");
-    LogMessage("    Timeout: %d seconds\n", pc->session_timeout);
-}
-
 //-------------------------------------------------------------------------
 // inspector stuff
 //-------------------------------------------------------------------------
@@ -56,10 +50,10 @@ public:
     StreamIcmp(StreamIcmpConfig*);
     ~StreamIcmp() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     NORETURN_ASSERT void eval(Packet*) override;
 
-private:
+public:
     StreamIcmpConfig* config;
 };
 
@@ -73,15 +67,24 @@ StreamIcmp::~StreamIcmp()
     delete config;
 }
 
-void StreamIcmp::show(SnortConfig*)
+void StreamIcmp::show(const SnortConfig*) const
 {
-    icmp_show(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_value("session_timeout", config->session_timeout);
 }
 
 NORETURN_ASSERT void StreamIcmp::eval(Packet*)
 {
     // session::process() instead
     assert(false);
+}
+
+StreamIcmpConfig* get_icmp_cfg(Inspector* ins)
+{
+    assert(ins);
+    return ((StreamIcmp*)ins)->config;
 }
 
 //-------------------------------------------------------------------------

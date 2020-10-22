@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -99,7 +99,7 @@ int DceRpcServiceDetector::tcp_validate(AppIdDiscoveryArgs& args)
         size -= length;
     }
     if (retval == APPID_SUCCESS)
-        return add_service(args.asd, args.pkt, args.dir, APP_ID_DCE_RPC);
+        return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_DCE_RPC);
 
 inprocess:
     service_inprocess(args.asd, args.pkt, args.dir);
@@ -142,7 +142,7 @@ int DceRpcServiceDetector::udp_validate(AppIdDiscoveryArgs& args)
         size -= length;
     }
     if (retval == APPID_SUCCESS)
-        return add_service(args.asd, args.pkt, args.dir, APP_ID_DCE_RPC);
+        return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_DCE_RPC);
 
 inprocess:
     service_inprocess(args.asd, args.pkt, args.dir);

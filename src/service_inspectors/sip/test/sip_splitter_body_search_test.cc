@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -35,7 +35,7 @@ TEST_GROUP(sip_splitter_body_search_test)
 {
     SipSplitterUT ssut = SipSplitterUT(SipSplitter(true));
 
-    void setup()
+    void setup() override
     {
         ssut.splitter_reset_states();
     }

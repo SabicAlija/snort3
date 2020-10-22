@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,8 +20,9 @@
 #ifndef HTTP_MSG_STATUS_H
 #define HTTP_MSG_STATUS_H
 
-#include "http_msg_start.h"
+#include "http_common.h"
 #include "http_field.h"
+#include "http_msg_start.h"
 
 //-------------------------------------------------------------------------
 // HttpMsgStatus class
@@ -31,7 +32,7 @@ class HttpMsgStatus : public HttpMsgStart
 {
 public:
     HttpMsgStatus(const uint8_t* buffer, const uint16_t buf_size, HttpFlowData* session_data_,
-        HttpEnums::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+        HttpCommon::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
         const HttpParaList* params_);
     void gen_events() override;
     void update_flow() override;

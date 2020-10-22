@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -61,7 +61,7 @@ PortObject* PortObjectDupPorts(PortObject*);
 
 int PortObjectNormalize(PortObject*);
 void PortObjectToggle(PortObject*);
-int PortObjectEqual(PortObject* poa, PortObject* pob);
+bool PortObjectEqual(PortObject* poa, PortObject* pob);
 
 int PortObjectPortCount(PortObject*);
 int PortObjectHasPort(PortObject*, int port);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,13 +23,16 @@
 #define PORT_OBJECT2_H
 
 #include "framework/bits.h"
-#include "hash/ghash.h"
 #include "utils/sflsq.h"
 
 //-------------------------------------------------------------------------
 // PortObject2 is similar to PortObject
 //-------------------------------------------------------------------------
 
+namespace snort
+{
+class GHash;
+}
 
 struct PortObject;
 
@@ -52,7 +55,7 @@ struct PortObject2
 PortObject2* PortObject2New(int nrules /*guess at this */);
 void PortObject2Free(PortObject2*);
 void PortObject2Finalize(PortObject2*);
-PortObject2* PortObject2Dup(PortObject*);
+PortObject2* PortObject2Dup(PortObject&);
 
 typedef void (*PortObjectIterator)(int port, void*);
 void PortObject2Iterate(PortObject2*, PortObjectIterator, void*);

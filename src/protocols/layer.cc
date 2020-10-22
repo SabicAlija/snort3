@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -144,11 +144,20 @@ const Layer* get_mpls_layer(const Packet* const p)
 
 const vlan::VlanTagHdr* get_vlan_layer(const Packet* const p)
 {
-    uint8_t num_layers = p->num_layers;
-    const Layer* lyr = p->layers;
+    assert( p->proto_bits & PROTO_BIT__VLAN );
+    assert( p->vlan_idx < p->num_layers );
+    const Layer* lyr = p->layers + p->vlan_idx;
+    return reinterpret_cast<const vlan::VlanTagHdr*>(lyr->start);
+}
 
-    return reinterpret_cast<const vlan::VlanTagHdr*>(
-        find_inner_layer(lyr, num_layers, ProtocolId::ETHERTYPE_8021Q));
+const cisco_meta_data::CiscoMetaDataHdr* get_cisco_meta_data_layer(const Packet* const p)
+{
+    assert( p->proto_bits & PROTO_BIT__CISCO_META_DATA );
+
+    const Layer* lyr = find_layer(p->layers, p->num_layers, ProtocolId::ETHERTYPE_CISCO_META,
+        ProtocolId::ETHERTYPE_CISCO_META);
+
+    return reinterpret_cast<const cisco_meta_data::CiscoMetaDataHdr*>(lyr->start);
 }
 
 const eth::EtherHdr* get_eth_layer(const Packet* const p)
@@ -445,4 +454,3 @@ const icmp::ICMPHdr* get_icmp_embed_icmp(const ip::IpApi& api)
 { return reinterpret_cast<const icmp::ICMPHdr*>(api.ip_data()); }
 } // namespace layer
 } // namespace snort
-

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,7 @@
 #include "piglet_manager.h"
 
 #include <cassert>
+#include <map>
 
 #include "log/messages.h"
 #include "main/snort_config.h"
@@ -102,11 +103,11 @@ static BasePlugin* instantiate(
     Module* m;
     if ( key == PT_IPS_OPTION || use_defaults )
         // FIXIT-L this is just a workaround, need to be able to get parsed rule module
-        m = ModuleManager::get_default_module(name.c_str(), SnortConfig::get_conf());
+        m = ModuleManager::get_default_module(name.c_str(), SnortConfig::get_main_conf());
     else
         m = ModuleManager::get_module(name.c_str());
 
-    auto piglet = piglet_api->ctor(lua, name, m, SnortConfig::get_conf());
+    auto piglet = piglet_api->ctor(lua, name, m, SnortConfig::get_main_conf());
 
     assert(piglet);
 
@@ -170,7 +171,7 @@ void Manager::destroy(BasePlugin* p)
 }
 
 void Manager::add_chunk(const string& filename, const string& target, const string& chunk)
-{ chunks.push_back(Chunk(filename, target, chunk)); }
+{ chunks.emplace_back(Chunk(filename, target, chunk)); }
 
 const vector<Chunk>& Manager::get_chunks()
 { return chunks; }

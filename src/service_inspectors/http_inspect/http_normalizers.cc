@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,10 +21,12 @@
 #include "config.h"
 #endif
 
+#include "http_common.h"
 #include "http_normalizers.h"
 
 #include <cstring>
 
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 // Collection of stock normalization functions. This will probably grow throughout the life of the
@@ -73,7 +75,8 @@ int32_t norm_remove_quotes_lws(const uint8_t* in_buf, int32_t in_length, uint8_t
 // values use the first one.
 int64_t norm_decimal_integer(const Field& input)
 {
-    assert(input.length() > 0);
+    if ( input.length() <= 0 )
+        return STAT_PROBLEMATIC;
     // Limited to 18 decimal digits, not including leading zeros, to fit comfortably into int64_t
     int64_t total = 0;
     int non_leading_zeros = 0;
@@ -101,4 +104,3 @@ void get_last_token(const Field& input, Field& last_token, char ichar)
     last_start++;
     last_token.set(input.length() - (last_start - input.start()), last_start);
 }
-

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -111,13 +111,13 @@ int DirectConnectServiceDetector::validate(AppIdDiscoveryArgs& args)
     }
 
     if (args.asd.protocol == IpProtocol::TCP)
-        return tcp_validate(data, size, args.dir, args.asd, args.pkt, fd);
+        return tcp_validate(data, size, args.dir, args.asd, args.pkt, fd, args.change_bits);
     else
-        return udp_validate(data, size, args.dir, args.asd, args.pkt, fd);
+        return udp_validate(data, size, args.dir, args.asd, args.pkt, fd, args.change_bits);
 }
 
 int DirectConnectServiceDetector::tcp_validate(const uint8_t* data, uint16_t size, const AppidSessionDirection dir,
-    AppIdSession& asd, const Packet* pkt, ServiceData* serviceData)
+    AppIdSession& asd, const Packet* pkt, ServiceData* serviceData, AppidChangeBits& change_bits)
 {
     switch (serviceData->state)
     {
@@ -128,14 +128,12 @@ int DirectConnectServiceDetector::tcp_validate(const uint8_t* data, uint16_t siz
         {
             if (memcmp(data, PATTERN1, sizeof(PATTERN1)-1) == 0)
             {
-                printf("maybe first directconnect to hub  detected\n");
                 serviceData->state = CONN_STATE_1;
                 goto inprocess;
             }
 
             if (memcmp(data, PATTERN2, sizeof(PATTERN2)-1) == 0)
             {
-                printf("maybe first dc connect between peers  detected\n");
                 serviceData->state = CONN_STATE_2;
                 goto inprocess;
             }
@@ -154,7 +152,6 @@ int DirectConnectServiceDetector::tcp_validate(const uint8_t* data, uint16_t siz
         break;
 
     case CONN_STATE_1:
-        printf ("ValidateDirectConnectTcp(): state 1 size %d\n", size);
         if (size >= 11)
         {
             if (memcmp(data, PATTERN3, sizeof(PATTERN3)-1) == 0
@@ -162,7 +159,6 @@ int DirectConnectServiceDetector::tcp_validate(const uint8_t* data, uint16_t siz
                 || memcmp(data, PATTERN5, sizeof(PATTERN5)-1) == 0
                 || memcmp(data, PATTERN6, sizeof(PATTERN6)-1) == 0)
             {
-                printf("found directconnect HSUP ADBAS E in second packet\n");
                 goto success;
             }
         }
@@ -215,7 +211,7 @@ success:
         goto inprocess;
     }
 
-    return add_service(asd, pkt, dir, APP_ID_DIRECT_CONNECT);
+    return add_service(change_bits, asd, pkt, dir, APP_ID_DIRECT_CONNECT);
 
 fail:
     fail_service(asd, pkt, dir);
@@ -223,7 +219,7 @@ fail:
 }
 
 int DirectConnectServiceDetector::udp_validate(const uint8_t* data, uint16_t size, const AppidSessionDirection dir,
-    AppIdSession& asd, const Packet* pkt, ServiceData* serviceData)
+    AppIdSession& asd, const Packet* pkt, ServiceData* serviceData, AppidChangeBits& change_bits)
 {
     if (dir == APP_ID_FROM_RESPONDER && serviceData->state == CONN_STATE_SERVICE_DETECTED)
     {
@@ -263,7 +259,7 @@ success:
     }
 
 reportSuccess:
-    return add_service(asd, pkt, dir, APP_ID_DIRECT_CONNECT);
+    return add_service(change_bits, asd, pkt, dir, APP_ID_DIRECT_CONNECT);
 
 fail:
     fail_service(asd, pkt, dir);

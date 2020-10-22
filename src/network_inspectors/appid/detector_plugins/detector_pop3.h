@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ public:
     ~Pop3ClientDetector() override;
 
     void do_custom_init() override;
+    void do_custom_reload() override;
     int validate(AppIdDiscoveryArgs&) override;
     POP3DetectorData* get_common_data(AppIdSession&);
 

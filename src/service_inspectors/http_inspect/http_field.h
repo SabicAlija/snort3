@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cassert>
 
+#include "http_common.h"
 #include "http_enum.h"
 
 // Individual pieces of the message found during parsing.
@@ -34,27 +35,25 @@ class Field
 public:
     static const Field FIELD_NULL;
 
-    Field(int32_t length, const uint8_t* start, bool own_the_buffer_ = false) : strt(start),
-        len(length), own_the_buffer(own_the_buffer_) { assert(length <= HttpEnums::MAX_OCTETS); }
+    Field(int32_t length, const uint8_t* start, bool own_the_buffer_ = false);
     explicit Field(int32_t length) : len(length) { assert(length<=0); }
     Field() = default;
+    Field& operator=(const Field& rhs);
     ~Field() { if (own_the_buffer) delete[] strt; }
     int32_t length() const { return len; }
     const uint8_t* start() const { return strt; }
     void set(int32_t length, const uint8_t* start, bool own_the_buffer_ = false);
     void set(const Field& f);
-    void set(HttpEnums::StatusCode stat_code);
-    void set(int32_t length) { set(static_cast<HttpEnums::StatusCode>(length)); }
+    void set(HttpCommon::StatusCode stat_code);
+    void set(int32_t length) { set(static_cast<HttpCommon::StatusCode>(length)); }
 
 #ifdef REG_TEST
     void print(FILE* output, const char* name) const;
 #endif
 
 private:
-    Field& operator=(const Field&) = delete;
-
     const uint8_t* strt = nullptr;
-    int32_t len = HttpEnums::STAT_NOT_COMPUTE;
+    int32_t len = HttpCommon::STAT_NOT_COMPUTE;
     bool own_the_buffer = false;
 };
 

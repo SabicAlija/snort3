@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,9 +26,6 @@
 #include "client_plugins/client_detector.h"
 #include "service_plugins/service_detector.h"
 
-#include "main/snort_debug.h"
-extern Trace TRACE_NAME(appid_module);
-
 namespace snort
 {
 class SearchTool;
@@ -42,7 +39,7 @@ struct PortPatternNode
     unsigned char* pattern;
     unsigned length;
     int32_t offset;
-    char* detectorName;
+    char* detector_name;
     PortPatternNode* next;
 };
 
@@ -80,8 +77,9 @@ public:
     PatternClientDetector(ClientDiscovery*);
     ~PatternClientDetector() override;
 
-    static void insert_client_port_pattern(PortPatternNode*);
-    static void finalize_client_port_patterns();
+    void insert_client_port_pattern(PortPatternNode*);
+    void finalize_client_port_patterns();
+    void reload_client_port_patterns();
 
     int validate(AppIdDiscoveryArgs&) override;
 
@@ -89,8 +87,8 @@ private:
     void create_client_pattern_trees();
     void register_client_patterns();
 
-    PortPatternNode* luaInjectedPatterns = nullptr;
-    PatternService* servicePortPattern = nullptr;
+    PortPatternNode* lua_injected_patterns = nullptr;
+    PatternService* service_port_pattern = nullptr;
     snort::SearchTool* tcp_pattern_matcher = nullptr;
     snort::SearchTool* udp_pattern_matcher = nullptr;
 };
@@ -101,8 +99,9 @@ public:
     PatternServiceDetector(ServiceDiscovery*);
     ~PatternServiceDetector() override;
 
-    static void insert_service_port_pattern(PortPatternNode*);
-    static void finalize_service_port_patterns();
+    void insert_service_port_pattern(PortPatternNode*);
+    void finalize_service_port_patterns();
+    void reload_service_port_patterns();
 
     int validate(AppIdDiscoveryArgs&) override;
 
@@ -111,12 +110,12 @@ private:
     void register_service_patterns();
     void install_ports(PatternService*);
 
-    PortPatternNode* luaInjectedPatterns = nullptr;
-    PatternService* servicePortPattern = nullptr;
+    PortPatternNode* lua_injected_patterns = nullptr;
+    PatternService* service_port_pattern = nullptr;
     snort::SearchTool* tcp_pattern_matcher = nullptr;
     snort::SearchTool* udp_pattern_matcher = nullptr;
-    snort::SearchTool* tcpPortPatternTree[65536] = { nullptr };
-    snort::SearchTool* udpPortPatternTree[65536] = { nullptr };
+    snort::SearchTool* tcp_port_pattern_tree[65536] = { nullptr };
+    snort::SearchTool* udp_port_pattern_tree[65536] = { nullptr };
 };
 
 #endif

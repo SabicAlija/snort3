@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,11 +22,15 @@
 #ifndef PORT_TABLE_H
 #define PORT_TABLE_H
 
-#include "hash/ghash.h"
 #include "ports/port_item.h"
 #include "ports/port_object.h"
 #include "ports/port_object2.h"
 #include "utils/sflsq.h"
+
+namespace snort
+{
+class GHash;
+}
 
 //-------------------------------------------------------------------------
 // PortTable - provides support to analyze the Port List objects defined by

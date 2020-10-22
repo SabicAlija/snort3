@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -83,10 +83,10 @@ bool FileConnectorModule::set(const char*, Value& v, SnortConfig*)
         config->name = v.get_string();
 
     else if ( v.is("format") )
-        config->text_format = ( v.get_long() == 1 );
+        config->text_format = ( v.get_uint8() == 1 );
 
     else if ( v.is("direction") )
-        switch ( v.get_long() )
+        switch ( v.get_uint8() )
         {
         case 0:
         {
@@ -135,7 +135,7 @@ bool FileConnectorModule::end(const char*, int idx, SnortConfig*)
 {
     if (idx != 0)
     {
-        config_set->push_back(config);
+        config_set->emplace_back(config);
         config = nullptr;
     }
 

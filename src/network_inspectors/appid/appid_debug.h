@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -48,15 +48,15 @@ struct AppIdDebugSessionConstraints
     uint16_t sport;
     uint16_t dport;
     IpProtocol protocol = IpProtocol::PROTO_NOT_SET;
-    bool proto_match(IpProtocol& proto)
+    bool proto_match(IpProtocol proto) const
     {
         return (protocol == IpProtocol::PROTO_NOT_SET or protocol == proto);
     }
-    bool port_match(uint16_t p1, uint16_t p2)
+    bool port_match(uint16_t p1, uint16_t p2) const
     {
         return (!sport or sport == p1) and (!dport or dport == p2);
     }
-    bool ip_match(const uint32_t* ip1, const uint32_t* ip2)
+    bool ip_match(const uint32_t* ip1, const uint32_t* ip2) const
     {
         return
             ((!sip_flag or !memcmp(sip.get_ip6_ptr(), ip1, sizeof(snort::ip::snort_in6_addr))) and
@@ -68,9 +68,9 @@ struct AppIdDebugSessionConstraints
 inline void AppIdDebugSessionConstraints::set(const AppIdDebugSessionConstraints& src)
 {
     if ((sip_flag = src.sip_flag))
-        sip.set(src.sip);
+        sip = src.sip;
     if ((dip_flag = src.dip_flag))
-        dip.set(src.dip);
+        dip = src.dip;
     sport = src.sport;
     dport = src.dport;
     protocol = src.protocol;

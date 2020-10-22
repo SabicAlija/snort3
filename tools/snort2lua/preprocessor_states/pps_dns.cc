@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,10 +42,14 @@ bool Dns::convert(std::istringstream& data_stream)
     std::string keyword;
     bool retval = true;
     bool ports_set = false;
-    auto& bind = cv.make_binder();
 
-    bind.set_when_proto("tcp");
-    bind.set_use_type("dns");
+    auto& tcp_bind = cv.make_binder();
+    tcp_bind.set_when_proto("tcp");
+    tcp_bind.set_use_type("dns");
+
+    auto& udp_bind = cv.make_binder();
+    udp_bind.set_when_proto("udp");
+    udp_bind.set_use_type("dns");
 
     table_api.open_table("dns");
 
@@ -73,7 +77,10 @@ bool Dns::convert(std::istringstream& data_stream)
                 while (data_stream >> keyword && keyword != "}")
                 {
                     ports_set = true;
-                    bind.add_when_port(keyword);
+                    tcp_bind.set_when_role("server");
+                    tcp_bind.add_when_port(keyword);
+                    udp_bind.set_when_role("server");
+                    udp_bind.add_when_port(keyword);
                 }
             }
             else
@@ -96,7 +103,12 @@ bool Dns::convert(std::istringstream& data_stream)
     }
 
     if (!ports_set)
-        bind.add_when_port("53");
+    {
+        tcp_bind.set_when_role("server");
+        tcp_bind.add_when_port("53");
+        udp_bind.set_when_role("server");
+        udp_bind.add_when_port("53");
+    }
 
     return retval;
 }

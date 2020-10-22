@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,19 +25,20 @@
 
 struct PacketLatencyConfig
 {
-    enum Action
-    {
-        NONE = 0x00,
-        ALERT = 0x01,
-        LOG = 0x02,
-        ALERT_AND_LOG = ALERT | LOG
-    };
-
     hr_duration max_time = CLOCK_ZERO;
     bool fastpath = false;
-    Action action = NONE;
+#ifdef REG_TEST
+    bool test_timeout = false;
+#endif
 
-    bool enabled() const { return max_time > CLOCK_ZERO; }
+    bool enabled() const
+    {
+#ifdef REG_TEST
+        if ( test_timeout )
+            return true;
+#endif
+        return max_time > CLOCK_ZERO;
+    }
 };
 
 #endif

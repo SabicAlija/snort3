@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,7 +42,7 @@ bool DecodeBuffer::check_restore_buffer()
     uint32_t encode_avail =  get_encode_avail();
 
     if (encode_avail ==0 || decode_avail ==0 ||
-        (!encodeBuf) || (!decodeBuf))
+        (!encodeBuf))
     {
         return false;
     }
@@ -111,15 +111,12 @@ DecodeBuffer::DecodeBuffer(int max_depth)
         return;
 
     encodeBuf = (uint8_t*)snort_alloc(buf_size);
-    decodeBuf = (uint8_t*)snort_alloc(buf_size);
 }
 
 DecodeBuffer::~DecodeBuffer()
 {
     if (encodeBuf)
         snort_free(encodeBuf);
-    if (decodeBuf)
-        snort_free(decodeBuf);
 }
 
 void DecodeBuffer::update_buffer(uint32_t act_encode_size, uint32_t act_decode_size)

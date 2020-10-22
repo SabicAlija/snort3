@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -97,7 +97,8 @@ int RfbServiceDetector::validate(AppIdDiscoveryArgs& args)
         p++;
     }
     *v = 0;
-    return add_service(args.asd, args.pkt, args.dir, APP_ID_VNC_RFB, nullptr, version, nullptr);
+    return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_VNC_RFB,
+        nullptr, version, nullptr);
 
 inprocess:
     service_inprocess(args.asd, args.pkt, args.dir);

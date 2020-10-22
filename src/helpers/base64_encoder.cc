@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,11 +28,6 @@
 #include "base64_encoder.h"
 
 #include <cassert>
-
-#ifdef UNIT_TEST
-#include <cstring>
-#include "catch/snort_catch.h"
-#endif
 
 using namespace snort;
 
@@ -123,10 +118,15 @@ unsigned Base64Encoder::finish(char* buf)
 // which adds a \n to the input.
 //--------------------------------------------------------------------------
 
-#ifdef UNIT_TEST
+#ifdef CATCH_TEST_BUILD
+
+#include <cstring>
+
+#include "catch/catch.hpp"
+
 TEST_CASE("b64 decode", "[Base64Encoder]")
 {
-    Base64Encoder b64;
+    Base64Encoder b64e;
 
     const char* text = "The quick brown segment jumped over the lazy dogs.\n";
     const char* code = "VGhlIHF1aWNrIGJyb3duIHNlZ21lbnQganVtcGVkIG92ZXIgdGhlIGxhenkgZG9ncy4K";
@@ -135,17 +135,17 @@ TEST_CASE("b64 decode", "[Base64Encoder]")
 
     SECTION("no decode")
     {
-        CHECK(!b64.finish(buf));
+        CHECK(!b64e.finish(buf));
     }
     SECTION("null data")
     {
-        CHECK(!b64.encode(nullptr, 0, buf));
-        CHECK(!b64.finish(buf));
+        CHECK(!b64e.encode(nullptr, 0, buf));
+        CHECK(!b64e.finish(buf));
     }
     SECTION("zero length data")
     {
-        CHECK(!b64.encode((const uint8_t*)"ignore", 0, buf));
-        CHECK(!b64.finish(buf));
+        CHECK(!b64e.encode((const uint8_t*)"ignore", 0, buf));
+        CHECK(!b64e.finish(buf));
     }
     SECTION("finish states")
     {
@@ -156,20 +156,20 @@ TEST_CASE("b64 decode", "[Base64Encoder]")
 
         for ( unsigned i = 0; i < to_do; ++i )
         {
-            unsigned n = b64.encode((const uint8_t*)txt[i], strlen(txt[i]), buf);
-            n += b64.finish(buf+n);
+            unsigned n = b64e.encode((const uint8_t*)txt[i], strlen(txt[i]), buf);
+            n += b64e.finish(buf+n);
 
             REQUIRE(n < sizeof(buf));
             buf[n] = 0;
 
             CHECK(!strcmp(buf, exp[i]));
-            b64.reset();
+            b64e.reset();
         }
     }
     SECTION("one shot")
     {
-        unsigned n = b64.encode((const uint8_t*)text, strlen(text), buf);
-        n += b64.finish(buf+n);
+        unsigned n = b64e.encode((const uint8_t*)text, strlen(text), buf);
+        n += b64e.finish(buf+n);
 
         REQUIRE(n < sizeof(buf));
         buf[n] = 0;
@@ -189,18 +189,19 @@ TEST_CASE("b64 decode", "[Base64Encoder]")
             while ( offset < len )
             {
                 unsigned k = (offset + chunk > len) ? len - offset : chunk;
-                n += b64.encode((const uint8_t*)text+offset, k, buf+n);
+                n += b64e.encode((const uint8_t*)text+offset, k, buf+n);
                 offset += k;
             }
-            n += b64.finish(buf+n);
+            n += b64e.finish(buf+n);
 
             REQUIRE(n < sizeof(buf));
             buf[n] = 0;
 
             CHECK(!strcmp(buf, code));
-            b64.reset();
+            b64e.reset();
         }
     }
 }
+
 #endif
 

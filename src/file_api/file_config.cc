@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -35,6 +35,8 @@
 
 #include "file_flows.h"
 
+using namespace snort;
+
 bool FileConfig::process_file_magic(FileMagicData& magic)
 {
     bool negated = false;
@@ -66,18 +68,18 @@ void FileConfig::process_file_policy_rule(FileRule& rule)
     filePolicy.insert_file_rule(rule);
 }
 
-FileMagicRule* FileConfig::get_rule_from_id(uint32_t id)
+const FileMagicRule* FileConfig::get_rule_from_id(uint32_t id) const
 {
     return fileIdentifier.get_rule_from_id(id);
 }
 
 void FileConfig::get_magic_rule_ids_from_type(const std::string& type,
-    const std::string& version, snort::FileTypeBitSet& ids_set)
+    const std::string& version, FileTypeBitSet& ids_set) const
 {
     return fileIdentifier.get_magic_rule_ids_from_type(type, version, ids_set);
 }
 
-std::string FileConfig::file_type_name(uint32_t id)
+std::string FileConfig::file_type_name(uint32_t id) const
 {
     if (SNORT_FILE_TYPE_UNKNOWN == id)
         return "Unknown file type, done";
@@ -85,7 +87,7 @@ std::string FileConfig::file_type_name(uint32_t id)
     else if (SNORT_FILE_TYPE_CONTINUE == id)
         return "Undecided file type, continue...";
 
-    FileMagicRule* info = get_rule_from_id(id);
+    const FileMagicRule* info = get_rule_from_id(id);
 
     if (info != nullptr)
         return info->type;
@@ -102,9 +104,12 @@ std::string file_type_name(uint32_t id)
         return "NA";
 }
 
-FileConfig* get_file_config ()
+FileConfig* get_file_config(const SnortConfig* sc)
 {
-    snort::FileInspect* fi = (snort::FileInspect*)snort::InspectorManager::get_inspector(FILE_ID_NAME, true);
+    if ( !sc )
+        sc = SnortConfig::get_conf();
+
+    FileInspect* fi = (FileInspect*)InspectorManager::get_inspector(FILE_ID_NAME, true, sc);
 
     if (fi)
         return (fi->config);
@@ -114,13 +119,14 @@ FileConfig* get_file_config ()
 
 namespace snort
 {
-    void get_magic_rule_ids_from_type(const std::string& type, const std::string& version, snort::FileTypeBitSet& ids_set)
-    {
-        FileConfig* conf = get_file_config();
-        if(conf)
-            conf->get_magic_rule_ids_from_type(type, version, ids_set);
-        else
-            ids_set.reset();
-    }
+void get_magic_rule_ids_from_type(const std::string& type, const std::string& version,
+    FileTypeBitSet& ids_set, SnortConfig* sc)
+{
+    FileConfig* conf = get_file_config(sc);
+    if (conf)
+        conf->get_magic_rule_ids_from_type(type, version, ids_set);
+    else
+        ids_set.reset();
+}
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@ struct SfCidr;
 typedef char InetBuf[INET6_ADDRSTRLEN];
 
 SO_PUBLIC char* ObfuscateIpToText(
-    const struct SfIp*, SfCidr& homenet, SfCidr& obfuscate_net, InetBuf&);
+    const struct SfIp*, const SfCidr& homenet, const SfCidr& obfuscate_net, InetBuf&);
 }
 #endif
 

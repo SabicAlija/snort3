@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -70,7 +70,7 @@ void EventManager::add_plugin(const LogApi* api)
 {
     // can't assert - alert_sf_socket operates differently
     //assert(api->flags & (OUTPUT_TYPE_FLAG__ALERT | OUTPUT_TYPE_FLAG__LOG));
-    s_outputs.push_back(new Output(api));
+    s_outputs.emplace_back(new Output(api));
 }
 
 void EventManager::release_plugins()
@@ -144,7 +144,7 @@ void EventManager::add_output(OutputSet** ofn, Logger* eh)
     if ( !*ofn )
         *ofn = new OutputSet;
 
-    (*ofn)->outputs.push_back(eh);
+    (*ofn)->outputs.emplace_back(eh);
 }
 
 void EventManager::copy_outputs(OutputSet* dst, OutputSet* src)
@@ -156,7 +156,7 @@ void EventManager::copy_outputs(OutputSet* dst, OutputSet* src)
 // configuration
 
 void EventManager::instantiate(
-    Output* p, Module* mod, SnortConfig* sc)
+    Output* p, Module* mod, SnortConfig*)
 {
     bool enabled = false;
 
@@ -169,11 +169,11 @@ void EventManager::instantiate(
     if ( !enabled )
         return;
 
-    p->handler = p->api->ctor(sc, mod);
+    p->handler = p->api->ctor(mod);
     assert(p->handler);
 
     p->handler->set_api(p->api);
-    s_loggers.outputs.push_back(p->handler);
+    s_loggers.outputs.emplace_back(p->handler);
 }
 
 // command line outputs
@@ -198,7 +198,7 @@ void EventManager::instantiate(
     if ( p->handler )
     {
         // configured by conf
-        s_loggers.outputs.push_back(p->handler);
+        s_loggers.outputs.emplace_back(p->handler);
         return;
     }
     Module* mod = ModuleManager::get_default_module(name, sc);
@@ -271,13 +271,13 @@ static const LogApi* find_api(const char* name)
     return nullptr;
 }
 
-LoggerWrapper* EventManager::instantiate(const char* name, Module* m, SnortConfig* sc)
+LoggerWrapper* EventManager::instantiate(const char* name, Module* m, SnortConfig*)
 {
     auto api = find_api(name);
     if ( !api || !api->ctor )
         return nullptr;
 
-    auto p = api->ctor(sc, m);
+    auto p = api->ctor(m);
     if ( !p )
         return nullptr;
 

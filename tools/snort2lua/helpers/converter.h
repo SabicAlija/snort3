@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,7 @@
 #include "conversion_defines.h"
 #include "data/dt_data.h"
 #include "data/dt_rule_api.h"
+#include "data/dt_state_api.h"
 #include "data/dt_table_api.h"
 #include "helpers/util_binder.h"
 
@@ -73,9 +74,20 @@ public:
     inline static bool get_bind_wizard()
     { return bind_wizard; }
 
+    inline static void set_bind_port(bool val)
+    { bind_port = val; }
+
+    inline static bool get_bind_port()
+    { return bind_port; }
+
+    static void unset_convert_max_session()
+    { convert_max_session = false; }
+
+    static bool do_convert_max_session()
+    { return convert_max_session; }
+
     Binder& make_binder(Binder&);
     Binder& make_binder();
-    Binder& make_pending_binder(int ips_policy_id);
 
     int convert(const std::string& input,
         const std::string& output,
@@ -111,6 +123,9 @@ public:
     inline RuleApi& get_rule_api()
     { return rule_api; }
 
+    inline StateApi& get_state_api()
+    { return state_api; }
+
     bool added_ftp_data() const
     { return ftp_data_is_added; }
 
@@ -124,6 +139,8 @@ private:
     static bool convert_conf_mult_files;
     static bool empty_args;
     static bool bind_wizard;
+    static bool bind_port;
+    static bool convert_max_session;
 
     bool ftp_data_is_added = false;
 
@@ -139,8 +156,10 @@ private:
     TableApi table_api;
 
     RuleApi rule_api;
+
+    StateApi state_api;
+
     std::vector<std::shared_ptr<Binder>> binders;
-    std::vector<PendingBinder> pending_binders;
 
     // the current parsing state.
     ConversionState* state;
@@ -154,4 +173,3 @@ private:
 };
 
 #endif
-

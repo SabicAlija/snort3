@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "service_detector.h"
 
 class ServiceDiscovery;
+struct ServiceRSHELLData;
 
 class RshellServiceDetector : public ServiceDetector
 {
@@ -32,6 +33,8 @@ public:
     RshellServiceDetector(ServiceDiscovery*);
 
     int validate(AppIdDiscoveryArgs&) override;
+private:
+    void rshell_bail(ServiceRSHELLData* rd);
 };
 #endif
 

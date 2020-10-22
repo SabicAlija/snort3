@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -51,7 +51,7 @@ struct BounceTo
     Port low;
     Port high;
 
-    BounceTo(std::string& address, Port lo, Port hi);
+    BounceTo(const std::string& address, Port lo, Port hi);
 };
 
 class FtpClientModule : public snort::Module
@@ -69,6 +69,9 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    bool is_bindable() const override
+    { return true; }
 
 private:
     FTP_CLIENT_PROTO_CONF* conf;
@@ -92,6 +95,7 @@ private:
 #define CMD_DIR    0x0100
 #define CMD_VALID  0x0200
 #define CMD_REST   0x0400
+#define CMD_PROT   0x0800
 
 struct FtpCmd
 {
@@ -101,8 +105,8 @@ struct FtpCmd
     uint32_t flags;
     unsigned number;
 
-    FtpCmd(std::string&, uint32_t, int);
-    FtpCmd(std::string&, std::string&, int);
+    FtpCmd(const std::string&, uint32_t, int);
+    FtpCmd(const std::string&, const std::string&, int);
 };
 
 class FtpServerModule : public snort::Module
@@ -125,6 +129,9 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    bool is_bindable() const override
+    { return true; }
 
     FTP_SERVER_PROTO_CONF* get_data();
     const FtpCmd* get_cmd(unsigned idx);

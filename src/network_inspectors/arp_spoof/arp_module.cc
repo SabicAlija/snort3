@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -127,7 +127,7 @@ bool ArpSpoofModule::begin(const char*, int, SnortConfig*)
 bool ArpSpoofModule::end(const char*, int idx, SnortConfig*)
 {
     if ( idx )
-        config->ipmel.push_back(host);
+        config->ipmel.emplace_back(host);
     else
         config->check_overwrite = !config->ipmel.empty();
 
@@ -135,7 +135,7 @@ bool ArpSpoofModule::end(const char*, int idx, SnortConfig*)
 }
 
 const PegInfo* ArpSpoofModule::get_pegs() const
-{ return snort::simple_pegs; }
+{ return simple_pegs; }
 
 PegCount* ArpSpoofModule::get_counts() const
 { return (PegCount*)&asstats; }

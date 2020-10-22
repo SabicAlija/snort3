@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,8 +30,6 @@
 
 #include "dce_context_data.h"
 #include "dce_common.h"
-#include "dce_tcp_module.h"
-#include "dce_tcp_paf.h"
 
 using namespace snort;
 
@@ -50,22 +48,20 @@ Dce2TcpFlowData::~Dce2TcpFlowData()
 }
 
 THREAD_LOCAL dce2TcpStats dce2_tcp_stats;
-
 THREAD_LOCAL ProfileStats dce2_tcp_pstat_main;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_session;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_new_session;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_detect;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_log;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_co_seg;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_co_frag;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_co_reass;
-THREAD_LOCAL ProfileStats dce2_tcp_pstat_co_ctx;
 
 unsigned Dce2TcpFlowData::inspector_id = 0;
 
 DCE2_TcpSsnData* get_dce2_tcp_session_data(Flow* flow)
 {
     Dce2TcpFlowData* fd = (Dce2TcpFlowData*)flow->get_flow_data(Dce2TcpFlowData::inspector_id);
+
+    // check whether this session was expected and mark it as realized
+    if (fd && fd->state == DCE2_TCP_FLOW__EXPECTED)
+    {
+        fd->state = DCE2_TCP_FLOW__REALIZED;
+        dce2_tcp_stats.tcp_expected_realized_sessions++;
+    }
     return fd ? &fd->dce2_tcp_session : nullptr;
 }
 
@@ -73,6 +69,7 @@ static DCE2_TcpSsnData* set_new_dce2_tcp_session(Packet* p)
 {
     Dce2TcpFlowData* fd = new Dce2TcpFlowData;
 
+    fd->state = DCE2_TCP_FLOW__COMMON;
     memset(&fd->dce2_tcp_session,0,sizeof(DCE2_TcpSsnData));
     p->flow->set_flow_data(fd);
     return(&fd->dce2_tcp_session);
@@ -80,8 +77,6 @@ static DCE2_TcpSsnData* set_new_dce2_tcp_session(Packet* p)
 
 static DCE2_TcpSsnData* dce2_create_new_tcp_session(Packet* p, dce2TcpProtoConf* config)
 {
-    Profile profile(dce2_tcp_pstat_new_session);
-
     DCE2_TcpSsnData* dce2_tcp_sess = set_new_dce2_tcp_session(p);
 
     if ( dce2_tcp_sess )
@@ -94,7 +89,6 @@ static DCE2_TcpSsnData* dce2_create_new_tcp_session(Packet* p, dce2TcpProtoConf*
         dce2_tcp_sess->sd.trans = DCE2_TRANS_TYPE__TCP;
         dce2_tcp_sess->sd.server_policy = config->common.policy;
         dce2_tcp_sess->sd.client_policy = DCE2_POLICY__WINXP;
-        dce2_tcp_sess->sd.wire_pkt = p;
         dce2_tcp_sess->sd.config = (void*)config;
     }
 
@@ -103,8 +97,6 @@ static DCE2_TcpSsnData* dce2_create_new_tcp_session(Packet* p, dce2TcpProtoConf*
 
 static DCE2_TcpSsnData* dce2_handle_tcp_session(Packet* p, dce2TcpProtoConf* config)
 {
-    Profile profile(dce2_tcp_pstat_session);
-
     DCE2_TcpSsnData* dce2_tcp_sess =  get_dce2_tcp_session_data(p->flow);
 
     if (dce2_tcp_sess == nullptr)
@@ -118,30 +110,10 @@ static DCE2_TcpSsnData* dce2_handle_tcp_session(Packet* p, dce2TcpProtoConf* con
 //-------------------------------------------------------------------------
 // class stuff
 //-------------------------------------------------------------------------
+Dce2Tcp::Dce2Tcp(const dce2TcpProtoConf& pc) :
+    config(pc), esm(config) { }
 
-class Dce2Tcp : public Inspector
-{
-public:
-    Dce2Tcp(dce2TcpProtoConf&);
-
-    void show(SnortConfig*) override;
-    void eval(Packet*) override;
-    void clear(Packet*) override;
-    StreamSplitter* get_splitter(bool c2s) override
-    {
-        return new Dce2TcpSplitter(c2s);
-    }
-
-private:
-    dce2TcpProtoConf config;
-};
-
-Dce2Tcp::Dce2Tcp(dce2TcpProtoConf& pc)
-{
-    config = pc;
-}
-
-void Dce2Tcp::show(SnortConfig*)
+void Dce2Tcp::show(const SnortConfig*) const
 {
     print_dce2_tcp_conf(config);
 }

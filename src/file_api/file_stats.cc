@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -167,8 +167,10 @@ void file_stats_print()
     LogMessage("            Total          " FMTu64("-10") " " FMTu64("-10") " \n",
         processed_total[0], processed_total[1]);
 
+    memset(&file_totals,0,sizeof(file_totals));
+
 #if 0
-    LogLabel("file type verdicts");  // FIXIT-L what's up with this code
+    LogLabel("file type verdicts");  // FIXIT-RC should be fixed
 
     uint64_t verdicts_total = 0;#include "file_capture.h"
     for (unsigned i = 0; i < FILE_VERDICT_MAX; i++)

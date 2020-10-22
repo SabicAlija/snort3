@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -45,18 +45,18 @@
 #include "framework/counts.h"
 #include "framework/parameter.h"
 #include "framework/value.h"
-#include "main/snort_debug.h"
 #include "main/snort_types.h"
 #include "utils/stats.h"
 
 struct lua_State;
 
-class ModuleManager;
-
 namespace snort
 {
+class ModuleManager;
+class Trace;
 struct ProfileStats;
 struct SnortConfig;
+struct TraceOption;
 
 using LuaCFunction = int(*)(lua_State*);
 
@@ -91,7 +91,17 @@ public:
     virtual bool end(const char*, int, SnortConfig*)
     { return true; }
 
-    virtual bool set(const char*, Value&, SnortConfig*);
+    virtual bool set(const char*, Value&, SnortConfig*)
+    { return true; }
+
+    virtual void set_trace(const Trace*) const { }
+
+    virtual const TraceOption* get_trace_options() const
+    { return nullptr; }
+
+    // used to match parameters with $var names like <gid:sid> for rule_state
+    virtual bool matches(const char* /*param_name*/, std::string& /*lua_name*/)
+    { return false; }
 
     // ips events:
     virtual unsigned get_gid() const
@@ -121,9 +131,6 @@ public:
 
     const Parameter* get_parameters() const
     { return params; }
-
-    const Parameter* get_default_parameters() const
-    { return default_params; }
 
     virtual const Command* get_commands() const
     { return nullptr; }
@@ -184,12 +191,15 @@ public:
     virtual Usage get_usage() const
     { return CONTEXT; }
 
-    void enable_trace();
+    virtual bool is_bindable() const
+    { return false; }
 
 protected:
     Module(const char* name, const char* help);
-    Module(const char* name, const char* help, const Parameter*,
-        bool is_list = false, Trace* = nullptr);
+    Module(const char* name, const char* help, const Parameter*, bool is_list = false);
+
+    void set_params(const Parameter* p)
+    { params = p; }
 
 private:
     friend ModuleManager;
@@ -202,11 +212,8 @@ private:
     const char* help;
 
     const Parameter* params;
-    const Parameter* default_params = nullptr;
     bool list;
     int table_level = 0;
-
-    Trace* trace;
 
     void set_peg_count(int index, PegCount value)
     {

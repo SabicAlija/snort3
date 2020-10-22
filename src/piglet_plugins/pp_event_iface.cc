@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,8 +33,7 @@
 
 static struct SigInfo* create_sig_info()
 {
-    auto si = new SigInfo;
-    memset(si, 0, sizeof(SigInfo));
+    auto si = new SigInfo();
     return si;
 }
 
@@ -97,7 +96,7 @@ static const luaL_Reg methods[] =
 
             if ( si )
             {
-                Lua::ManageStack ms(L);
+                Lua::ManageStack lua_ms(L);
                 lua_newtable(L);
                 Lua::Table si_table(L, lua_gettop(L));
 
@@ -107,7 +106,6 @@ static const luaL_Reg methods[] =
                 si_table.set_field("class_id", si->class_id);
                 si_table.set_field("priority", si->priority);
                 si_table.set_field("builtin", si->builtin);
-                si_table.set_field("num_services", si->num_services);
 
                 Lua::Table(L, 2).set_field_from_stack("sig_info", si_table.index);
             }
@@ -123,14 +121,14 @@ static const luaL_Reg methods[] =
             auto& self = EventIface.get(L);
             luaL_checktype(L, 2, LUA_TTABLE);
 
-            Lua::Table table(L, 2);
-            table.get_field_to_stack("sig_info");
+            Lua::Table new_table(L, 2);
+            new_table.get_field_to_stack("sig_info");
 
             auto* si = const_cast<SigInfo*>(self.sig_info);
 
             if ( si && lua_istable(L, lua_gettop(L)) )
             {
-                Lua::ManageStack ms(L);
+                Lua::ManageStack lua_ms(L);
                 Lua::Table si_table(L, lua_gettop(L));
 
                 si_table.get_field("generator", si->gid);
@@ -139,7 +137,6 @@ static const luaL_Reg methods[] =
                 si_table.get_field("class_id", si->class_id);
                 si_table.get_field("priority", si->priority);
                 si_table.get_field("builtin", si->builtin);
-                si_table.get_field("num_services", si->num_services);
             }
 
             set_fields(L, 2, self);

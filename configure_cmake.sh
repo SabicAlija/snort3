@@ -22,12 +22,15 @@ Usage: $0 [OPTION]... [VAR=VALUE]...
         --prefix=     Snort++ installation prefix
 
 Optional Features:
+    --build-type=[Debug|Release|RelWithDebInfo|MinSizeRel]
+                            set cmake build type (defaults to RelWithDebInfo if neither
+                            CFLAGS nor CXXFLAGS are set)
     --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
     --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
     --enable-code-coverage  Whether to enable code coverage support
     --enable-hardened-build Detect and use compile-time hardening options
     --enable-pie            Attempt to produce a position-independent executable
-    --disable-safec         do not use libsafec bounds checking  even if available
+    --disable-safec         do not use libsafec bounds checking even if available
     --disable-static-ips-actions
                             do not include ips actions in binary
     --disable-static-inspectors
@@ -51,8 +54,6 @@ Optional Features:
     --enable-gprof-profile  enable gprof profiling options (developers only)
     --disable-snort-profiler
                             disable snort performance profiling (cpu and memory) (developers only)
-    --enable-deep-profiling
-                            enabled detailed snort performance profiling (developers only)
     --disable-memory-manager
                             disable snort memory manager (developers only)
     --disable-corefiles     prevent Snort from generating core files
@@ -68,6 +69,7 @@ Optional Features:
                             enable third party appid
     --enable-unit-tests     build unit tests
     --enable-piglet         build piglet test harness
+    --enable-ccache         enable ccache support
     --disable-static-daq    link static DAQ modules
     --disable-html-docs     don't create the HTML documentation
     --disable-pdf-docs      don't create the PDF documentation
@@ -105,6 +107,10 @@ Optional Packages:
                             flatbuffers include directory
     --with-flatbuffers-libraries=DIR
                             flatbuffers library directory
+    --with-iconv-includes=DIR
+                            libiconv include directory
+    --with-iconv-libraries=DIR
+                            libiconv library directory
     --with-uuid-includes=DIR
                             libuuid include directory
     --with-uuid-libraries=DIR
@@ -138,11 +144,14 @@ prefix=/usr/local/snort
 CMakeCacheEntries=""
 append_cache_entry CMAKE_INSTALL_PREFIX PATH   $prefix
 
+build_type=""
+[ -z "$CFLAGS" ] && [ -z "$CXXFLAGS" ] && build_type="RelWithDebInfo"
+
 
 # parse arguments
 while [ $# -ne 0 ]; do
     case "$1" in
-        -*=*) optarg=`echo "$1" | sed 's/[-_a-zA-Z0-9]*=//'` ;;
+        *=*) optarg=`echo "$1" | sed 's/[-_a-zA-Z0-9]*=//'` ;;
         *) optarg= ;;
     esac
 
@@ -242,9 +251,6 @@ while [ $# -ne 0 ]; do
         --disable-snort-profiler)
             append_cache_entry DISABLE_SNORT_PROFILER   BOOL true
             ;;
-        --enable-deep-profiling)
-            append_cache_entry ENABLE_DEEP_PROFILING    BOOL true
-            ;;
         --disable-memory-manager)
             append_cache_entry DISABLE_MEMORY_MANAGER   BOOL true
             ;;
@@ -306,7 +312,6 @@ while [ $# -ne 0 ]; do
             append_cache_entry ENABLE_TCMALLOC          BOOL false
             ;;
         --enable-appid-third-party)
-            append_cache_entry ENABLE_APPID_THIRD_PARTY BOOL true
             ;;
         --enable-unit-tests)
             append_cache_entry ENABLE_UNIT_TESTS        BOOL true
@@ -319,6 +324,10 @@ while [ $# -ne 0 ]; do
             ;;
         --disable-piglet)
             append_cache_entry ENABLE_PIGLET            BOOL false
+            ;;
+        --enable-ccache)
+            append_cache_entry CMAKE_CXX_COMPILER_LAUNCHER STRING ccache
+            append_cache_entry CMAKE_C_COMPILER_LAUNCHER STRING ccache
             ;;
         --disable-static-daq)
             append_cache_entry ENABLE_STATIC_DAQ        BOOL false
@@ -349,6 +358,15 @@ while [ $# -ne 0 ]; do
             ;;
         --enable-docs)
             append_cache_entry MAKE_DOC                 BOOL true
+            ;;
+        --build-type=*)
+            if [ $optarg = "Debug" ] || [ $optarg = "Release" ] ||
+            [ $optarg = "RelWithDebInfo" ] || [ $optarg = "MinSizeRel" ]; then
+                build_type=$optarg
+            else
+                echo "Invalid build type '$optarg'. Try $0 --help to see available build types."
+                exit 1
+            fi
             ;;
         --with-pcap-includes=*)
             append_cache_entry PCAP_INCLUDE_DIR_HINT PATH $optarg
@@ -395,6 +413,12 @@ while [ $# -ne 0 ]; do
         --with-flatbuffers-libraries=*)
             append_cache_entry FLATBUFFERS_LIBRARIES_DIR_HINT PATH $optarg
             ;;
+        --with-iconv-includes=*)
+            append_cache_entry ICONV_INCLUDE_DIR_HINT PATH $optarg
+            ;;
+        --with-iconv-libraries=*)
+            append_cache_entry ICONV_LIBRARIES_DIR_HINT PATH $optarg
+            ;;
         --with-uuid-includes=*)
             append_cache_entry UUID_INCLUDE_DIR_HINT PATH $optarg
             ;;
@@ -439,10 +463,11 @@ cd $builddir
 
 [ "$CMakeGenerator" ] && gen="-G $CMakeGenerator"
 
-cmake $gen \
+cmake "$gen" \
     -DCMAKE_CXX_FLAGS:STRING="$CXXFLAGS $CPPFLAGS" \
     -DCMAKE_C_FLAGS:STRING="$CFLAGS $CPPFLAGS" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DCMAKE_BUILD_TYPE:STRING=$build_type \
     $CMakeCacheEntries $sourcedir
 
 echo "# This is the command used to configure this build" > config.status

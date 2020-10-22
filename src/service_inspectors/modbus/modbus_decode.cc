@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -405,15 +405,12 @@ static void ModbusCheckReservedFuncs(const modbus_header_t* header, Packet* p)
     }
 }
 
-bool ModbusDecode(Packet* p)
+bool ModbusDecode(Packet* p, ModbusFlowData* mfd)
 {
     const modbus_header_t* header;
 
     if (p->dsize < MODBUS_MIN_LEN)
         return false;
-
-    ModbusFlowData* mfd =
-        (ModbusFlowData*)p->flow->get_flow_data(ModbusFlowData::inspector_id);
 
     /* Lay the header struct over the payload */
     header = (const modbus_header_t*)p->data;

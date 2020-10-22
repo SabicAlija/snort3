@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,7 @@
 #include "config.h"
 #endif
 
+#include "service_inspectors/http_inspect/http_common.h"
 #include "service_inspectors/http_inspect/http_enum.h"
 #include "service_inspectors/http_inspect/http_flow_data.h"
 #include "service_inspectors/http_inspect/http_module.h"
@@ -33,6 +34,7 @@
 #include <CppUTestExt/MockSupport.h>
 
 using namespace snort;
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 namespace snort
@@ -43,9 +45,10 @@ FlowData::FlowData(unsigned, Inspector*) {}
 FlowData::~FlowData() = default;
 int DetectionEngine::queue_event(unsigned int, unsigned int, Actions::Type) { return 0; }
 fd_status_t File_Decomp_StopFree(fd_session_t*) { return File_Decomp_OK; }
+size_t str_to_hash(unsigned char const*, size_t) { return 0; }
 }
 
-THREAD_LOCAL PegCount HttpModule::peg_counts[1];
+THREAD_LOCAL PegCount HttpModule::peg_counts[PEG_COUNT_MAX] = { };
 
 class HttpUnitTestSetup
 {

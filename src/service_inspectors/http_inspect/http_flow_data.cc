@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,11 +25,19 @@
 
 #include "decompress/file_decomp.h"
 
+#include "http_cutter.h"
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_module.h"
+#include "http_msg_header.h"
+#include "http_msg_request.h"
+#include "http_msg_status.h"
 #include "http_test_manager.h"
 #include "http_transaction.h"
+#include "http_uri.h"
 
 using namespace snort;
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 unsigned HttpFlowData::inspector_id = 0;
@@ -38,16 +46,21 @@ unsigned HttpFlowData::inspector_id = 0;
 uint64_t HttpFlowData::instance_count = 0;
 #endif
 
+const uint16_t HttpFlowData::memory_usage_estimate = sizeof(HttpFlowData) + sizeof(HttpTransaction)
+    + sizeof(HttpMsgRequest) + sizeof(HttpMsgStatus) + (2 * sizeof(HttpMsgHeader)) + sizeof(HttpUri)
+    + header_size_estimate + small_things;
+
 HttpFlowData::HttpFlowData() : FlowData(inspector_id)
 {
 #ifdef REG_TEST
-    if (HttpTestManager::use_test_output())
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP))
     {
         seq_num = ++instance_count;
-        if (!HttpTestManager::use_test_input())
+        if (!HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
         {
-            printf("Flow Data construct %" PRIu64 "\n", seq_num);
-            fflush(nullptr);
+            fprintf(HttpTestManager::get_output_file(),
+                "Flow Data construct %" PRIu64 "\n", seq_num);
+            fflush(HttpTestManager::get_output_file());
         }
     }
 #endif
@@ -60,10 +73,11 @@ HttpFlowData::HttpFlowData() : FlowData(inspector_id)
 HttpFlowData::~HttpFlowData()
 {
 #ifdef REG_TEST
-    if (!HttpTestManager::use_test_input() && HttpTestManager::use_test_output())
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP) &&
+        !HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
     {
-        printf("Flow Data destruct %" PRIu64 "\n", seq_num);
-        fflush(nullptr);
+        fprintf(HttpTestManager::get_output_file(), "Flow Data destruct %" PRIu64 "\n", seq_num);
+        fflush(HttpTestManager::get_output_file());
     }
 #endif
     if (HttpModule::get_peg_counts(PEG_CONCURRENT_SESSIONS) > 0)
@@ -74,7 +88,9 @@ HttpFlowData::~HttpFlowData()
         delete infractions[k];
         delete events[k];
         delete[] section_buffer[k];
-        HttpTransaction::delete_transaction(transaction[k]);
+        delete[] partial_buffer[k];
+        delete[] partial_detect_buffer[k];
+        HttpTransaction::delete_transaction(transaction[k], nullptr);
         delete cutter[k];
         if (compress_stream[k] != nullptr)
         {
@@ -91,6 +107,13 @@ HttpFlowData::~HttpFlowData()
     if (fd_state != nullptr)
         File_Decomp_StopFree(fd_state);
     delete_pipeline();
+
+    while (discard_list != nullptr)
+    {
+        HttpTransaction* tmp = discard_list;
+        discard_list = discard_list->next;
+        delete tmp;
+    }
 }
 
 void HttpFlowData::half_reset(SourceId source_id)
@@ -100,8 +123,11 @@ void HttpFlowData::half_reset(SourceId source_id)
     version_id[source_id] = VERS__NOT_PRESENT;
     data_length[source_id] = STAT_NOT_PRESENT;
     body_octets[source_id] = STAT_NOT_PRESENT;
+    file_octets[source_id] = STAT_NOT_PRESENT;
+    partial_inspected_octets[source_id] = 0;
     section_size_target[source_id] = 0;
-    section_size_max[source_id] = 0;
+    stretch_section_to_packet[source_id] = false;
+    accelerated_blocking[source_id] = AB_NONE;
     file_depth_remaining[source_id] = STAT_NOT_PRESENT;
     detect_depth_remaining[source_id] = STAT_NOT_PRESENT;
     detection_status[source_id] = DET_REACTIVATING;
@@ -120,8 +146,6 @@ void HttpFlowData::half_reset(SourceId source_id)
     }
     delete infractions[source_id];
     infractions[source_id] = new HttpInfractions;
-    delete events[source_id];
-    events[source_id] = new HttpEventGen;
     section_offset[source_id] = 0;
     chunk_state[source_id] = CHUNK_NEWLINES;
     chunk_expected_length[source_id] = 0;
@@ -161,6 +185,22 @@ void HttpFlowData::trailer_prep(SourceId source_id)
     detection_status[source_id] = DET_REACTIVATING;
 }
 
+void HttpFlowData::garbage_collect()
+{
+    HttpTransaction** current = &discard_list;
+    while (*current != nullptr)
+    {
+        if ((*current)->is_clear())
+        {
+            HttpTransaction* tmp = *current;
+            *current = (*current)->next;
+            delete tmp;
+        }
+        else
+            current = &(*current)->next;
+    }
+}
+
 bool HttpFlowData::add_to_pipeline(HttpTransaction* latest)
 {
     if (pipeline == nullptr)
@@ -195,12 +235,12 @@ void HttpFlowData::delete_pipeline()
 {
     for (int k=pipeline_front; k != pipeline_back; k = (k+1) % MAX_PIPELINE)
     {
-        HttpTransaction::delete_transaction(pipeline[k]);
+        delete pipeline[k];
     }
     delete[] pipeline;
 }
 
-HttpInfractions* HttpFlowData::get_infractions(HttpEnums::SourceId source_id)
+HttpInfractions* HttpFlowData::get_infractions(SourceId source_id)
 {
     if (infractions[source_id] != nullptr)
         return infractions[source_id];
@@ -209,13 +249,29 @@ HttpInfractions* HttpFlowData::get_infractions(HttpEnums::SourceId source_id)
     return transaction[source_id]->get_infractions(source_id);
 }
 
-HttpEventGen* HttpFlowData::get_events(HttpEnums::SourceId source_id)
+uint16_t HttpFlowData::get_memory_usage_estimate()
 {
-    if (events[source_id] != nullptr)
-        return events[source_id];
-    assert(transaction[source_id] != nullptr);
-    assert(transaction[source_id]->get_events(source_id) != nullptr);
-    return transaction[source_id]->get_events(source_id);
+    return memory_usage_estimate;
+}
+
+void HttpFlowData::finish_h2_body(HttpCommon::SourceId source_id, HttpEnums::H2BodyState state,
+    bool clear_partial_buffer)
+{
+    assert(h2_body_state[source_id] == H2_BODY_NOT_COMPLETE);
+    h2_body_state[source_id] = state;
+    partial_flush[source_id] = false;
+    if (clear_partial_buffer)
+    {
+        // We've already sent all data through detection so no need to reinspect. Just need to
+        // prep for trailers
+        partial_buffer_length[source_id] = 0;
+        delete[] partial_buffer[source_id];
+        partial_buffer[source_id] = nullptr;
+        partial_inspected_octets[source_id] = 0;
+        partial_detect_length[source_id] = 0;
+        delete[] partial_detect_buffer[source_id];
+        partial_detect_buffer[source_id] = nullptr;
+    }
 }
 
 #ifdef REG_TEST
@@ -233,6 +289,7 @@ void HttpFlowData::show(FILE* out_file) const
     fprintf(out_file, "File depth remaining: %" PRIi64 "/%" PRIi64 "\n", file_depth_remaining[0],
         file_depth_remaining[1]);
     fprintf(out_file, "Body octets: %" PRIi64 "/%" PRIi64 "\n", body_octets[0], body_octets[1]);
+    fprintf(out_file, "File octets: %" PRIi64 "/%" PRIi64 "\n", file_octets[0], file_octets[1]);
     fprintf(out_file, "Pipelining: front %d back %d overflow %d underflow %d\n", pipeline_front,
         pipeline_back, pipeline_overflow, pipeline_underflow);
     fprintf(out_file, "Cutter: %s/%s\n", (cutter[0] != nullptr) ? "Present" : "nullptr",

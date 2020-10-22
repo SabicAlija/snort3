@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,13 +25,14 @@
 //-------------------------------------------------------------------------
 
 #include "log/messages.h"
+#include "service_inspectors/http_inspect/http_common.h"
 
 #include "http2_enum.h"
-#include "http2_flow_data.h"
 #include "http2_module.h"
 #include "http2_stream_splitter.h"
 
 class Http2Api;
+class Http2FlowData;
 
 class Http2Inspect : public snort::Inspector
 {
@@ -44,13 +45,14 @@ public:
     bool get_fp_buf(snort::InspectionBuffer::Type ibt, snort::Packet* p,
         snort::InspectionBuffer& b) override;
     bool configure(snort::SnortConfig*) override;
-    void show(snort::SnortConfig*) override { snort::LogMessage("Http2Inspect\n"); }
     void eval(snort::Packet* p) override;
     void clear(snort::Packet* p) override;
+
     Http2StreamSplitter* get_splitter(bool is_client_to_server) override
-    {
-        return new Http2StreamSplitter(is_client_to_server);
-    }
+    { return new Http2StreamSplitter(is_client_to_server); }
+
+    bool can_carve_files() const override
+    { return true; }
 
 private:
     friend Http2Api;
@@ -58,8 +60,9 @@ private:
     const Http2ParaList* const params;
 };
 
-bool implement_get_buf(unsigned id, Http2FlowData* session_data, Http2Enums::SourceId source_id,
+bool implement_get_buf(unsigned id, Http2FlowData* session_data, HttpCommon::SourceId source_id,
     snort::InspectionBuffer& b);
+void implement_eval(Http2FlowData* session_data, HttpCommon::SourceId source_id);
 
 #endif
 

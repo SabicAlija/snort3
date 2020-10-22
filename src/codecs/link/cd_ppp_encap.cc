@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -48,7 +48,7 @@ static const uint16_t PPP_IPX = 0x002b;        /* Novell IPX Protocol */
 } // namespace
 
 void PppEncap::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ETHERTYPE_PPP); }
+{ v.emplace_back(ProtocolId::ETHERTYPE_PPP); }
 
 bool PppEncap::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {

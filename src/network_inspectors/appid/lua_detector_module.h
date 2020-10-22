@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,15 +24,19 @@
 
 #include <cstdint>
 #include <list>
+#include <map>
 #include <string>
 
 #include <lua.hpp>
 #include <lua/lua.h>
 
 #include "main/thread.h"
+#include "main/thread_config.h"
 #include "protocols/protocol_ids.h"
 
-class AppIdConfig;
+#include "application_ids.h"
+
+class AppIdContext;
 class AppIdDetector;
 struct DetectorFlow;
 class LuaObject;
@@ -44,14 +48,26 @@ bool get_lua_field(lua_State* L, int table, const char* field, IpProtocol& out);
 class LuaDetectorManager
 {
 public:
-    LuaDetectorManager(AppIdConfig&, int);
+    LuaDetectorManager(AppIdContext&, int);
     ~LuaDetectorManager();
-    static void initialize(AppIdConfig&, int is_control=0);
-    static void terminate();
-    static void add_detector_flow(DetectorFlow*);
-    static void free_detector_flows();
+    static void initialize(AppIdContext&, int is_control=0, bool reload=false);
+    static void init_thread_manager(const AppIdContext&);
+    static void clear_lua_detector_mgrs();
+
+    void set_detector_flow(DetectorFlow* df)
+    {
+        detector_flow = df;
+    }
+
+    DetectorFlow* get_detector_flow()
+    {
+        return detector_flow;
+    }
+    void free_detector_flow();
     // FIXIT-M: RELOAD - When reload is supported, move this variable to a separate location
     lua_State* L;
+    bool insert_cb_detector(AppId app_id, LuaObject* ud);
+    LuaObject* get_cb_detector(AppId app_id);
 
 private:
     void initialize_lua_detectors();
@@ -59,13 +75,15 @@ private:
     void list_lua_detectors();
     void load_detector(char* detectorName, bool isCustom);
     void load_lua_detectors(const char* path, bool isCustom);
+    LuaObject* create_lua_detector(const char* detector_name, bool is_custom,
+        const char* detector_filename);
 
-    AppIdConfig& config;
+    AppIdContext& ctxt;
     std::list<LuaObject*> allocated_objects;
     size_t num_odp_detectors = 0;
+    std::map<AppId, LuaObject*> cb_detectors;
+    DetectorFlow* detector_flow = nullptr;
 };
-
-extern THREAD_LOCAL LuaDetectorManager* lua_detector_mgr;
 
 #endif
 

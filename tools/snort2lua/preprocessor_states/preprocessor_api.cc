@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,7 +28,6 @@ extern const ConvertMap* bo_map;
 extern const ConvertMap* dcerpc_map;
 extern const ConvertMap* dcerpc_server_map;
 extern const ConvertMap* dnp3_map;
-extern const ConvertMap* firewall_map;
 extern const ConvertMap* frag3_engine_map;
 extern const ConvertMap* frag3_global_map;
 extern const ConvertMap* ftptelnet_map;
@@ -36,7 +35,6 @@ extern const ConvertMap* ftptelnet_protocol_map;
 extern const ConvertMap* gtp_map;
 extern const ConvertMap* httpinspect_map;
 extern const ConvertMap* httpinspect_server_map;
-extern const ConvertMap* nap_selector_map;
 extern const ConvertMap* nhttpinspect_map;
 extern const ConvertMap* nhttpinspect_server_map;
 extern const ConvertMap* normalizer_icmp4_map;
@@ -46,6 +44,7 @@ extern const ConvertMap* normalizer_ip6_map;
 extern const ConvertMap* normalizer_tcp_map;
 extern const ConvertMap* perfmonitor_map;
 extern const ConvertMap* reputation_map;
+extern const ConvertMap* rna_map;
 extern const ConvertMap* rpc_decode_map;
 extern const ConvertMap* sip_map;
 extern const ConvertMap* ssh_map;
@@ -61,6 +60,7 @@ extern const ConvertMap* stream_ip_map;
 extern const ConvertMap* stream_global_map;
 extern const ConvertMap* stream_tcp_map;
 extern const ConvertMap* stream_udp_map;
+extern const ConvertMap* stream_ha_map;
 
 std::vector<const ConvertMap*> preprocessor_api =
 {
@@ -72,7 +72,6 @@ std::vector<const ConvertMap*> preprocessor_api =
     dcerpc_server_map,
     dnp3_map,
     dns_map,
-    firewall_map,
     frag3_engine_map,
     frag3_global_map,
     ftptelnet_map,
@@ -80,7 +79,6 @@ std::vector<const ConvertMap*> preprocessor_api =
     gtp_map,
     imap_map,
     modbus_map,
-    nap_selector_map,
     nhttpinspect_map,
     nhttpinspect_server_map,
     normalizer_icmp4_map,
@@ -91,6 +89,7 @@ std::vector<const ConvertMap*> preprocessor_api =
     perfmonitor_map,
     pop_map,
     reputation_map,
+    rna_map,
     rpc_decode_map,
     sdf_map,
     sfportscan_map,
@@ -98,8 +97,9 @@ std::vector<const ConvertMap*> preprocessor_api =
     smtp_map,
     ssh_map,
     ssl_map,
-    stream_ip_map,
     stream_global_map,
+    stream_ha_map,
+    stream_ip_map,
     stream_tcp_map,
     stream_udp_map,
 };

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_event_logger.h author davis mcpherson <davmcphe@@cisco.com>
+// tcp_event_logger.h author davis mcpherson <davmcphe@cisco.com>
 // Created on: Jul 30, 2015
 
 #ifndef TCP_EVENT_LOGGER_H
@@ -51,18 +51,12 @@ class TcpEventLogger
 public:
     TcpEventLogger() = default;
 
-
     void clear_tcp_events()
-    {
-        tcp_events = 0;
-    }
+    { tcp_events = 0; }
 
     void set_tcp_event(int eventcode)
-    {
-        tcp_events |= eventcode;
-    }
+    { tcp_events |= eventcode; }
 
-    void set_tcp_internal_syn_event();
     void log_tcp_events();
     void log_internal_event(uint32_t eventSid);
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,8 +42,10 @@
 
 #include "detection/detection_engine.h"
 #include "detection/detection_util.h"
+#include "hash/hash_key_operations.h"
 #include "file_api/file_service.h"
 #include "protocols/packet.h"
+#include "pub_sub/opportunistic_tls_event.h"
 #include "stream/stream.h"
 #include "utils/util.h"
 
@@ -59,8 +61,6 @@ using namespace snort;
 #ifndef MAXHOSTNAMELEN /* Why doesn't Windows define this? */
 #define MAXHOSTNAMELEN 256
 #endif
-
-static THREAD_LOCAL DataBuffer DecodeBuffer;
 
 /*
  * Used to keep track of pipelined commands and the last one
@@ -534,16 +534,18 @@ static int validate_date_format(FTP_DATE_FMT* ThisFmt, const char** this_param)
  *                            char *param
  *                            char *end
  *                            FTP_PARAM_FMT *param_format,
+ *                            const char** this_fmt_next_param,
  *                            FTP_SESSION *session)
  *
  * Purpose: Validates the current parameter against the format
  *          specified.
  *
- * Arguments: p              => Pointer to the current packet
- *            params_begin   => Pointer to beginning of parameters
- *            params_end     => End of params buffer
- *            param_format   => Parameter format specifier for this command
- *            session        => Pointer to the session info
+ * Arguments: p                    => Pointer to the current packet
+ *            params_begin         => Pointer to beginning of parameters
+ *            params_end           => End of params buffer
+ *            param_format         => Parameter format specifier for this command
+ *            this_fmt_next_param  => Pointer to next parameter
+ *            session              => Pointer to the session info
  *
  * Returns: int => return code indicating error or success
  *
@@ -552,6 +554,7 @@ static int validate_param(Packet* p,
     const char* param,
     const char* end,
     FTP_PARAM_FMT* ThisFmt,
+    const char** this_fmt_next_param,
     FTP_SESSION* session)
 {
     int iRet;
@@ -778,7 +781,7 @@ static int validate_param(Packet* p,
     break;
     }
 
-    ThisFmt->next_param = this_param;
+    *this_fmt_next_param = this_param;
 
     return FTPP_SUCCESS;
 }
@@ -789,16 +792,19 @@ static int validate_param(Packet* p,
  *                            char *params_begin,
  *                            char *params_end,
  *                            FTP_PARAM_FMT *param_format,
+ *                            const char** this_fmt_next_param,
  *                            FTP_SESSION *session)
  *
  * Purpose: Recursively determines whether each of the parameters for
  *          an FTP command are valid.
  *
- * Arguments: p              => Pointer to the current packet
- *            params_begin   => Pointer to beginning of parameters
- *            params_end     => End of params buffer
- *            param_format   => Parameter format specifier for this command
- *            session        => Pointer to the session info
+ * Arguments: p                   => Pointer to the current packet
+ *            params_begin        => Pointer to beginning of parameters
+ *            params_end          => End of params buffer
+ *            param_format        => Parameter format specifier for this command
+ *            this_fmt_next_param => Pointer to the next parameter
+ *                                   To be used to backtrack for optional parameters that don't match
+ *            session             => Pointer to the session info
  *
  * Returns: int => return code indicating error or success
  *
@@ -807,6 +813,7 @@ static int check_ftp_param_validity(Packet* p,
     const char* params_begin,
     const char* params_end,
     FTP_PARAM_FMT* param_format,
+    const char** this_fmt_next_param,
     FTP_SESSION* session)
 {
     int iRet = FTPP_ALERT;
@@ -829,23 +836,24 @@ static int check_ftp_param_validity(Packet* p,
     if ((!ThisFmt->next_param_fmt) && (params_begin >= params_end))
         return FTPP_SUCCESS;
 
-    ThisFmt->next_param = params_begin;
-
+    *this_fmt_next_param = params_begin;
     if (ThisFmt->optional_fmt)
     {
         /* Check against optional */
+        const char* opt_fmt_next_param = nullptr;
         iRet = validate_param(p, this_param, params_end,
-            ThisFmt->optional_fmt, session);
+            ThisFmt->optional_fmt, &opt_fmt_next_param, session);
         if (iRet == FTPP_SUCCESS)
         {
             const char* next_param;
+            const char* next_fmt_next_param = opt_fmt_next_param;
             NextFmt = ThisFmt->optional_fmt;
-            next_param = NextFmt->next_param+1;
+            next_param = opt_fmt_next_param+1;
             iRet = check_ftp_param_validity(p, next_param, params_end,
-                NextFmt, session);
+                 NextFmt, &next_fmt_next_param, session);
             if (iRet == FTPP_SUCCESS)
             {
-                this_param = NextFmt->next_param+1;
+                this_param = next_fmt_next_param+1;
             }
         }
     }
@@ -858,18 +866,20 @@ static int check_ftp_param_validity(Packet* p,
         for (i=0; i<ThisFmt->numChoices && !valid; i++)
         {
             /* Try choice [i] */
+            const char* this_fmt_choice_next_param = nullptr;
             iRet = validate_param(p, this_param, params_end,
-                ThisFmt->choices[i], session);
+                ThisFmt->choices[i], &this_fmt_choice_next_param, session);
             if (iRet == FTPP_SUCCESS)
             {
                 const char* next_param;
+                const char* next_fmt_next_param = this_fmt_choice_next_param;
                 NextFmt = ThisFmt->choices[i];
-                next_param = NextFmt->next_param+1;
+                next_param = this_fmt_choice_next_param+1;
                 iRet = check_ftp_param_validity(p, next_param, params_end,
-                    NextFmt, session);
+                    NextFmt, &next_fmt_next_param, session);
                 if (iRet == FTPP_SUCCESS)
                 {
-                    this_param = NextFmt->next_param+1;
+                    this_param = next_fmt_next_param+1;
                     break;
                 }
             }
@@ -878,18 +888,20 @@ static int check_ftp_param_validity(Packet* p,
     else if ((iRet != FTPP_SUCCESS) && (ThisFmt->next_param_fmt))
     {
         /* Check against next param */
+        const char* this_fmt_next_fmt_next_param = nullptr;
         iRet = validate_param(p, this_param, params_end,
-            ThisFmt->next_param_fmt, session);
+            ThisFmt->next_param_fmt, &this_fmt_next_fmt_next_param, session);
         if (iRet == FTPP_SUCCESS)
         {
             const char* next_param;
+            const char* next_fmt_next_param = this_fmt_next_fmt_next_param;
             NextFmt = ThisFmt->next_param_fmt;
-            next_param = NextFmt->next_param+1;
+            next_param = this_fmt_next_fmt_next_param+1;
             iRet = check_ftp_param_validity(p, next_param, params_end,
-                NextFmt, session);
+                NextFmt, &next_fmt_next_param, session);
             if (iRet == FTPP_SUCCESS)
             {
-                this_param = NextFmt->next_param+1;
+                this_param = next_fmt_next_param+1;
             }
         }
     }
@@ -900,7 +912,7 @@ static int check_ftp_param_validity(Packet* p,
     }
     if (iRet == FTPP_SUCCESS)
     {
-        ThisFmt->next_param = this_param;
+        *this_fmt_next_param = this_param;
     }
     return iRet;
 }
@@ -920,39 +932,45 @@ static int check_ftp_param_validity(Packet* p,
  */
 int initialize_ftp(FTP_SESSION* session, Packet* p, int iMode)
 {
-    int iRet;
     const unsigned char* read_ptr = p->data;
     FTP_CLIENT_REQ* req;
-    char ignoreTelnetErase = FTPP_APPLY_TNC_ERASE_CMDS;
 
-    /* Normalize this packet ala telnet */
-    if (((iMode == FTPP_SI_CLIENT_MODE) &&
-        session->client_conf->ignore_telnet_erase_cmds) ||
-        ((iMode == FTPP_SI_SERVER_MODE) &&
-        session->server_conf->ignore_telnet_erase_cmds) )
-        ignoreTelnetErase = FTPP_IGNORE_TNC_ERASE_CMDS;
-
-    iRet = normalize_telnet(nullptr, p, iMode, ignoreTelnetErase);
-
-    if (iRet != FTPP_SUCCESS && iRet != FTPP_NORMALIZED)
+    if ( session->encr_state == NO_STATE )
     {
-        if (iRet == FTPP_ALERT)
-            DetectionEngine::queue_event(GID_FTP, FTP_EVASIVE_TELNET_CMD);
+        int iRet;
+        char ignoreTelnetErase = FTPP_APPLY_TNC_ERASE_CMDS;
+        /* Normalize this packet ala telnet */
+        if (((iMode == FTPP_SI_CLIENT_MODE) &&
+            session->client_conf->ignore_telnet_erase_cmds) ||
+            ((iMode == FTPP_SI_SERVER_MODE) &&
+            session->server_conf->ignore_telnet_erase_cmds) )
+            ignoreTelnetErase = FTPP_IGNORE_TNC_ERASE_CMDS;
 
-        return iRet;
-    }
+        DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
 
-    if ( DecodeBuffer.len )
-    {
-        /* Normalized data will always be in decode buffer */
-        if ( (iMode == FTPP_SI_CLIENT_MODE) ||
-            (iMode == FTPP_SI_SERVER_MODE) )
+        iRet = normalize_telnet(nullptr, p, buf, iMode, ignoreTelnetErase, true);
+
+        if (iRet != FTPP_SUCCESS && iRet != FTPP_NORMALIZED)
         {
-            DetectionEngine::queue_event(GID_FTP, FTP_TELNET_CMD);
-            return FTPP_ALERT; /* Nothing else to do since we alerted */
+            if (iRet == FTPP_ALERT)
+                DetectionEngine::queue_event(GID_FTP, FTP_EVASIVE_TELNET_CMD);
+
+            return iRet;
         }
 
-        read_ptr = DecodeBuffer.data;
+
+        if ( buf.len )
+        {
+            /* Normalized data will always be in decode buffer */
+            if ( (iMode == FTPP_SI_CLIENT_MODE) ||
+                (iMode == FTPP_SI_SERVER_MODE) )
+            {
+                DetectionEngine::queue_event(GID_FTP, FTP_TELNET_CMD);
+                return FTPP_ALERT; /* Nothing else to do since we alerted */
+            }
+
+            read_ptr = buf.data;
+        }
     }
 
     if (iMode == FTPP_SI_CLIENT_MODE)
@@ -1004,6 +1022,15 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
              * If we saw all the other dat for this channel
              * session->data_chan_state should be NO_STATE. */
         }
+        else if (session->flags & FTP_PROTP_CMD_ISSUED)
+        {
+            if (rsp_code == 200)
+            {
+                session->flags &= ~FTP_PROTP_CMD_ISSUED;
+                session->flags |= FTP_PROTP_CMD_ACCEPT;
+            }
+                
+        }
         else if (session->data_chan_state & DATA_CHAN_PASV_CMD_ISSUED)
         {
             if (ftp_cmd_pipe_index == session->data_chan_index)
@@ -1054,13 +1081,13 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                         if (iRet == FTPP_SUCCESS)
                         {
                             if (!ipAddr.is_set())
-                                session->serverIP.set(*p->ptrs.ip_api.get_src());
+                                session->serverIP = *p->ptrs.ip_api.get_src();
                             else
                             {
                                 session->serverIP = ipAddr;
                             }
                             session->serverPort = port;
-                            session->clientIP.set(*p->ptrs.ip_api.get_dst());
+                            session->clientIP = *p->ptrs.ip_api.get_dst();
                             session->clientPort = 0;
 
                             if ((FileService::get_max_file_depth() > 0) ||
@@ -1075,6 +1102,10 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                                 ftpdata->data_chan = session->server_conf->data_chan;
                                 if (session->flags & FTP_FLG_MALWARE)
                                     session->datassn = ftpdata;
+
+                                if (p->flow->flags.data_decrypted and
+                                    (session->flags & FTP_PROTP_CMD_ACCEPT))
+                                    fd->in_tls = true;
 
                                 /* Call into Streams to mark data channel as ftp-data */
                                 result = Stream::set_snort_protocol_id_expected(
@@ -1097,7 +1128,7 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                                     p, PktType::TCP, IpProtocol::TCP,
                                     &session->clientIP, session->clientPort,
                                     &session->serverIP, session->serverPort,
-                                    SSN_DIR_BOTH, FtpDataFlowData::inspector_id);
+                                    SSN_DIR_BOTH, (new FtpDataFlowData(p)));
                             }
                         }
                     }
@@ -1131,7 +1162,7 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                         /* Server is listening/sending from its own IP,
                          * FTP Port -1 */
                         /* Client IP, Port specified via PORT command */
-                        session->serverIP.set(*p->ptrs.ip_api.get_src());
+                        session->serverIP = *p->ptrs.ip_api.get_src();
 
                         /* Can't necessarily guarantee this, especially
                          * in the case of a proxy'd connection where the
@@ -1154,12 +1185,16 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                             if (session->flags & FTP_FLG_MALWARE)
                                 session->datassn = ftpdata;
 
+                            if (p->flow->flags.data_decrypted and
+                                (session->flags & FTP_PROTP_CMD_ACCEPT))
+                                fd->in_tls = true;
+
                             /* Call into Streams to mark data channel as ftp-data */
                             result = Stream::set_snort_protocol_id_expected(
                                 p, PktType::TCP, IpProtocol::TCP,
                                 &session->clientIP, session->clientPort,
                                 &session->serverIP, session->serverPort,
-                                ftp_data_snort_protocol_id, fd);
+                                ftp_data_snort_protocol_id, fd, true);
 
                             if (result < 0)
                             {
@@ -1175,7 +1210,7 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                                 p, PktType::TCP, IpProtocol::TCP,
                                 &session->clientIP, session->clientPort,
                                 &session->serverIP, session->serverPort,
-                                SSN_DIR_BOTH, FtpDataFlowData::inspector_id);
+                                SSN_DIR_BOTH, (new FtpDataFlowData(p)));
                         }
                     }
                 }
@@ -1230,6 +1265,16 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
             }
         }
     } /* if (session->server_conf->data_chan) */
+
+    if ((session->encr_state == AUTH_TLS_CMD_ISSUED or session->encr_state == AUTH_SSL_CMD_ISSUED)
+        and rsp_code == 234)
+    {
+        OpportunisticTlsEvent event(p, p->flow->service);
+        DataBus::publish(OPPORTUNISTIC_TLS_EVENT, event, p->flow);
+        ++ftstats.starttls;
+        if (session->flags & FTP_FLG_SEARCH_ABANDONED)
+            ++ftstats.ssl_search_abandoned_too_soon;
+    }
 
     if (session->server_conf->detect_encrypted)
     {
@@ -1305,8 +1350,9 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
 
     const unsigned char* end = p->data + p->dsize;
 
-    if ( DecodeBuffer.len )
-        end = DecodeBuffer.data + DecodeBuffer.len;
+    const DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
+    if ( buf.len )
+        end = buf.data + buf.len;
 
     if (iMode == FTPP_SI_CLIENT_MODE)
     {
@@ -1598,15 +1644,17 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                 read_ptr++;
                 req->param_begin = nullptr;
                 req->param_end = nullptr;
+                req->param_size = 0;
             }
             else if (space || ftpssn->server.response.state != 0)
             {
                 /* Now grab the command parameters/response message
                  * read_ptr < end already checked */
                 req->param_begin = (const char*)read_ptr;
-                if ((read_ptr = (unsigned char*)memchr(read_ptr, CR, end - read_ptr)) == nullptr)
+                if ((read_ptr = (const unsigned char*)memchr(read_ptr, CR, end - read_ptr)) == nullptr)
                     read_ptr = end;
                 req->param_end = (const char*)read_ptr;
+                req->param_size = req->param_end - req->param_begin;
                 read_ptr++;
 
                 if (read_ptr < end)
@@ -1625,6 +1673,7 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
             /* Nothing left --> no parameters/message.  Not even an LF */
             req->param_begin = nullptr;
             req->param_end = nullptr;
+            req->param_size = 0;
         }
 
         /* Set the pointer for the next request/response
@@ -1634,7 +1683,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
         else
             req->pipeline_req = nullptr;
 
-        req->param_size = req->param_end - req->param_begin;
         switch (state)
         {
         case FTP_CMD_INV:
@@ -1728,6 +1776,7 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                         {
                             snort_free(ftpssn->filename);
                             ftpssn->filename = nullptr;
+                            ftpssn->path_hash = 0;
                             ftpssn->file_xfer_info = FTPP_FILE_IGNORE;
                         }
 
@@ -1741,6 +1790,10 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                             memcpy(ftpssn->filename, req->param_begin, req->param_size);
                             ftpssn->filename[req->param_size] = '\0';
                             ftpssn->file_xfer_info = req->param_size;
+                            char *file_name = strrchr(ftpssn->filename, '/');
+                            if(!file_name)
+                                file_name = ftpssn->filename;
+                            ftpssn->path_hash = str_to_hash((uint8_t *)file_name, strlen(file_name));
 
                             // 0 for Download, 1 for Upload
                             ftpssn->data_xfer_dir = CmdConf->file_get_cmd ? false : true;
@@ -1770,10 +1823,28 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                         ftpssn->encr_state = AUTH_UNKNOWN_CMD_ISSUED;
                     }
                 }
+                else if (CmdConf->prot_cmd)
+                {
+                    if (req->param_begin && (req->param_size > 0) &&
+                        ((req->param_begin[0] == 'P') || (req->param_begin[0] == 'p')))
+                    {
+                        ftpssn->flags &= ~FTP_PROTP_CMD_ACCEPT;
+                        ftpssn->flags |= FTP_PROTP_CMD_ISSUED;
+                    }
+                }
+                else if (CmdConf->login_cmd and !p->flow->flags.data_decrypted and
+                    !(ftpssn->flags & FTP_FLG_SEARCH_ABANDONED))
+                {
+                    ftpssn->flags |= FTP_FLG_SEARCH_ABANDONED;
+                    DataBus::publish(SSL_SEARCH_ABANDONED, p);
+                    ++ftstats.ssl_search_abandoned;
+                }
+
                 if (CmdConf->check_validity)
                 {
+                    const char* next_param = nullptr;
                     iRet = check_ftp_param_validity(p, req->param_begin,
-                        req->param_end, CmdConf->param_format,
+                        req->param_end, CmdConf->param_format, &next_param,
                         ftpssn);
                     /* If negative, haven't already alerted on violation */
                     if (iRet < 0)

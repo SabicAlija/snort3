@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -70,7 +70,6 @@ struct PatternMatchData
     uint16_t fp_length;
 
     // not used by ips_content
-    int8_t fp_only;
     uint8_t pm_type;
 
     bool is_unbounded() const

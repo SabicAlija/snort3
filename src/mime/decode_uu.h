@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,7 +31,7 @@ public:
     ~UUDecode() override;
 
     // Main function to decode file data
-    DecodeResult decode_data(const uint8_t* start, const uint8_t* end) override;
+    DecodeResult decode_data(const uint8_t* start, const uint8_t* end, uint8_t* decode_buf) override;
 
     void reset_decode_state() override;
 

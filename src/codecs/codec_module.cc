@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,23 +23,29 @@
 
 #include "codecs/codec_module.h"
 
-#include "main/snort_debug.h"
+#include "trace/trace.h"
 
 using namespace snort;
 
 #define codec_module_help \
     "general decoder rules"
 
-Trace TRACE_NAME(decode);
+#define s_name "decode"
+
+THREAD_LOCAL const Trace* decode_trace = nullptr;
 
 static const Parameter s_params[] = {{ nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }};
 
-CodecModule::CodecModule() : Module("decode", codec_module_help, s_params, false, &TRACE_NAME(decode))
+CodecModule::CodecModule() : BaseCodecModule(s_name, codec_module_help, s_params)
 { }
 
-bool CodecModule::set(const char* fqn, Value& v, SnortConfig* sc)
+void CodecModule::set_trace(const Trace* trace) const
+{ decode_trace = trace; }
+
+const TraceOption* CodecModule::get_trace_options() const
 {
-    return Module::set(fqn, v, sc);
+    static const TraceOption codec_trace_options(nullptr, 0, nullptr);
+    return &codec_trace_options;
 }
 
 static const RuleMap general_decode_rules[] =

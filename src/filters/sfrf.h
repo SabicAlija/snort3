@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,10 +27,12 @@
 #include <ctime>
 
 #include "actions/actions.h"
+#include "framework/counts.h"
 #include "main/policy.h"
 
 namespace snort
 {
+class GHash;
 struct SfIp;
 struct SnortConfig;
 }
@@ -137,17 +139,17 @@ struct RateFilterConfig
     /* Array of hash, indexed by gid. Each array element is a hash, which
      * is keyed on sid/policyId and data is a tSFRFSidNode node.
      */
-    struct snort::GHash* genHash [SFRF_MAX_GENID];
+    snort::GHash* genHash [SFRF_MAX_GENID];
 
-    // Number of DOS thresholds added.
-    int count;
-
-    // count of no revert DOS thresholds
+    unsigned memcap;
     unsigned noRevertCount;
-
-    int memcap;
-
+    int count;
     int internal_event_mask;
+};
+
+struct RateFilterStats
+{
+    PegCount xhash_nomem_peg = 0;
 };
 
 /*
@@ -183,5 +185,7 @@ inline bool is_internal_event_enabled(RateFilterConfig* config, uint32_t sid)
 
     return (config->internal_event_mask & (1 << sid));
 }
-#endif
 
+int SFRF_Alloc(unsigned int memcap);
+
+#endif

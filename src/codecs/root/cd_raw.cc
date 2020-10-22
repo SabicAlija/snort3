@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,7 +21,7 @@
 #include "config.h"
 #endif
 
-#include <sfbpf_dlt.h>
+#include <daq_dlt.h>
 
 #include "framework/codec.h"
 
@@ -59,7 +59,7 @@ bool RawCodec::decode(const RawData& raw, CodecData& data, DecodeData&)
 
 void RawCodec::get_data_link_type(std::vector<int>& v)
 {
-    v.push_back(DLT_RAW);
+    v.emplace_back(DLT_RAW);
 }
 
 //-------------------------------------------------------------------------

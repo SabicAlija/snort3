@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 #include "framework/ips_option.h"
 #include "framework/module.h"
 #include "framework/range.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "protocols/tcp.h"
@@ -57,21 +57,20 @@ private:
 
 uint32_t TcpSeqOption::hash() const
 {
-    uint32_t a,b,c;
+    uint32_t a = config.op;
+    uint32_t b = config.min;
+    uint32_t c = config.max;
 
-    a = config.op;
-    b = config.min;
-    c = config.max;
+    mix(a,b,c);
+    a += IpsOption::hash();
 
-    mix_str(a,b,c,get_name());
     finalize(a,b,c);
-
     return c;
 }
 
 bool TcpSeqOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const TcpSeqOption& rhs = (const TcpSeqOption&)ips;
@@ -80,7 +79,7 @@ bool TcpSeqOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus TcpSeqOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(tcpSeqPerfStats);
+    RuleProfile profile(tcpSeqPerfStats);
 
     if (!p->ptrs.tcph)
         return NO_MATCH;

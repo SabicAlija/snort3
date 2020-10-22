@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -75,25 +75,22 @@ private:
 
 uint32_t SipMethodOption::hash() const
 {
-    uint32_t a,b,c;
+    uint32_t a = methods.size();
+    uint32_t b = a ? methods.begin()->second : 0;
+    uint32_t c = IpsOption::hash();
 
-    a = methods.size();
-    b = a ? methods.begin()->second : 0;
-    c = 0;
-
-    mix_str(a, b, c, get_name());
+    mix(a, b, c);
 
     for ( auto& m : methods )
         mix_str(a, b, c, m.first.c_str(), m.first.size());
 
     finalize(a, b, c);
-
     return c;
 }
 
 bool SipMethodOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const SipMethodOption& rhs = (const SipMethodOption&)ips;
@@ -103,7 +100,7 @@ bool SipMethodOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus SipMethodOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(sipMethodRuleOptionPerfStats);
+    RuleProfile profile(sipMethodRuleOptionPerfStats);
 
     if ( !p->flow )
         return NO_MATCH;
@@ -121,13 +118,13 @@ IpsOption::EvalStatus SipMethodOption::eval(Cursor&, Packet* p)
         if ( !ropts->method_data )
             return NO_MATCH;
 
-        //FIXIT-P This should really be evaluated once per request instead of once
-        //per rule option evaluation.
+        // FIXIT-P This should really be evaluated once per request instead of once
+        // per rule option evaluation.
         std::string method(ropts->method_data, ropts->method_len);
         std::transform(method.begin(), method.end(), method.begin(), ::toupper);
 
         bool negated = methods.begin()->second;
-        bool match = methods.find(method) != methods.cend(); 
+        bool match = methods.find(method) != methods.cend();
 
         if ( negated ^ match )
             return MATCH;

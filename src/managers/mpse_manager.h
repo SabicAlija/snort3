@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -67,16 +67,17 @@ public:
     static const snort::MpseApi* get_search_api(const char* type);
     static void delete_search_engine(snort::Mpse*);
 
-    static snort::Mpse* get_search_engine(const char*);
     static snort::Mpse* get_search_engine(
-        snort::SnortConfig* sc,const snort::MpseApi* api, const struct MpseAgent*);
+        const snort::SnortConfig* sc,const snort::MpseApi* api, const struct MpseAgent*);
 
     static void activate_search_engine(const snort::MpseApi*, snort::SnortConfig*);
     static void setup_search_engine(const snort::MpseApi*, snort::SnortConfig*);
     static void start_search_engine(const snort::MpseApi*);
     static void stop_search_engine(const snort::MpseApi*);
-    static bool search_engine_trim(const snort::MpseApi*);
+    static bool is_async_capable(const snort::MpseApi*);
     static bool is_regex_capable(const snort::MpseApi*);
+    static bool parallel_compiles(const snort::MpseApi*);
+    static bool is_poll_capable(const snort::MpseApi* api);
     static void print_mpse_summary(const snort::MpseApi*);
     static void print_search_engine_stats();
 

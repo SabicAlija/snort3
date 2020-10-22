@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,50 +26,93 @@
 #include "file_api/file_flows.h"
 
 #include "http_api.h"
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_js_norm.h"
+#include "http_msg_header.h"
 #include "http_msg_request.h"
 
 using namespace snort;
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 HttpMsgBody::HttpMsgBody(const uint8_t* buffer, const uint16_t buf_size,
-    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, Flow* flow_,
     const HttpParaList* params_) :
     HttpMsgSection(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_),
     body_octets(session_data->body_octets[source_id]),
-    detection_section((body_octets == 0) && (session_data->detect_depth_remaining[source_id] > 0))
+    first_body(session_data->body_octets[source_id] == 0)
 {
     transaction->set_body(this);
+    get_related_sections();
 }
 
 void HttpMsgBody::analyze()
 {
-    do_utf_decoding(msg_text, decoded_body);
+    uint32_t& partial_inspected_octets = session_data->partial_inspected_octets[source_id];
 
-    if (session_data->detect_depth_remaining[source_id] > 0)
-    {
-        do_pdf_swf_decompression(decoded_body, decompressed_pdf_swf_body);
-        do_js_normalization(decompressed_pdf_swf_body, js_norm_body);
-        const int32_t detect_length =
-            (js_norm_body.length() <= session_data->detect_depth_remaining[source_id]) ?
-            js_norm_body.length() : session_data->detect_depth_remaining[source_id];
-        detect_data.set(detect_length, js_norm_body.start());
-        session_data->detect_depth_remaining[source_id] -= detect_length;
-        snort::set_file_data(const_cast<uint8_t*>(detect_data.start()),
-            (unsigned)detect_data.length());
-    }
+    // When there have been partial inspections we focus on the part of the message we have not
+    // seen before
+    if (partial_inspected_octets > 0)
+        msg_text_new.set(msg_text.length() - partial_inspected_octets,
+            msg_text.start() + partial_inspected_octets);
+    else
+        msg_text_new.set(msg_text);
+
+    do_utf_decoding(msg_text_new, decoded_body);
 
     if (session_data->file_depth_remaining[source_id] > 0)
     {
         do_file_processing(decoded_body);
     }
 
-    body_octets += msg_text.length();
-}
+    if (session_data->detect_depth_remaining[source_id] > 0)
+    {
+        do_file_decompression(decoded_body, decompressed_file_body);
+        do_js_normalization(decompressed_file_body, js_norm_body);
 
-bool HttpMsgBody::detection_required() const
-{
-    return (detect_data.length() > 0) || (get_inspection_section() == IS_DETECTION);
+        uint32_t& partial_detect_length = session_data->partial_detect_length[source_id];
+        uint8_t*& partial_detect_buffer = session_data->partial_detect_buffer[source_id];
+        const int32_t total_length = partial_detect_length + js_norm_body.length();
+        const int32_t detect_length =
+            (total_length <= session_data->detect_depth_remaining[source_id]) ?
+            total_length : session_data->detect_depth_remaining[source_id];
+
+        if (partial_detect_length > 0)
+        {
+            uint8_t* const detect_buffer = new uint8_t[total_length];
+            memcpy(detect_buffer, partial_detect_buffer, partial_detect_length);
+            memcpy(detect_buffer + partial_detect_length, js_norm_body.start(),
+                js_norm_body.length());
+            detect_data.set(detect_length, detect_buffer, true);
+        }
+        else
+        {
+            detect_data.set(detect_length, js_norm_body.start());
+        }
+
+        delete[] partial_detect_buffer;
+
+        if (!session_data->partial_flush[source_id])
+        {
+            session_data->detect_depth_remaining[source_id] -= detect_length;
+            partial_detect_buffer = nullptr;
+            partial_detect_length = 0;
+        }
+        else
+        {
+            uint8_t* const save_partial = new uint8_t[detect_data.length()];
+            memcpy(save_partial, detect_data.start(), detect_data.length());
+            partial_detect_buffer = save_partial;
+            partial_detect_length = detect_data.length();
+        }
+
+        set_file_data(const_cast<uint8_t*>(detect_data.start()),
+            (unsigned)detect_data.length());
+    }
+
+    body_octets += msg_text.length();
+    partial_inspected_octets = session_data->partial_flush[source_id] ? msg_text.length() : 0;
 }
 
 void HttpMsgBody::do_utf_decoding(const Field& input, Field& output)
@@ -110,7 +153,7 @@ void HttpMsgBody::do_utf_decoding(const Field& input, Field& output)
         output.set(input);
 }
 
-void HttpMsgBody::do_pdf_swf_decompression(const Field& input, Field& output)
+void HttpMsgBody::do_file_decompression(const Field& input, Field& output)
 {
     if ((source_id == SRC_CLIENT) || (session_data->fd_state == nullptr))
     {
@@ -119,7 +162,7 @@ void HttpMsgBody::do_pdf_swf_decompression(const Field& input, Field& output)
     }
     uint8_t* buffer = new uint8_t[MAX_OCTETS];
     session_data->fd_alert_context.infractions = transaction->get_infractions(source_id);
-    session_data->fd_alert_context.events = transaction->get_events(source_id);
+    session_data->fd_alert_context.events = session_data->events[source_id];
     session_data->fd_state->Next_In = input.start();
     session_data->fd_state->Avail_In = (uint32_t)input.length();
     session_data->fd_state->Next_Out = buffer;
@@ -140,8 +183,8 @@ void HttpMsgBody::do_pdf_swf_decompression(const Field& input, Field& output)
         session_data->fd_state = nullptr;
         break;
     case File_Decomp_BlockOut:
-        add_infraction(INF_PDF_SWF_OVERRUN);
-        create_event(EVENT_PDF_SWF_OVERRUN);
+        add_infraction(INF_FILE_DECOMPR_OVERRUN);
+        create_event(EVENT_FILE_DECOMPR_OVERRUN);
         // Fall through
     default:
         output.set(session_data->fd_state->Next_Out - buffer, buffer, true);
@@ -194,13 +237,15 @@ void HttpMsgBody::do_js_normalization(const Field& input, Field& output)
     }
 
     params->js_norm_param.js_norm->normalize(input, output,
-        transaction->get_infractions(source_id), transaction->get_events(source_id));
+        transaction->get_infractions(source_id), session_data->events[source_id]);
 }
 
-void HttpMsgBody::do_file_processing(Field& file_data)
+void HttpMsgBody::do_file_processing(const Field& file_data)
 {
     // Using the trick that cutter is deleted when regular or chunked body is complete
-    const bool front = (body_octets == 0);
+    Packet* p = DetectionEngine::get_current_packet();
+    const bool front = (body_octets == 0) &&
+        (session_data->partial_inspected_octets[source_id] == 0);
     const bool back = (session_data->cutter[source_id] == nullptr) || tcp_close;
 
     FilePosition file_position;
@@ -215,38 +260,52 @@ void HttpMsgBody::do_file_processing(Field& file_data)
         return;
     }
 
-    const int32_t fp_length = (file_data.length() <= session_data->file_depth_remaining[source_id])
-        ? file_data.length() : session_data->file_depth_remaining[source_id];
-
     if (!session_data->mime_state[source_id])
     {
-        snort::FileFlows* file_flows = snort::FileFlows::get_file_flows(flow);
-        const bool download = (source_id == SRC_SERVER);
+        const int32_t fp_length = (file_data.length() <=
+            session_data->file_depth_remaining[source_id]) ?
+            file_data.length() : session_data->file_depth_remaining[source_id];
 
-        HttpMsgRequest* request = transaction->get_request();
+        FileFlows* file_flows = FileFlows::get_file_flows(flow);
+        if (!file_flows)
+            return;
 
-        size_t file_index = 0;
+        const FileDirection dir = source_id == SRC_SERVER ? FILE_DOWNLOAD : FILE_UPLOAD;
+        Field cont_disp_filename;
 
-        if ((request != nullptr) and (request->get_http_uri() != nullptr))
-        {
-            file_index = request->get_http_uri()->get_file_proc_hash();
-        }
+        const uint64_t file_index = get_header(source_id)->get_file_cache_index();
 
-        if (file_flows->file_process(file_data.start(), fp_length,
-            file_position, !download, file_index))
+        if (file_flows->file_process(p, file_index, file_data.start(), fp_length,
+            session_data->file_octets[source_id], dir,
+            get_header(source_id)->get_multi_file_processing_id(), file_position))
         {
             session_data->file_depth_remaining[source_id] -= fp_length;
 
-            // With the first piece of the file we must provide the "name" which means URI
+            // With the first piece of the file we must provide the "name". If an upload contains a
+            // filename in a Content-Disposition header, we use that. Otherwise the name is the URI.
             if (front)
             {
                 if (request != nullptr)
                 {
-                    const Field& transaction_uri = request->get_uri();
-                    if (transaction_uri.length() > 0)
+                    bool has_cd_filename = false;
+                    if (dir == FILE_UPLOAD)
                     {
-                        file_flows->set_file_name(transaction_uri.start(),
-                            transaction_uri.length());
+                        const Field& cd_filename = get_header(source_id)->
+                            get_content_disposition_filename();
+                        if (cd_filename.length() > 0)
+                        {
+                            file_flows->set_file_name(cd_filename.start(), cd_filename.length());
+                            has_cd_filename = true;
+                        }
+                    }
+                    if (!has_cd_filename)
+                    {
+                        const Field& transaction_uri = request->get_uri();
+                        if (transaction_uri.length() > 0)
+                        {
+                            file_flows->set_file_name(transaction_uri.start(),
+                                transaction_uri.length());
+                        }
                     }
                 }
             }
@@ -256,30 +315,29 @@ void HttpMsgBody::do_file_processing(Field& file_data)
             // file processing doesn't want any more data
             session_data->file_depth_remaining[source_id] = 0;
         }
+        session_data->file_octets[source_id] += fp_length;
     }
     else
     {
-        session_data->mime_state[source_id]->process_mime_data(flow, file_data.start(),
-            fp_length, true, SNORT_FILE_POSITION_UNKNOWN);
-
-        session_data->file_depth_remaining[source_id] -= fp_length;
-        if (session_data->file_depth_remaining[source_id] == 0)
-        {
-            delete session_data->mime_state[source_id];
-            session_data->mime_state[source_id] = nullptr;
-        }
+        // FIXIT-M this interface does not convey any indication of end of message body. If the
+        // message body ends in the middle of a MIME message the partial file will not be flushed.
+        session_data->mime_state[source_id]->process_mime_data(p, file_data.start(),
+            file_data.length(), true, SNORT_FILE_POSITION_UNKNOWN);
+        session_data->file_octets[source_id] += file_data.length();
     }
 }
 
 const Field& HttpMsgBody::get_classic_client_body()
 {
-    return classic_normalize(detect_data, classic_client_body, params->uri_param);
+    return classic_normalize(detect_data, classic_client_body, false, params->uri_param);
 }
 
 #ifdef REG_TEST
 // Common elements of print_section() for body sections
-void HttpMsgBody::print_body_section(FILE* output)
+void HttpMsgBody::print_body_section(FILE* output, const char* body_type_str)
 {
+    HttpMsgSection::print_section_title(output, body_type_str);
+    fprintf(output, "octets seen %" PRIi64 "\n", body_octets);
     detect_data.print(output, "Detect data");
     get_classic_buffer(HTTP_BUFFER_CLIENT_BODY, 0, 0).print(output,
         HttpApi::classic_buffer_names[HTTP_BUFFER_CLIENT_BODY-1]);

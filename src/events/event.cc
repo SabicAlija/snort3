@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,6 +26,8 @@
 #include "detection/signature.h"
 #include "main/snort_config.h"
 
+using namespace snort;
+
 THREAD_LOCAL uint16_t event_id; // FIXIT-M also incremented in fpLogEvent()
 
 void SetEvent(
@@ -39,7 +41,7 @@ void SetEvent(
     event.sig_info->priority = priority;
 
     /* this one gets set automatically */
-    event.event_id = ++event_id | snort::SnortConfig::get_event_log_id();
+    event.event_id = ++event_id | SnortConfig::get_conf()->get_event_log_id();
 
     if (event_ref)
         event.event_reference = event_ref;

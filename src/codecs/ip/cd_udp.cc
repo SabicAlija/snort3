@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,8 +22,11 @@
 #include "config.h"
 #endif
 
+#include <daq.h>
+
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
+#include "log/messages.h"
 #include "log/text_log.h"
 #include "main/snort_config.h"
 #include "protocols/teredo.h"
@@ -43,6 +46,7 @@ const PegInfo pegs[]
 {
     { CountType::SUM, "bad_udp4_checksum", "nonzero udp over ipv4 checksums" },
     { CountType::SUM, "bad_udp6_checksum", "nonzero udp over ipv6 checksums" },
+    { CountType::SUM, "checksum_bypassed", "checksum calculations bypassed" },
     { CountType::END, nullptr, nullptr }
 };
 
@@ -50,6 +54,7 @@ struct Stats
 {
     PegCount bad_ip4_cksum;
     PegCount bad_ip6_cksum;
+    PegCount cksum_bypassed;
 };
 
 static THREAD_LOCAL Stats stats;
@@ -59,11 +64,11 @@ static const Parameter udp_params[] =
     { "deep_teredo_inspection", Parameter::PT_BOOL, nullptr, "false",
       "look for Teredo on all UDP ports (default is only 3544)" },
 
-    { "enable_gtp", Parameter::PT_BOOL, nullptr, "false",
-      "decode GTP encapsulations" },
-
     { "gtp_ports", Parameter::PT_BIT_LIST, "65535",
       "2152 3386", "set GTP ports" },
+
+    { "vxlan_ports", Parameter::PT_BIT_LIST, "65535",
+      "4789", "set VXLAN ports" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -82,11 +87,75 @@ static const RuleMap udp_rules[] =
 
 constexpr uint16_t GTP_U_PORT = 2152;
 constexpr uint16_t GTP_U_PORT_V0 = 3386;
+constexpr uint16_t VXLAN_U_PORT = 4789;
 
-class UdpModule : public CodecModule
+class UdpCodecConfig
 {
 public:
-    UdpModule() : CodecModule(CD_UDP_NAME, CD_UDP_HELP, udp_params) { }
+    UdpCodecConfig()
+    {
+        gtp_ports.set(GTP_U_PORT);
+        gtp_ports.set(GTP_U_PORT_V0);
+        vxlan_ports.set(VXLAN_U_PORT);
+    }
+
+    bool deep_teredo_inspection()
+    { return enable_teredo; }
+
+    void set_teredo_inspection(bool val)
+    { enable_teredo = val; }
+
+    bool gtp_decoding()
+    { return gtp_decode; }
+
+    bool is_gtp_port(uint16_t port)
+    { return gtp_ports.test(port); }
+
+    bool vxlan_decoding()
+    { return vxlan_decode; }
+
+    bool is_vxlan_port(uint16_t port)
+    { return vxlan_ports.test(port); }
+
+    void set_gtp_ports(const PortBitSet& ports)
+    {
+        gtp_ports = ports;
+        gtp_decode = ports.any();
+    }
+
+    void set_vxlan_ports(const PortBitSet& ports)
+    {
+        vxlan_ports = ports;
+        vxlan_decode = ports.any();
+    }
+
+private:
+    bool enable_teredo = false;
+    PortBitSet gtp_ports;
+    PortBitSet vxlan_ports;
+    bool gtp_decode = true;
+    bool vxlan_decode = true;
+};
+
+class UdpModule : public BaseCodecModule
+{
+public:
+    UdpModule() : BaseCodecModule(CD_UDP_NAME, CD_UDP_HELP, udp_params)
+    {
+        config = nullptr;
+    }
+
+    ~UdpModule() override
+    {
+        if ( config )
+        {
+            delete config;
+            config = nullptr;
+        }
+    }
+
+    bool set(const char*, Value&, SnortConfig*) override;
+    bool begin(const char*, int, SnortConfig*) override;
 
     const RuleMap* get_rules() const override
     { return udp_rules; }
@@ -97,44 +166,54 @@ public:
     PegCount* get_counts() const override
     { return (PegCount*)&stats; }
 
-    bool set(const char*, Value& v, SnortConfig* sc) override
+    UdpCodecConfig* get_data()
     {
-        if ( v.is("deep_teredo_inspection") )
-        {
-            sc->enable_teredo = v.get_long();  // FIXIT-L move to existing bitfield
-        }
-        else if ( v.is("gtp_ports") )
-        {
-            if ( !sc->gtp_ports )
-                sc->gtp_ports = new PortBitSet;
-
-            v.get_bits(*(sc->gtp_ports));
-        }
-        else if ( v.is("enable_gtp") )
-        {
-            if ( v.get_bool() )
-            {
-                if ( !sc->gtp_ports )
-                {
-                    sc->gtp_ports = new PortBitSet;
-                    sc->gtp_ports->set(GTP_U_PORT);
-                    sc->gtp_ports->set(GTP_U_PORT_V0);
-                }
-            }
-        }
-        else
-        {
-            return false;
-        }
-
-        return true;
+        UdpCodecConfig* tmp = config;
+        config = nullptr;
+        return tmp;
     }
+    
+private:
+    UdpCodecConfig* config;
 };
+
+bool UdpModule::set(const char*, Value& v, SnortConfig*)
+{
+    PortBitSet ports;
+
+    if ( v.is("deep_teredo_inspection") )
+    {
+        config->set_teredo_inspection(v.get_bool());
+    }
+    else if ( v.is("gtp_ports") )
+    {
+        v.get_bits(ports);
+        config->set_gtp_ports(ports);
+    }
+    else if ( v.is("vxlan_ports") )
+    {
+        v.get_bits(ports);
+        config->set_vxlan_ports(ports);
+    }
+    else
+        return false;
+
+    return true;
+}
+
+bool UdpModule::begin(const char*, int, SnortConfig*)
+{
+    assert(!config);
+    config = new UdpCodecConfig;
+    return true;
+}
+
 
 class UdpCodec : public Codec
 {
 public:
-    UdpCodec() : Codec(CD_UDP_NAME) { }
+    UdpCodec(UdpCodecConfig* c) : Codec(CD_UDP_NAME) { config = c; }
+    ~UdpCodec() override { delete config; }
 
     void get_protocol_ids(std::vector<ProtocolId>& v) override;
     bool decode(const RawData&, CodecData&, DecodeData&) override;
@@ -148,13 +227,63 @@ public:
 
 private:
 
+    bool valid_checksum_from_daq(const RawData&);
+    bool valid_checksum4(const RawData&, const DecodeData&);
+    bool valid_checksum6(const RawData&, const CodecData&, const DecodeData&);
+
     void UDPMiscTests(const DecodeData&, const CodecData&, uint32_t pay_len);
+    UdpCodecConfig* config;
 };
 } // anonymous namespace
 
+inline bool UdpCodec::valid_checksum_from_daq(const RawData& raw)
+{
+    const DAQ_PktDecodeData_t* pdd =
+        (const DAQ_PktDecodeData_t*) daq_msg_get_meta(raw.daq_msg, DAQ_PKT_META_DECODE_DATA);
+    if (!pdd || !pdd->flags.bits.l4_checksum || !pdd->flags.bits.udp || !pdd->flags.bits.l4)
+        return false;
+    // Sanity check to make sure we're talking about the same thing if offset is available
+    if (pdd->l4_offset != DAQ_PKT_DECODE_OFFSET_INVALID)
+    {
+        const uint8_t* data = daq_msg_get_data(raw.daq_msg);
+        if (raw.data - data != pdd->l4_offset)
+            return false;
+    }
+    stats.cksum_bypassed++;
+    return true;
+}
+
+bool UdpCodec::valid_checksum4(const RawData& raw, const DecodeData& snort)
+{
+    const ip::IP4Hdr* const ip4h = snort.ip_api.get_ip4h();
+
+    checksum::Pseudoheader ph;
+    ph.hdr.sip = ip4h->get_src();
+    ph.hdr.dip = ip4h->get_dst();
+    ph.hdr.zero = 0;
+    ph.hdr.protocol = ip4h->proto();
+    ph.hdr.len = htons((uint16_t) raw.len);
+
+    return (checksum::udp_cksum((const uint16_t*) raw.data, raw.len, ph) == 0);
+}
+
+bool UdpCodec::valid_checksum6(const RawData& raw, const CodecData& codec, const DecodeData& snort)
+{
+    const ip::IP6Hdr* const ip6h = snort.ip_api.get_ip6h();
+
+    checksum::Pseudoheader6 ph6;
+    COPY4(ph6.hdr.sip, ip6h->get_src()->u6_addr32);
+    COPY4(ph6.hdr.dip, ip6h->get_dst()->u6_addr32);
+    ph6.hdr.zero = 0;
+    ph6.hdr.protocol = codec.ip6_csum_proto;
+    ph6.hdr.len = htons((uint16_t) raw.len);
+
+    return (checksum::udp_cksum((const uint16_t*) raw.data, raw.len, ph6) == 0);
+}
+
 void UdpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::UDP);
+    v.emplace_back(ProtocolId::UDP);
 }
 
 bool UdpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
@@ -172,7 +301,7 @@ bool UdpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
     const udp::UDPHdr* const udph =
         reinterpret_cast<const udp::UDPHdr*>(raw.data);
 
-    // FIXIT-M since we no longer let UDP fragments through, erase extra code
+    // FIXIT-RC since we no longer let UDP fragments through, erase extra code
     if ((snort.decode_flags & DECODE_FRAG) == 0)
     {
         uhlen = ntohs(udph->uh_len);
@@ -211,71 +340,46 @@ bool UdpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         return false;
     }
 
-    if (SnortConfig::udp_checksums())
+    if (snort::get_network_policy()->udp_checksums() && !valid_checksum_from_daq(raw))
     {
-        /* look at the UDP checksum to make sure we've got a good packet */
-        uint16_t csum;
         PegCount* bad_cksum_cnt;
+        bool valid;
 
+        /* look at the UDP checksum to make sure we've got a good packet */
         if (snort.ip_api.is_ip4())
         {
-            bad_cksum_cnt = &(stats.bad_ip4_cksum);
-
             /* Don't do checksum calculation if
              * 1) Fragmented, OR
              * 2) UDP header chksum value is 0.
              */
-            if ( !fragmented_udp_flag && udph->uh_chk )
-            {
-                checksum::Pseudoheader ph;
-                const ip::IP4Hdr* const ip4h = snort.ip_api.get_ip4h();
-                ph.sip = ip4h->get_src();
-                ph.dip = ip4h->get_dst();
-                ph.zero = 0;
-                ph.protocol = ip4h->proto();
-                ph.len = udph->uh_len;
-
-                csum = checksum::udp_cksum((const uint16_t*)(udph), uhlen, &ph);
-            }
+            if (!fragmented_udp_flag && udph->uh_chk)
+                valid = valid_checksum4(raw, snort);
             else
-            {
-                csum = 0;
-            }
+                valid = true;
+            bad_cksum_cnt = &stats.bad_ip4_cksum;
         }
         else
         {
-            bad_cksum_cnt = &(stats.bad_ip6_cksum);
-
             /* Alert on checksum value 0 for ipv6 packets */
             if (!udph->uh_chk)
             {
-                csum = 1;
+                valid = false;
                 codec_event(codec, DECODE_UDP_IPV6_ZERO_CHECKSUM);
             }
             /* Don't do checksum calculation if
              * 1) Fragmented
              * (UDP checksum is not optional in IP6)
              */
-            else if ( !fragmented_udp_flag )
-            {
-                checksum::Pseudoheader6 ph6;
-                const ip::IP6Hdr* const ip6h = snort.ip_api.get_ip6h();
-                COPY4(ph6.sip, ip6h->ip6_src.u6_addr32);
-                COPY4(ph6.dip, ip6h->ip6_dst.u6_addr32);
-                ph6.zero = 0;
-                ph6.protocol = codec.ip6_csum_proto;
-                ph6.len = htons((u_short)raw.len);
-
-                csum = checksum::udp_cksum((const uint16_t*)(udph), uhlen, &ph6);
-            }
+            else if (!fragmented_udp_flag)
+                valid = valid_checksum6(raw, codec, snort);
             else
-            {
-                csum = 0;
-            }
+                valid = true;
+            bad_cksum_cnt = &stats.bad_ip6_cksum;
         }
-        if (csum && !codec.is_cooked())
+
+        if (!valid && !codec.is_cooked())
         {
-            if ( !(codec.codec_flags & CODEC_UNSURE_ENCAP) )
+            if (!(codec.codec_flags & CODEC_UNSURE_ENCAP))
             {
                 (*bad_cksum_cnt)++;
                 snort.decode_flags |= DECODE_ERR_CKSUM_UDP;
@@ -283,18 +387,20 @@ bool UdpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
             return false;
         }
     }
+
     uint16_t src_port;
     uint16_t dst_port;
 
-    if ((raw.pkth->flags & DAQ_PKT_FLAG_REAL_ADDRESSES) and (codec.ip_layer_cnt == 1))
+    const DAQ_NAPTInfo_t* napti = (const DAQ_NAPTInfo_t*) daq_msg_get_meta(raw.daq_msg, DAQ_PKT_META_NAPT_INFO);
+    if (napti && codec.ip_layer_cnt == 1)
     {
-        src_port = ntohs(raw.pkth->n_real_sPort);
-        dst_port = ntohs(raw.pkth->n_real_dPort);
+        src_port = ntohs(napti->src_port);
+        dst_port = ntohs(napti->dst_port);
     }
     else
     {
         src_port = udph->src_port();
-        dst_port =  udph->dst_port();
+        dst_port = udph->dst_port();
     }
 
     /* fill in the printout data structs */
@@ -308,18 +414,26 @@ bool UdpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
     // set in packet manager
     UDPMiscTests(snort, codec, uhlen - udp::UDP_HEADER_LEN);
 
-    if (SnortConfig::gtp_decoding() &&
-        (SnortConfig::is_gtp_port(src_port) || SnortConfig::is_gtp_port(dst_port)))
+    if (config->gtp_decoding() and
+        (config->is_gtp_port(src_port) || config->is_gtp_port(dst_port)))
     {
         if ( !(snort.decode_flags & DECODE_FRAG) )
             codec.next_prot_id = ProtocolId::GTP;
     }
     else if (teredo::is_teredo_port(src_port) ||
         teredo::is_teredo_port(dst_port) ||
-        SnortConfig::deep_teredo_inspection())
+        (config->deep_teredo_inspection()))
     {
         codec.next_prot_id = ProtocolId::TEREDO;
     }
+    else if (config->vxlan_decoding() and
+        (config->is_vxlan_port(src_port) || config->is_vxlan_port(dst_port)))
+    {
+        codec.next_prot_id = ProtocolId::VXLAN;
+    }
+
+    if (codec.next_prot_id != ProtocolId::FINISHED_DECODE)
+        codec.proto_bits |= PROTO_BIT__UDP_TUNNELED;
 
     return true;
 }
@@ -381,23 +495,23 @@ bool UdpCodec::encode(const uint8_t* const raw_in, const uint16_t /*raw_len*/,
     {
         checksum::Pseudoheader ps;
         const ip::IP4Hdr* const ip4h = ip_api.get_ip4h();
-        ps.sip = ip4h->get_src();
-        ps.dip = ip4h->get_dst();
-        ps.zero = 0;
-        ps.protocol = IpProtocol::UDP;
-        ps.len = udph_out->uh_len;
-        udph_out->uh_chk = checksum::udp_cksum((uint16_t*)udph_out, len, &ps);
+        ps.hdr.sip = ip4h->get_src();
+        ps.hdr.dip = ip4h->get_dst();
+        ps.hdr.zero = 0;
+        ps.hdr.protocol = IpProtocol::UDP;
+        ps.hdr.len = udph_out->uh_len;
+        udph_out->uh_chk = checksum::udp_cksum((uint16_t*)udph_out, len, ps);
     }
     else if (ip_api.is_ip6())
     {
         checksum::Pseudoheader6 ps6;
         const ip::IP6Hdr* const ip6h = ip_api.get_ip6h();
-        memcpy(ps6.sip, ip6h->get_src()->u6_addr8, sizeof(ps6.sip));
-        memcpy(ps6.dip, ip6h->get_dst()->u6_addr8, sizeof(ps6.dip));
-        ps6.zero = 0;
-        ps6.protocol = IpProtocol::UDP;
-        ps6.len = udph_out->uh_len;
-        udph_out->uh_chk = checksum::udp_cksum((uint16_t*)udph_out, len, &ps6);
+        memcpy(ps6.hdr.sip, ip6h->get_src()->u6_addr8, sizeof(ps6.hdr.sip));
+        memcpy(ps6.hdr.dip, ip6h->get_dst()->u6_addr8, sizeof(ps6.hdr.dip));
+        ps6.hdr.zero = 0;
+        ps6.hdr.protocol = IpProtocol::UDP;
+        ps6.hdr.len = udph_out->uh_len;
+        udph_out->uh_chk = checksum::udp_cksum((uint16_t*)udph_out, len, ps6);
     }
 
     enc.next_proto = IpProtocol::UDP;
@@ -421,23 +535,23 @@ void UdpCodec::update(const ip::IpApi& ip_api, const EncodeFlags flags,
         {
             checksum::Pseudoheader ps;
             const ip::IP4Hdr* const ip4h = ip_api.get_ip4h();
-            ps.sip = ip4h->get_src();
-            ps.dip = ip4h->get_dst();
-            ps.zero = 0;
-            ps.protocol = IpProtocol::UDP;
-            ps.len = htons((uint16_t)updated_len);
-            h->uh_chk = checksum::udp_cksum((uint16_t*)h, updated_len, &ps);
+            ps.hdr.sip = ip4h->get_src();
+            ps.hdr.dip = ip4h->get_dst();
+            ps.hdr.zero = 0;
+            ps.hdr.protocol = IpProtocol::UDP;
+            ps.hdr.len = htons((uint16_t)updated_len);
+            h->uh_chk = checksum::udp_cksum((uint16_t*)h, updated_len, ps);
         }
         else if (ip_api.is_ip6())
         {
             checksum::Pseudoheader6 ps6;
             const ip::IP6Hdr* const ip6h = ip_api.get_ip6h();
-            memcpy(ps6.sip, ip6h->ip6_src.u6_addr32, sizeof(ps6.sip));
-            memcpy(ps6.dip, ip6h->ip6_dst.u6_addr32, sizeof(ps6.dip));
-            ps6.zero = 0;
-            ps6.protocol = IpProtocol::UDP;
-            ps6.len = htons((uint16_t)updated_len);
-            h->uh_chk = checksum::udp_cksum((uint16_t*)h, updated_len, &ps6);
+            memcpy(ps6.hdr.sip, ip6h->get_src()->u6_addr32, sizeof(ps6.hdr.sip));
+            memcpy(ps6.hdr.dip, ip6h->get_dst()->u6_addr32, sizeof(ps6.hdr.dip));
+            ps6.hdr.zero = 0;
+            ps6.hdr.protocol = IpProtocol::UDP;
+            ps6.hdr.len = htons((uint16_t)updated_len);
+            h->uh_chk = checksum::udp_cksum((uint16_t*)h, updated_len, ps6);
         }
     }
 }
@@ -469,8 +583,14 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Codec* ctor(Module*)
-{ return new UdpCodec(); }
+static Codec* ctor(Module* m)
+{
+    UdpModule* mod = (UdpModule*)m;
+    // Codecs can be instantiated without modules. In which case use
+    // the snort defaults for config.
+    UdpCodecConfig* cfg = mod ? (mod->get_data()) : (new UdpCodecConfig());
+    return new UdpCodec(cfg);
+}
 
 static void dtor(Codec* cd)
 { delete cd; }

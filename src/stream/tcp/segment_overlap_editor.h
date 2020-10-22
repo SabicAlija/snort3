@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,19 +16,18 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// segment_overlap_editor.h author davis mcpherson <davmcphe@@cisco.com>
+// segment_overlap_editor.h author davis mcpherson <davmcphe@cisco.com>
 // Created on: Oct 11, 2015
 
 #ifndef SEGMENT_OVERLAP_EDITOR_H
 #define SEGMENT_OVERLAP_EDITOR_H
 
 #include "normalize/normalize.h"
-#include "stream/tcp/tcp_segment_node.h"
+#include "stream/paf.h"
+#include "tcp_segment_node.h"
 
 class TcpSession;
 class TcpStreamTracker;
-
-#define STREAM_INSERT_OK  0  // FIXIT-L replace with bool
 
 struct SegmentOverlapState
 {
@@ -39,8 +38,6 @@ struct SegmentOverlapState
     const uint8_t* rdata;
 
     TcpSegmentList seglist;
-    ReassemblyPolicy reassembly_policy;
-
     uint32_t seglist_base_seq;      /* seq of first queued segment */
     uint32_t seg_count;             /* number of current queued segments */
     uint32_t seg_bytes_total;       /* total bytes currently queued */
@@ -60,16 +57,28 @@ struct SegmentOverlapState
     uint16_t len;
     uint16_t rsize;
     int8_t tcp_ips_data;
+    StreamPolicy reassembly_policy;
 
     bool keep_segment;
 
     ~SegmentOverlapState()
-    {
-        seglist.reset();
-    }
+    { seglist.reset(); }
 
-    void init_sos(TcpSession*, ReassemblyPolicy);
+    void init_sos(TcpSession*, StreamPolicy);
     void init_soe(TcpSegmentDescriptor& tsd, TcpSegmentNode* left, TcpSegmentNode* right);
+};
+
+/* Only track a maximum number of alerts per session */
+#define MAX_SESSION_ALERTS 8
+struct StreamAlertInfo
+{
+    /* For storing alerts that have already been seen on the session */
+    uint32_t gid;
+    uint32_t sid;
+    uint32_t seq;
+    // if we log extra data, event_* is used to correlate with alert
+    uint32_t event_id;
+    uint32_t event_second;
 };
 
 struct TcpReassemblerState
@@ -78,9 +87,12 @@ struct TcpReassemblerState
     TcpStreamTracker* tracker;
     uint32_t flush_count;   // number of flushed queued segments
     uint32_t xtradata_mask; // extra data available to log
-    bool server_side;
+    StreamAlertInfo alerts[MAX_SESSION_ALERTS];
+    uint8_t alert_count = 0;
     uint8_t ignore_dir;
     uint8_t packet_dir;
+    bool server_side;
+    PAF_State paf_state;
 };
 
 class SegmentOverlapEditor
@@ -89,36 +101,35 @@ protected:
     SegmentOverlapEditor() { }
     virtual ~SegmentOverlapEditor() = default;
 
-    int eval_left(TcpReassemblerState&);
-    int eval_right(TcpReassemblerState&);
+    void eval_left(TcpReassemblerState&);
+    void eval_right(TcpReassemblerState&);
 
     virtual bool is_segment_retransmit(TcpReassemblerState&, bool*);
     virtual void drop_old_segment(TcpReassemblerState&);
 
-    virtual int left_overlap_keep_first(TcpReassemblerState&);
-    virtual int left_overlap_trim_first(TcpReassemblerState&);
-    virtual int left_overlap_keep_last(TcpReassemblerState&);
+    virtual void left_overlap_keep_first(TcpReassemblerState&);
+    virtual void left_overlap_trim_first(TcpReassemblerState&);
+    virtual void left_overlap_keep_last(TcpReassemblerState&);
     virtual void right_overlap_truncate_existing(TcpReassemblerState&);
     virtual void right_overlap_truncate_new(TcpReassemblerState&);
-    virtual int full_right_overlap_truncate_new(TcpReassemblerState&);
-    virtual int full_right_overlap_os1(TcpReassemblerState&);
-    virtual int full_right_overlap_os2(TcpReassemblerState&);
-    virtual int full_right_overlap_os3(TcpReassemblerState&);
-    virtual int full_right_overlap_os4(TcpReassemblerState&);
-    virtual int full_right_overlap_os5(TcpReassemblerState&);
+    virtual void full_right_overlap_truncate_new(TcpReassemblerState&);
+    virtual void full_right_overlap_os1(TcpReassemblerState&);
+    virtual void full_right_overlap_os2(TcpReassemblerState&);
+    virtual void full_right_overlap_os3(TcpReassemblerState&);
+    virtual void full_right_overlap_os4(TcpReassemblerState&);
+    virtual void full_right_overlap_os5(TcpReassemblerState&);
 
-    virtual int insert_left_overlap(TcpReassemblerState&) = 0;
+    virtual void insert_left_overlap(TcpReassemblerState&) = 0;
     virtual void insert_right_overlap(TcpReassemblerState&) = 0;
-    virtual int insert_full_overlap(TcpReassemblerState&) = 0;
+    virtual void insert_full_overlap(TcpReassemblerState&) = 0;
 
-    virtual int add_reassembly_segment(
-        TcpReassemblerState&, TcpSegmentDescriptor&, int16_t, uint32_t,
+    virtual void add_reassembly_segment(
+        TcpReassemblerState&, TcpSegmentDescriptor&, uint16_t, uint32_t,
         uint32_t, uint32_t, TcpSegmentNode*) = 0;
 
-    virtual int dup_reassembly_segment(TcpReassemblerState&, TcpSegmentNode*, TcpSegmentNode**) = 0;
+    virtual void dup_reassembly_segment(TcpReassemblerState&, TcpSegmentNode*, TcpSegmentNode**) = 0;
     virtual int delete_reassembly_segment(TcpReassemblerState&, TcpSegmentNode*) = 0;
     virtual void print(TcpReassemblerState&);
 };
 
 #endif
-

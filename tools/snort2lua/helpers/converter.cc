@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,18 +31,25 @@
 #include "helpers/converter.h"
 #include "conversion_state.h"
 #include "data/data_types/dt_comment.h"
+#include "data/data_types/dt_include.h"
 #include "data/data_types/dt_rule.h"
 #include "data/data_types/dt_table.h"
+#include "data/data_types/dt_var.h"
 #include "helpers/s2l_util.h"
 #include "helpers/util_binder.h"
 #include "init_state.h"
 
-TableDelegation table_delegation = 
+#define GID_REPUTATION "136"
+
+TableDelegation table_delegation =
 {
     { "binder", true },
+    { "detection", true },
     { "ips", true },
     { "network", true },
-    { "normalizer", true},
+    { "normalizer", true },
+    { "stream_tcp", true },
+    { "suppress", true },
 };
 
 std::string Converter::ips_pattern;
@@ -50,7 +57,9 @@ bool Converter::parse_includes = true;
 bool Converter::empty_args = false;
 bool Converter::convert_rules_mult_files = true;
 bool Converter::convert_conf_mult_files = true;
-bool Converter::bind_wizard = false;
+bool Converter::bind_wizard = true;
+bool Converter::bind_port = false;
+bool Converter::convert_max_session = true;
 
 Converter::Converter() :
     table_api(&top_table_api, table_delegation),
@@ -165,11 +174,17 @@ int Converter::parse_include_file(const std::string& input_file)
             rule_api.include_rule_file(input_file + ".rules");
     }
 
+    for (auto v : vars)
+        delete v;
+
     for (auto r : rules)
         delete r;
 
     for (auto t : tables)
         delete t;
+
+    for (auto i : includes)
+        delete i;
 
     return rc;
 }
@@ -215,9 +230,10 @@ int Converter::parse_file(
         if ( tmp.empty() )
             continue;
 
-        // same critea used for rtrim
+        // same criteria used for rtrim
         // http://en.cppreference.com/w/cpp/string/byte/isspace
         std::size_t first_non_white_char = tmp.find_first_not_of(" \f\n\r\t\v");
+        std::size_t last_non_space = tmp.find_last_not_of(' ');
 
         bool comment = (tmp[first_non_white_char] == '#') or (tmp[first_non_white_char] == ';');
         bool commented_rule = tmp.substr(0, 7) == "# alert";
@@ -237,7 +253,8 @@ int Converter::parse_file(
             }
             data_api.add_comment(tmp);
         }
-        else if ( tmp[tmp.find_last_not_of(' ')] == '\\')
+        else if ( (last_non_space != std::string::npos) and
+            (tmp[last_non_space] == '\\') )
         {
             util::rtrim(tmp);
             tmp.pop_back();
@@ -264,6 +281,31 @@ int Converter::parse_file(
                         break;
                     }
                 }
+
+                std::string gid = rule_api.get_option("gid");
+                if (0 == gid.compare(GID_REPUTATION) && 0 ==
+                    rule_api.get_rule_old_action().compare("sdrop"))
+                {
+                    std::string sid = rule_api.get_option("sid");
+                    table_api.open_table("suppress");
+                    table_api.add_diff_option_comment("gen_id", "gid");
+                    table_api.add_diff_option_comment("sid_id", "sid");
+                    table_api.open_table();
+                    table_api.add_option("gid", std::stoi(gid));
+                    table_api.add_option("sid", std::stoi(sid));
+                    table_api.close_table();
+                    table_api.close_table();
+                }
+
+                if (rule_api.enable_addr_anomaly_detection())
+                {
+                    table_api.open_table("detection");
+                    table_api.add_option("enable_address_anomaly_checks", true);
+                    table_api.close_table();
+                }
+
+                rule_api.resolve_pcre_buffer_options();
+
                 if (commented_rule)
                     rule_api.make_rule_a_comment();
 
@@ -332,13 +374,6 @@ Binder& Converter::make_binder()
     return *binders.back();
 }
 
-Binder& Converter::make_pending_binder(int ips_policy_id)
-{
-    PendingBinder b(ips_policy_id, std::make_shared<Binder>(table_api));
-    pending_binders.push_back(b);
-    return *pending_binders.back().second;
-}
-
 void Converter::add_bindings()
 {
     std::unordered_map<int, std::shared_ptr<Binder>> policy_map;
@@ -348,39 +383,18 @@ void Converter::add_bindings()
             policy_map[b->get_when_ips_policy_id()] = b;
     }
 
-    for ( auto it = pending_binders.rbegin(); it != pending_binders.rend(); it++ )
-    {
-        auto& pb = *it;
-        auto result = policy_map.find(pb.first);
-
-        if ( result == policy_map.end() )
-        {
-            pb.second->print_binding(false);
-            data_api.error("Unable to satisfy pending binding for policy id " +
-                std::to_string(pb.first));
-
-            continue;
-        }
-
-        auto b = result->second;
-        b->print_binding(false);  // FIXIT-M is it desired to keep this around? not for nap case
-
-        // FIXIT-M as of writing, this assumes pending is only for nap rules
-        pb.second->set_use_file(b->get_use_file().first, Binder::IT_INSPECTION);
-
-        pb.second->set_use_type(b->get_use_type());
-        pb.second->set_use_name(b->get_use_name());
-        pb.second->set_use_service(b->get_use_service());
-        pb.second->set_use_action(b->get_use_action());
-
-        binders.push_back(pb.second);
-    }
-    pending_binders.clear();
     policy_map.clear();
 
     // vector::clear()'s ordering isn't deterministic but this is
     // keep in place for stable regressions
     std::stable_sort(binders.rbegin(), binders.rend());
+    for (auto it = binders.begin(); it != binders.end();)
+    {
+        if ( (*it)->has_ports() )
+            it = binders.erase(it);
+        else
+            ++it;
+    }
     while ( !binders.empty() )
         binders.pop_back();
 }
@@ -461,13 +475,9 @@ int Converter::convert(
         out << "-- make install\n";
         out << "--\n";
         out << "-- then:\n";
-        out << "-- export LUA_PATH=$DIR/include/snort/lua/?.lua\\;\\;\n";
         out << "-- export SNORT_LUA_PATH=$DIR/conf/\n";
         out << "---------------------------------------------------------------------------\n";
         out << "\n";
-        out << "\n";
-        out << "\n";
-        out << "require(\"snort_config\")\n\n";
         out << "dir = os.getenv('SNORT_LUA_PATH')\n";
         out << "\n";
         out << "if ( not dir ) then\n";
@@ -476,18 +486,29 @@ int Converter::convert(
         out << "\n";
         out << "dofile(dir .. '/snort_defaults.lua')\n";
         out << "\n";
-        out << "\n";
         data_api.print_data(out);
+
+        if (!state_api.empty())
+        {
+            table_api.open_top_level_table("ips");
+            state_api.print_states(out);
+            state_api.clear();
+            table_api.add_option("states", "$local_states");
+            table_api.close_table();
+        }
 
         if (!rule_api.empty())
         {
+            data_api.print_local_variables(out);
+
             if (rule_file.empty() || rule_file == output_file)
             {
                 rule_api.print_rules(out, false);
 
-                std::string s = std::string("$local_rules");
                 table_api.open_top_level_table("ips");
-                table_api.add_option("rules", s);
+                table_api.add_option("rules", "$local_rules");
+                if (data_api.has_local_vars())
+                    table_api.add_option("variables", "$local_variables");
                 table_api.close_table();
             }
             else
@@ -499,6 +520,8 @@ int Converter::convert(
 
                 table_api.open_top_level_table("ips");
                 table_api.add_option("include", rule_file);
+                if (data_api.has_local_vars())
+                    table_api.add_option("variables", "$local_variables");
                 table_api.close_table();
             }
         }
@@ -554,4 +577,3 @@ int Converter::convert(
     }
     return rc;
 }
-

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,7 @@
 
 #include "detection/detection_engine.h"
 #include "file_api/file_flows.h"
+#include "memory/memory_cap.h"
 #include "packet_io/sfdaq.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/packet.h"
@@ -42,14 +43,14 @@ static THREAD_LOCAL ProfileStats file_ssn_stats;
 // FileSession methods
 //-------------------------------------------------------------------------
 
-FileSession::FileSession(Flow* flow) : Session(flow) { }
+FileSession::FileSession(Flow* f) : Session(f)
+{ memory::MemoryCap::update_allocations(sizeof(*this)); }
 
+FileSession::~FileSession()
+{ memory::MemoryCap::update_deallocations(sizeof(*this)); }
 
 bool FileSession::setup(Packet*)
 {
-    // FIXIT-H file context is null here
-    //const char* s = DAQ_GetInterfaceSpec();
-    //file_api->set_file_name(p->flow, (uint8_t*)s, strlen(s));
     return true;
 }
 
@@ -73,15 +74,15 @@ int FileSession::process(Packet* p)
 {
     Profile profile(file_ssn_stats);
 
-    p->flow->ssn_state.snort_protocol_id = SNORT_PROTO_USER;
+    p->flow->ssn_state.snort_protocol_id = SNORT_PROTO_FILE;
     StreamFileConfig* c = get_file_cfg(p->flow->ssn_server);
 
     FileFlows* file_flows = FileFlows::get_file_flows(p->flow);
 
     if (file_flows &&
-        file_flows->file_process(p->data, p->dsize, position(p), c->upload))
+        file_flows->file_process(p, p->data, p->dsize, position(p), c->upload))
     {
-        const char* file_name = SFDAQ::get_interface_spec();
+        const char* file_name = SFDAQ::get_input_spec();
         if (file_name)
             file_flows->set_file_name((const uint8_t*)file_name, strlen(file_name));
     }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@ void BitDecode::reset_decode_state()
     reset_decoded_bytes();
 }
 
-DecodeResult BitDecode::decode_data(const uint8_t* start, const uint8_t* end)
+DecodeResult BitDecode::decode_data(const uint8_t* start, const uint8_t* end, uint8_t*)
 {
     uint32_t bytes_avail = 0;
     uint32_t act_size = end - start;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,10 +38,10 @@ static const RuleMap erspan2_rules[] =
     { 0, nullptr }
 };
 
-class Erspan2Module : public CodecModule
+class Erspan2Module : public BaseCodecModule
 {
 public:
-    Erspan2Module() : CodecModule(CD_ERSPAN2_NAME, CD_ERSPAN2_HELP) { }
+    Erspan2Module() : BaseCodecModule(CD_ERSPAN2_NAME, CD_ERSPAN2_HELP) { }
 
     const RuleMap* get_rules() const override
     { return erspan2_rules; }
@@ -69,7 +69,7 @@ struct ERSpanType2Hdr
 } // namespace
 
 void Erspan2Codec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ETHERTYPE_ERSPAN_TYPE2); }
+{ v.emplace_back(ProtocolId::ETHERTYPE_ERSPAN_TYPE2); }
 
 bool Erspan2Codec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {

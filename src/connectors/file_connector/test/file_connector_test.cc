@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,15 +26,13 @@
 #include "connectors/file_connector/file_connector.h"
 #include "connectors/file_connector/file_connector_module.h"
 
-#include "main/snort_debug.h"
-
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
 
 using namespace snort;
 
 extern const BaseApi* file_connector;
-ConnectorApi* fc_api = nullptr;
+const ConnectorApi* fc_api = nullptr;
 
 FileConnectorConfig connector_tx_text_config;
 FileConnectorConfig connector_rx_text_config;
@@ -51,8 +49,7 @@ Connector* connector_tb;
 Connector* connector_rb;
 
 void show_stats(PegCount*, const PegInfo*, unsigned, const char*) { }
-void show_stats(PegCount*, const PegInfo*, IndexVec&, const char*) { }
-void show_stats(PegCount*, const PegInfo*, IndexVec&, const char*, FILE*) { }
+void show_stats(PegCount*, const PegInfo*, const IndexVec&, const char*, FILE*) { }
 
 namespace snort
 {
@@ -87,9 +84,7 @@ TEST_GROUP(file_connector)
 {
     void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
-        fc_api = (ConnectorApi*)file_connector;
+        fc_api = (const ConnectorApi*) file_connector;
         connector_tx_text_config.direction = Connector::CONN_TRANSMIT;
         connector_tx_text_config.connector_name = "tx_t";
         connector_tx_text_config.name = "tx_t";
@@ -106,11 +101,6 @@ TEST_GROUP(file_connector)
         connector_rx_binary_config.connector_name = "rx_t";
         connector_rx_binary_config.name = "rx_t";
         connector_rx_binary_config.text_format = false;
-    }
-
-    void teardown() override
-    {
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
 
@@ -137,9 +127,7 @@ TEST_GROUP(file_connector_tinit_tterm)
 {
     void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
-        fc_api = (ConnectorApi*)file_connector;
+        fc_api = (const ConnectorApi*) file_connector;
         connector_tx_text_config.direction = Connector::CONN_TRANSMIT;
         connector_tx_text_config.connector_name = "tx_t";
         connector_tx_text_config.name = "tx_t";
@@ -179,7 +167,6 @@ TEST_GROUP(file_connector_tinit_tterm)
         fc_api->tterm(connector_rb);
         fc_api->dtor(connector_common);
         file_connector->mod_dtor(mod);
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
 
@@ -199,9 +186,7 @@ TEST_GROUP(file_connector_text)
 {
     void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
-        fc_api = (ConnectorApi*)file_connector;
+        fc_api = (const ConnectorApi*) file_connector;
         connector_tx_text_config.direction = Connector::CONN_TRANSMIT;
         connector_tx_text_config.connector_name = "tx_t";
         connector_tx_text_config.name = "tx_t";
@@ -211,11 +196,6 @@ TEST_GROUP(file_connector_text)
         connector_rx_text_config.name = "rx_t";
         connector_rx_text_config.text_format = true;
         CHECK(file_connector != nullptr);
-    }
-
-    void teardown() override
-    {
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
 
@@ -265,9 +245,7 @@ TEST_GROUP(file_connector_binary)
 {
     void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
-        fc_api = (ConnectorApi*)file_connector;
+        fc_api = (const ConnectorApi*) file_connector;
         connector_tx_binary_config.direction = Connector::CONN_TRANSMIT;
         connector_tx_binary_config.connector_name = "tx_b";
         connector_tx_binary_config.name = "tx_b";
@@ -277,11 +255,6 @@ TEST_GROUP(file_connector_binary)
         connector_rx_binary_config.name = "rx_b";
         connector_rx_binary_config.text_format = false;
         CHECK(file_connector != nullptr);
-    }
-
-    void teardown() override
-    {
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
 
@@ -329,13 +302,6 @@ TEST(file_connector_binary, alloc_transmit_rename_receive_discard)
 
 TEST_GROUP(file_connector_msg_handle)
 {
-    void setup() override
-    {
-    }
-
-    void teardown() override
-    {
-    }
 };
 
 TEST(file_connector_msg_handle, test)

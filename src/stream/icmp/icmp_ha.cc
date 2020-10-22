@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,7 +28,7 @@
 
 using namespace snort;
 
-Flow* IcmpHA::create_session(FlowKey* key)
+Flow* IcmpHA::create_session(const FlowKey* key)
 {
     assert(key);
     Flow* flow = Stream::new_flow(key);
@@ -45,7 +45,7 @@ Flow* IcmpHA::create_session(FlowKey* key)
 
 THREAD_LOCAL IcmpHA* IcmpHAManager::icmp_ha = nullptr;
 
-void IcmpHAManager::process_deletion(Flow* flow)
+void IcmpHAManager::process_deletion(Flow& flow)
 {
     if( icmp_ha != nullptr )
         icmp_ha->process_deletion(flow);

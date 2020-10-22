@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,9 +24,11 @@
 #include <bitset>
 
 #include "framework/module.h"
+#include "helpers/literal_search.h"
 #include "profiler/profiler.h"
 
 #include "http_enum.h"
+#include "http_str_to_code.h"
 
 #define HTTP_NAME "http_inspect"
 #define HTTP_HELP "HTTP inspector"
@@ -34,12 +36,17 @@
 struct HttpParaList
 {
 public:
-    long request_depth;
-    long response_depth;
-    bool unzip;
+    ~HttpParaList();
+    int64_t request_depth = -1;
+    int64_t response_depth = -1;
+
+    bool unzip = true;
     bool normalize_utf = true;
     bool decompress_pdf = false;
     bool decompress_swf = false;
+    bool decompress_zip = false;
+    bool detained_inspection = false;
+    bool script_detection = false;
 
     struct JsNormParam
     {
@@ -65,31 +72,47 @@ public:
         std::string iis_unicode_map_file;
         int iis_unicode_code_page = 1252;
         uint8_t* unicode_map = nullptr;
-        bool iis_double_decode = false;
-        bool backslash_to_slash = false;
+        bool iis_double_decode = true;
+        bool backslash_to_slash = true;
         bool plus_to_space = true;
         bool simplify_path = true;
         std::bitset<256> bad_characters;
         std::bitset<256> unreserved_char;
         HttpEnums::CharAction uri_char[256];
+
+        static const std::bitset<256> default_unreserved_char;
     };
     UriParam uri_param;
 
+    // This will store list of custom xff headers. These are stored in the
+    // order of the header preference. The default header preference only
+    // consists of known XFF Headers in the below order
+    // 1. X-Forwarded-For
+    // 2. True-Client-IP
+    // Rest of the custom XFF Headers would be added to this list and will be
+    // positioned based on the preference of the headers.
+    // As of now, plan is to support a maximum of 8 xff type headers.
+    StrCode xff_headers[HttpEnums::MAX_XFF_HEADERS + 1] = {};
+    // The below header_list contains the list of known static header along with
+    // any custom headers mapped with the their respective Header IDs.
+    StrCode header_list[HttpEnums::HEAD__MAX_VALUE + HttpEnums::MAX_CUSTOM_HEADERS + 1] = {};
+
 #ifdef REG_TEST
-    bool test_input;
-    bool test_output;
-    long print_amount;
-    bool print_hex;
-    bool show_pegs;
-    bool show_scan;
+    int64_t print_amount = 1200;
+
+    bool test_input = false;
+    bool test_output = false;
+    bool print_hex = false;
+    bool show_pegs = true;
+    bool show_scan = false;
 #endif
 };
 
 class HttpModule : public snort::Module
 {
 public:
-    HttpModule() : Module(HTTP_NAME, HTTP_HELP, http_params) { }
-    ~HttpModule() override { delete params; }
+    HttpModule();
+    ~HttpModule() override;
     bool begin(const char*, int, snort::SnortConfig*) override;
     bool end(const char*, int, snort::SnortConfig*) override;
     bool set(const char*, snort::Value&, snort::SnortConfig*) override;
@@ -111,6 +134,9 @@ public:
     static PegCount get_peg_counts(HttpEnums::PEG_COUNT counter)
         { return peg_counts[counter]; }
 
+    static void get_detain_finder(snort::LiteralSearch*&, snort::LiteralSearch::Handle*&);
+    static void get_script_finder(snort::LiteralSearch*&, snort::LiteralSearch::Handle*&);
+
     snort::ProfileStats* get_profile() const override;
 
     static snort::ProfileStats& get_profile_stats()
@@ -118,6 +144,9 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    bool is_bindable() const override
+    { return true; }
 
 #ifdef REG_TEST
     static const PegInfo* get_peg_names() { return peg_names; }

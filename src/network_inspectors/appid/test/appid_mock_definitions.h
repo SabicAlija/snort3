@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,19 +21,23 @@
 #ifndef APPID_MOCK_DEFINITIONS_H
 #define APPID_MOCK_DEFINITIONS_H
 
+#include "appid_detector.h"
+#include "appid_module.h"
+#include "appid_peg_counts.h"
 #include "service_inspectors/http_inspect/http_msg_header.h"
+#include "utils/stats.h"
 
-class Inspector;
-struct ThirdPartyAppIDModule;
+class ThirdPartyAppIdContext;
 
-AppIdConfig* pAppidActiveConfig = nullptr;
-ThirdPartyAppIDModule* tp_appid_module = nullptr;
+ThirdPartyAppIdContext* tp_appid_ctxt = nullptr;
 
 namespace snort
 {
 char* snort_strndup(const char* src, size_t dst_size)
 {
-    return strndup(src, dst_size);
+    char* dup = (char*)snort_calloc(dst_size + 1);
+    strncpy(dup, src, dst_size + 1);
+    return dup;
 }
 
 char* snort_strdup(const char* str)
@@ -51,7 +55,36 @@ void LogMessage(const char*,...) { }
 void ParseWarning(WarningGroup, const char*, ...) { }
 
 void LogLabel(const char*, FILE*) {}
+SearchTool::SearchTool(char const*, bool) { }
+SearchTool::~SearchTool() { }
 }
+
+void ApplicationDescriptor::set_id(AppId app_id){ my_id = app_id;}
+void ServiceAppDescriptor::set_id(AppId app_id, OdpContext&){ set_id(app_id); }
+void ServiceAppDescriptor::update_stats(AppId, bool){}
+void ServiceAppDescriptor::set_port_service_id(AppId app_id){ port_service_id = app_id;}
+void ClientAppDescriptor::update_user(AppId app_id, const char* username, AppidChangeBits& change_bits)
+{
+    my_username = username;
+    my_user_id = app_id;
+    change_bits.set(APPID_CLIENT_USERNAME_BIT);
+    change_bits.set(APPID_CLIENT_USERID_BIT);
+}
+void ClientAppDescriptor::update_stats(AppId, bool) {}
+void PayloadAppDescriptor::update_stats(AppId, bool) {}
+
+AppIdDiscovery::~AppIdDiscovery() { }
+void ClientDiscovery::initialize() { }
+void ClientDiscovery::reload() { }
+void AppIdDiscovery::register_detector(const string&, AppIdDetector*, IpProtocol) { }
+void AppIdDiscovery::add_pattern_data(AppIdDetector*, snort::SearchTool&, int, unsigned char const*, unsigned int, unsigned int) { }
+void AppIdDiscovery::register_tcp_pattern(AppIdDetector*, unsigned char const*, unsigned int, int, unsigned int) { }
+void AppIdDiscovery::register_udp_pattern(AppIdDetector*, unsigned char const*, unsigned int, int, unsigned int) { }
+int AppIdDiscovery::add_service_port(AppIdDetector*, ServiceDetectorPort const&) { return 0; }
+DnsPatternMatchers::~DnsPatternMatchers() { }
+HttpPatternMatchers::~HttpPatternMatchers() { }
+SipPatternMatchers::~SipPatternMatchers() { }
+SslPatternMatchers::~SslPatternMatchers() { }
 
 void Field::set(int32_t length, const uint8_t* start, bool own_the_buffer_)
 {
@@ -68,6 +101,12 @@ int ServiceDiscovery::add_ftp_service_state(AppIdSession&)
     return 0;
 }
 
+void ServiceDiscovery::initialize() { }
+void ServiceDiscovery::reload() { }
+
+int ServiceDiscovery::add_service_port(AppIdDetector*, const ServiceDetectorPort&)
+{ return 0; }
+
 // Stubs for app_info_table.h
 AppInfoTableEntry* AppInfoManager::get_app_info_entry(int)
 {
@@ -78,14 +117,26 @@ bool AppInfoManager::configured()
 { return false; }
 
 // Stubs for service_state.h
-ServiceDiscoveryState* AppIdServiceState::get(SfIp const*, IpProtocol, unsigned short, bool)
+ServiceDiscoveryState* AppIdServiceState::get(SfIp const*, IpProtocol, unsigned short, bool, bool)
 {
   return nullptr;
 }
 
-ServiceDiscoveryState* AppIdServiceState::add(SfIp const*, IpProtocol, unsigned short, bool)
+ServiceDiscoveryState* AppIdServiceState::add(SfIp const*, IpProtocol, unsigned short, bool, bool)
 {
   return nullptr;
+}
+
+bool AppIdServiceState::prune(size_t, size_t)
+{
+    return true;
+}
+
+bool AppIdReloadTuner::tinit() { return false; }
+
+bool AppIdReloadTuner::tune_resources(unsigned int)
+{
+    return true;
 }
 
 void ServiceDiscoveryState::set_service_id_valid(ServiceDetector*) { }
@@ -93,20 +144,20 @@ void ServiceDiscoveryState::set_service_id_valid(ServiceDetector*) { }
 // Stubs for service_plugins/service_discovery.h
 int ServiceDiscovery::incompatible_data(AppIdSession&, const Packet*, AppidSessionDirection, ServiceDetector*)
 {
-  return 0;
+    return 0;
 }
 
 int ServiceDiscovery::fail_service(AppIdSession&, const Packet*, AppidSessionDirection, ServiceDetector*, ServiceDiscoveryState*)
 {
-  return 0;
+    return 0;
 }
 
-void mock_init_appid_pegs()
+inline void mock_init_appid_pegs()
 {
     AppIdPegCounts::init_pegs();
 }
 
-void mock_cleanup_appid_pegs()
+inline void mock_cleanup_appid_pegs()
 {
     AppIdPegCounts::cleanup_pegs();
     AppIdPegCounts::cleanup_peg_info();
@@ -115,4 +166,3 @@ void mock_cleanup_appid_pegs()
 THREAD_LOCAL AppIdStats appid_stats;
 
 #endif
-

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -33,6 +33,7 @@
 // #define UNIFIED2_IDS_EVENT_IPV6       72
 // #define UNIFIED2_IDS_EVENT_MPLS       99
 // #define UNIFIED2_IDS_EVENT_IPV6_MPLS 100
+// #define UNIFIED2_IDS_EVENT_APPSTAT   113
 
 // CURRENT
 #define UNIFIED2_PACKET                2
@@ -40,7 +41,6 @@
 #define UNIFIED2_IDS_EVENT_VLAN      104  // legacy_events
 #define UNIFIED2_IDS_EVENT_IPV6_VLAN 105  // legacy_events
 #define UNIFIED2_EXTRA_DATA          110
-#define UNIFIED2_IDS_EVENT_APPSTAT   113  // FIXIT-L owned by appid (should have own # space)
 #define UNIFIED2_EVENT3              114
 
 #define MAX_EVENT_APPNAME_LEN         64

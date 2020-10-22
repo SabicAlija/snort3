@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -27,6 +27,7 @@
 #if defined(__linux__)
 #include <sys/syscall.h>
 #endif
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -36,25 +37,15 @@
 
 #include "main/snort_types.h"
 
-#define TIMEBUF_SIZE 26
+#define TIMEBUF_SIZE 27
 
 #define SECONDS_PER_DAY  86400  /* number of seconds in a day  */
 #define SECONDS_PER_HOUR  3600  /* number of seconds in a hour */
 #define SECONDS_PER_MIN     60     /* number of seconds in a minute */
 
-#define COPY4(x, y) \
-    x[0] = (y)[0]; (x)[1] = (y)[1]; (x)[2] = (y)[2]; (x)[3] = (y)[3];
-
-#define COPY16(x,y) \
-    x[0] = (y)[0]; (x)[1] = (y)[1]; (x)[2] = (y)[2]; (x)[3] = (y)[3]; \
-    (x)[4] = (y)[4]; (x)[5] = (y)[5]; (x)[6] = (y)[6]; (x)[7] = (y)[7]; \
-    (x)[8] = (y)[8]; (x)[9] = (y)[9]; (x)[10] = (y)[10]; (x)[11] = (y)[11]; \
-    (x)[12] = (y)[12]; (x)[13] = (y)[13]; (x)[14] = (y)[14]; (x)[15] = (y)[15];
-
 void StoreSnortInfoStrings();
 int DisplayBanner();
 int gmt2local(time_t);
-void ts_print(register const struct timeval*, char*);
 std::string read_infile(const char* key, const char* fname);
 void CleanupProtoNames();
 void CreatePidFile(pid_t);
@@ -67,6 +58,17 @@ void InitProtoNames();
 #if defined(NOCOREFILE)
 void SetNoCores();
 #endif
+
+namespace
+{
+inline void COPY4(uint32_t* dst, const uint32_t* src)
+{
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = src[3];
+}
+}
 
 inline void* snort_alloc(size_t sz)
 { return new uint8_t[sz]; }
@@ -105,6 +107,7 @@ SO_PUBLIC extern char** protocol_names;
 SO_PUBLIC const char* get_error(int errnum);
 SO_PUBLIC char* snort_strdup(const char*);
 SO_PUBLIC char* snort_strndup(const char*, size_t);
+SO_PUBLIC void ts_print(const struct timeval*, char*, bool yyyymmdd = false);
 }
 
 #endif

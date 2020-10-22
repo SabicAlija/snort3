@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "protocols/packet.h"
 #include "profiler/profiler.h"
@@ -89,27 +89,25 @@ private:
 
 uint32_t ByteExtractOption::hash() const
 {
-    uint32_t a,b,c;
-    const ByteExtractData* data = &config;
-
-    a = data->bytes_to_grab;
-    b = data->offset;
-    c = data->base;
+    uint32_t a = config.bytes_to_grab;
+    uint32_t b = config.offset;
+    uint32_t c = config.base;
 
     mix(a,b,c);
 
-    a += (data->relative_flag << 24 |
-        data->data_string_convert_flag << 16 |
-        data->align << 8 |
-        data->endianness);
-    b += data->multiplier;
-    c += data->var_number;
+    a += (config.relative_flag << 24 |
+        config.data_string_convert_flag << 16 |
+        config.align << 8 |
+        config.endianness);
+    b += config.multiplier;
+    c += config.var_number;
 
     mix(a,b,c);
 
-    a += data->bitmask_val;
-    mix_str(a,b,c,get_name());
+    a += config.bitmask_val;
+    b += IpsOption::hash();
 
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -143,7 +141,7 @@ bool ByteExtractOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ByteExtractOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(byteExtractPerfStats);
+    RuleProfile profile(byteExtractPerfStats);
 
     ByteExtractData* data = &config;
 
@@ -342,7 +340,7 @@ static const Parameter s_params[] =
 class ExtractModule : public Module
 {
 public:
-    ExtractModule() : Module(s_name, s_help, s_params) { }
+    ExtractModule() : Module(s_name, s_help, s_params) { data.multiplier = 1; }
 
     bool begin(const char*, int, SnortConfig*) override;
     bool end(const char*, int, SnortConfig*) override;
@@ -355,7 +353,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteExtractData data;
+    ByteExtractData data = {};
 };
 
 bool ExtractModule::begin(const char*, int, SnortConfig*)
@@ -375,10 +373,10 @@ bool ExtractModule::end(const char*, int, SnortConfig*)
 bool ExtractModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~count") )
-        data.bytes_to_grab = v.get_long();
+        data.bytes_to_grab = v.get_uint8();
 
     else if ( v.is("~offset") )
-        data.offset = v.get_long();
+        data.offset = v.get_int32();
 
     else if ( v.is("~name") )
         data.name = snort_strdup(v.get_string());
@@ -387,10 +385,10 @@ bool ExtractModule::set(const char*, Value& v, SnortConfig*)
         data.relative_flag = 1;
 
     else if ( v.is("align") )
-        data.align = v.get_long();
+        data.align = v.get_uint8();
 
     else if ( v.is("multiplier") )
-        data.multiplier = v.get_long();
+        data.multiplier = v.get_uint16();
 
     else if ( v.is("big") )
         set_byte_order(data.endianness, ENDIAN_BIG, "byte_extract");
@@ -416,7 +414,7 @@ bool ExtractModule::set(const char*, Value& v, SnortConfig*)
         data.base = 8;
 
     else if ( v.is("bitmask") )
-        data.bitmask_val = v.get_long();
+        data.bitmask_val = v.get_uint32();
 
     else
         return false;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,7 +22,9 @@
 #define PS_MODULE_H
 
 #include "framework/module.h"
+#include "main/snort_config.h"
 #include "ps_detect.h"
+#include "ps_pegs.h"
 
 #define PS_NAME "port_scan"
 #define PS_HELP "detect various ip, icmp, tcp, and udp port or protocol scans"
@@ -129,8 +131,31 @@
     "open port"
 
 //-------------------------------------------------------------------------
+// Reload resource tuning
+//-------------------------------------------------------------------------
 
-extern THREAD_LOCAL SimpleStats spstats;
+class PortScanReloadTuner : public snort::ReloadResourceTuner
+{
+public:
+    explicit PortScanReloadTuner(size_t memcap) : memcap(memcap) { }
+    ~PortScanReloadTuner() override = default;
+
+    bool tinit() override
+    { return ps_init_hash(memcap); }
+
+    bool tune_idle_context() override
+    { return ps_prune_hash(max_work_idle); }
+
+    bool tune_packet_context() override
+    { return ps_prune_hash(max_work); }
+
+private:
+    size_t memcap;
+};
+
+//-------------------------------------------------------------------------
+
+extern THREAD_LOCAL PsPegStats spstats;
 extern THREAD_LOCAL snort::ProfileStats psPerfStats;
 
 struct PortscanConfig;
@@ -143,6 +168,7 @@ public:
 
     bool set(const char*, snort::Value&, snort::SnortConfig*) override;
     bool begin(const char*, int, snort::SnortConfig*) override;
+    bool end(const char*, int, snort::SnortConfig*) override;
 
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
@@ -154,14 +180,13 @@ public:
 
     PortscanConfig* get_data();
 
+    // FIXIT-M this should eventually be CONTEXT.
+    // Set to GLOBAL so this isn't selected away when inspection policy switches
     Usage get_usage() const override
-    { return GLOBAL; } // FIXIT-M this should eventually be CONTEXT.
-                       // Set to GLOBAL so this isn't selected away when inspection policy switches
+    { return GLOBAL; }
 
 private:
     PS_ALERT_CONF* get_alert_conf(const char* fqn);
-
-private:
     PortscanConfig* config;
 };
 

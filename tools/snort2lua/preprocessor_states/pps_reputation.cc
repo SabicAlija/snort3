@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -71,18 +71,9 @@ bool Reputation::convert(std::istringstream& data_stream)
         else if (keyword == "shared_refresh")
             table_api.add_deleted_comment("shared_refresh");
 
-        else if (keyword == "blacklist")
+        else if (keyword == "blacklist" or keyword == "blocklist")
         {
-            std::string file_name;
-            if( arg_stream >> file_name)
-            {
-                tmpval = table_api.add_option("blacklist", file_name);
-            }
-            else
-            {
-                data_api.failed_conversion(arg_stream, "reputation: blacklist <missing_arg>");
-                tmpval = false;
-            }
+            tmpval = parse_path_option("blocklist", arg_stream);
         }
         else if (keyword == "memcap")
         {
@@ -109,10 +100,10 @@ bool Reputation::convert(std::istringstream& data_stream)
             std::string val;
             if (!(arg_stream >> val))
                 data_api.failed_conversion(arg_stream,  "reputation: priority <missing_arg>");
-            else if (val == "whitelist")
-                table_api.add_option("priority", "whitelist");
-            else if (val == "blacklist")
-                table_api.add_option("priority", "blacklist");
+            else if (val == "whitelist" or val == "allowlist")
+                table_api.add_option("priority", "allowlist");
+            else if (val == "blacklist" or val == "blocklist")
+                table_api.add_option("priority", "blocklist");
             else
             {
                 data_api.failed_conversion(arg_stream, "reputation: priority " + val);
@@ -126,32 +117,23 @@ bool Reputation::convert(std::istringstream& data_stream)
         {
             table_api.add_deleted_comment("shared_max_instances");
         }
-        else if (keyword == "white")
+        else if (keyword == "white" or keyword == "allow")
         {
             std::string val;
             if (!(arg_stream >> val))
                 data_api.failed_conversion(arg_stream,  "reputation: white <missing_arg>");
-            else if (val == "unblack")
-                table_api.add_option("white", "unblack");
+            else if (val == "unblack" or val == "do_not_block")
+                table_api.add_option("allow", "do_not_block");
             else if (val == "trust")
-                table_api.add_option("white", "trust");
+                table_api.add_option("allow", "trust");
             else
             {
                 data_api.failed_conversion(arg_stream, "reputation: white " + val);
             }
         }
-        else if (keyword == "whitelist")
+        else if (keyword == "whitelist" or keyword == "allowlist")
         {
-            std::string file_name;
-            if( arg_stream >> file_name)
-            {
-                tmpval = table_api.add_option("whitelist", file_name);
-            }
-            else
-            {
-                data_api.failed_conversion(arg_stream, "reputation: whitelist <missing_arg>");
-                tmpval = false;
-            }
+            tmpval = parse_path_option("allowlist", arg_stream);
         }
         else
         {

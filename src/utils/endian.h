@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,6 +28,8 @@
 
 #ifdef __FreeBSD__
 # include <sys/endian.h>
+# define bswap_16(a) bswap16(a)
+# define bswap_32(a) bswap32(a)
 # define bswap_64(a) bswap64(a)
 #endif
 
@@ -39,5 +41,23 @@
 # define htonll(a) ( 1 == htonl(1) ? (a) : bswap_64(a) )
 # define ntohll(a) ( 1 == ntohl(1) ? (a) : bswap_64(a) )
 #endif
+
+#if defined(WORDS_BIGENDIAN)
+#define LETOHS(p)   bswap_16(*((const uint16_t*)(p)))
+#define LETOHL(p)   bswap_32(*((const uint32_t*)(p)))
+#else
+#define LETOHS(p)   (*((const uint16_t*)(p)))
+#define LETOHL(p)   (*((const uint32_t*)(p)))
+#endif
+
+#define LETOHS_UNALIGNED(p) \
+    ((uint16_t)(*((const uint8_t*)(p) + 1) << 8) | \
+     (uint16_t)(*((const uint8_t*)(p))))
+
+#define LETOHL_UNALIGNED(p) \
+    ((uint32_t)(*((const uint8_t*)(p) + 3) << 24) | \
+     (uint32_t)(*((const uint8_t*)(p) + 2) << 16) | \
+     (uint32_t)(*((const uint8_t*)(p) + 1) <<  8) | \
+     (uint32_t)(*((const uint8_t*)(p))))
 
 #endif

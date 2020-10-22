@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,8 @@
 #endif
 
 #include "ps_module.h"
+#include "log/messages.h"
+#include "main/snort.h"
 
 #include <cassert>
 
@@ -41,16 +43,16 @@ using namespace snort;
 
 static const Parameter scan_params[] =
 {
-    { "scans", Parameter::PT_INT, "0:", "100",
+    { "scans", Parameter::PT_INT, "0:65535", "100",
       "scan attempts" },
 
-    { "rejects", Parameter::PT_INT, "0:", "15",
+    { "rejects", Parameter::PT_INT, "0:65535", "15",
       "scan attempts with negative response" },
 
-    { "nets", Parameter::PT_INT, "0:", "25",
+    { "nets", Parameter::PT_INT, "0:65535", "25",
       "number of times address changed from prior attempt" },
 
-    { "ports", Parameter::PT_INT, "0:", "25",
+    { "ports", Parameter::PT_INT, "0:65535", "25",
       "number of times port (or proto) changed from prior attempt" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -58,7 +60,7 @@ static const Parameter scan_params[] =
 
 static const Parameter ps_params[] =
 {
-    { "memcap", Parameter::PT_INT, "1:", "1048576",
+    { "memcap", Parameter::PT_INT, "1024:maxSZ", "10485760",
       "maximum tracker memory in bytes" },
 
     { "protos", Parameter::PT_MULTI, protos, "all",
@@ -121,16 +123,16 @@ static const Parameter ps_params[] =
     { "icmp_sweep", Parameter::PT_TABLE, scan_params, nullptr,
       "ICMP sweep scan configuration (one-to-many)" },
 
-    { "tcp_window", Parameter::PT_INT, "0:", "0",
+    { "tcp_window", Parameter::PT_INT, "0:max32", "0",
       "detection interval for all TCP scans" },
 
-    { "udp_window", Parameter::PT_INT, "0:", "0",
+    { "udp_window", Parameter::PT_INT, "0:max32", "0",
       "detection interval for all UDP scans" },
 
-    { "ip_window", Parameter::PT_INT, "0:", "0",
+    { "ip_window", Parameter::PT_INT, "0:max32", "0",
       "detection interval for all IP scans" },
 
-    { "icmp_window", Parameter::PT_INT, "0:", "0",
+    { "icmp_window", Parameter::PT_INT, "0:max32", "0",
       "detection interval for all ICMP scans" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -198,7 +200,7 @@ ProfileStats* PortScanModule::get_profile() const
 { return &psPerfStats; }
 
 const PegInfo* PortScanModule::get_pegs() const
-{ return snort::simple_pegs; }
+{ return ps_module_pegs; }
 
 PegCount* PortScanModule::get_counts() const
 { return (PegCount*)&spstats; }
@@ -235,18 +237,18 @@ bool PortScanModule::begin(const char* fqn, int, SnortConfig*)
 bool PortScanModule::set(const char* fqn, Value& v, SnortConfig*)
 {
     if ( v.is("memcap") )
-        config->memcap = v.get_long();
+        config->memcap = v.get_size();
 
     else if ( v.is("protos") )
     {
-        unsigned u = v.get_long();
+        unsigned u = v.get_uint32();
         if ( u & (PS_PROTO_ALL+1) )
             u = PS_PROTO_ALL;
         config->detect_scans = u;
     }
     else if ( v.is("scan_types") )
     {
-        unsigned u = v.get_long();
+        unsigned u = v.get_uint32();
         if ( u & (PS_TYPE_ALL+1) )
             u = PS_TYPE_ALL;
         config->detect_scan_type = u;
@@ -281,46 +283,53 @@ bool PortScanModule::set(const char* fqn, Value& v, SnortConfig*)
     else if ( v.is("scans") )
     {
         if ( auto p = get_alert_conf(fqn) )
-            p->connection_count = v.get_long();
+            p->connection_count = v.get_uint16();
         else
             return false;
     }
     else if ( v.is("rejects") )
     {
         if ( auto p = get_alert_conf(fqn) )
-            p->priority_count = v.get_long();
+            p->priority_count = v.get_uint16();
         else
             return false;
     }
     else if ( v.is("nets") )
     {
         if ( auto p = get_alert_conf(fqn) )
-            p->u_ip_count = v.get_long();
+            p->u_ip_count = v.get_uint16();
         else
             return false;
     }
     else if ( v.is("ports") )
     {
         if ( auto p = get_alert_conf(fqn) )
-            p->u_port_count = v.get_long();
+            p->u_port_count = v.get_uint16();
         else
             return false;
     }
     else if ( v.is("tcp_window") )
-        config->tcp_window = v.get_long();
+        config->tcp_window = v.get_uint32();
 
     else if ( v.is("udp_window") )
-        config->udp_window = v.get_long();
+        config->udp_window = v.get_uint32();
 
     else if ( v.is("ip_window") )
-        config->ip_window = v.get_long();
+        config->ip_window = v.get_uint32();
 
     else if ( v.is("icmp_window") )
-        config->icmp_window = v.get_long();
+        config->icmp_window = v.get_uint32();
 
     else
         return false;
 
+    return true;
+}
+
+bool PortScanModule::end(const char* fqn, int, SnortConfig* sc)
+{
+    if ( Snort::is_reloading() && strcmp(fqn, "port_scan") == 0 )
+        sc->register_reload_resource_tuner(new PortScanReloadTuner(config->memcap));
     return true;
 }
 
@@ -374,4 +383,3 @@ PortscanConfig* PortScanModule::get_data()
     config = nullptr;
     return tmp;
 }
-

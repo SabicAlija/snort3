@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -72,7 +72,7 @@ class PacketCaptureDebug : public AnalyzerCommand
 {
 public:
     PacketCaptureDebug(const char* f);
-    void execute(Analyzer&) override;
+    bool execute(Analyzer&, void**) override;
     const char* stringify() override { return "PACKET_CAPTURE_DEBUG"; }
 private:
     bool enable = false;
@@ -104,15 +104,17 @@ PacketCaptureDebug::PacketCaptureDebug(const char* f)
     {
         filter = f;
         enable = true;
-    } 
+    }
 }
 
-void PacketCaptureDebug::execute(Analyzer&)
+bool PacketCaptureDebug::execute(Analyzer&, void**)
 {
     if (enable)
         packet_capture_enable(filter);
     else
         packet_capture_disable();
+
+    return true;
 }
 
 CaptureModule::CaptureModule() :

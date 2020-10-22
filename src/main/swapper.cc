@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,64 +23,46 @@
 
 #include "swapper.h"
 
-#include "target_based/sftarget_reader.h"
-
+#include "analyzer.h"
+#include "snort.h"
 #include "snort_config.h"
 
 using namespace snort;
 
 bool Swapper::reload_in_progress = false;
 
-Swapper::Swapper(SnortConfig* s, tTargetBasedConfig* t)
+Swapper::Swapper(SnortConfig* s)
 {
     old_conf = nullptr;
     new_conf = s;
-
-    old_attribs = nullptr;
-    new_attribs = t;
 }
 
-Swapper::Swapper(SnortConfig* sold, SnortConfig* snew)
+Swapper::Swapper(const SnortConfig* sold, SnortConfig* snew)
 {
     old_conf = sold;
     new_conf = snew;
-
-    old_attribs = nullptr;
-    new_attribs = nullptr;
 }
 
-Swapper::Swapper(SnortConfig* sold, SnortConfig* snew, tTargetBasedConfig* told, tTargetBasedConfig* tnew)
-{
-    old_conf = sold;
-    new_conf = snew;
-
-    old_attribs = told;
-    new_attribs = tnew;
-}
-
-Swapper::Swapper(tTargetBasedConfig* told, tTargetBasedConfig* tnew)
+Swapper::Swapper()
 {
     old_conf = nullptr;
     new_conf = nullptr;
-
-    old_attribs = told;
-    new_attribs = tnew;
 }
 
 Swapper::~Swapper()
 {
     if ( old_conf )
         delete old_conf;
-
-    if ( old_attribs )
-        SFAT_Free(old_attribs);
 }
 
-void Swapper::apply()
+void Swapper::apply(Analyzer& analyzer)
 {
     if ( new_conf )
-        snort::SnortConfig::set_conf(new_conf);
-
-    if ( new_attribs )
-        SFAT_SetConfig(new_attribs);
+    {
+        const bool reload = (SnortConfig::get_conf() != nullptr);
+        SnortConfig::set_conf(new_conf);
+        // FIXIT-M Determine whether we really want to do this before or after the set_conf
+        if ( reload )
+            analyzer.reinit(new_conf);
+    }
 }

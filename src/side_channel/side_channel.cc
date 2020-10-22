@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -97,7 +97,7 @@ void SideChannelManager::instantiate(const SCConnectors* connectors, const PortB
     scm->connectors = *connectors;
     scm->ports = *ports;
 
-    s_maps.push_back(scm);
+    s_maps.emplace_back(scm);
 }
 
 // Initialize state to be ready to accept configuration
@@ -149,7 +149,7 @@ void SideChannelManager::thread_init()
         }
 
         /* Save the thread specific map */
-        map_list->push_back(map);
+        map_list->emplace_back(map);
     }
 
     /* Finally, save the thread-specific list */
@@ -181,6 +181,7 @@ void SideChannelManager::term()
         delete scm;
 
     s_maps.clear();
+    s_maps.shrink_to_fit();
 }
 
 // receive at most max_messages.  Zero indicates unlimited.

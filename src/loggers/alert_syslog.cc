@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -24,13 +24,13 @@
 
 #include <syslog.h>
 
+#include "detection/ips_context.h"
 #include "detection/signature.h"
 #include "events/event.h"
 #include "framework/logger.h"
 #include "framework/module.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
-#include "packet_io/intf.h"
 #include "packet_io/sfdaq.h"
 #include "protocols/packet.h"
 #include "utils/util.h"
@@ -94,8 +94,11 @@ static int get_level(unsigned lvl)
     return 0;
 }
 
-#define syslog_options \
-    "cons | ndelay | perror | pid"
+#ifdef LOG_PERROR
+#define syslog_options "cons | ndelay | perror | pid"
+#else
+#define syslog_options "cons | ndelay | pid"
+#endif
 
 static int get_options(const char* s)
 {
@@ -149,21 +152,21 @@ public:
     bool end(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    int facility;
-    int level;
-    int options;
+    int facility = 0;
+    int level = 0;
+    int options = 0;
 };
 
 bool SyslogModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("facility") )
-        facility = get_facility(v.get_long());
+        facility = get_facility(v.get_uint8());
 
     else if ( v.is("level") )
-        level = get_level(v.get_long());
+        level = get_level(v.get_uint8());
 
     else if ( v.is("options") )
         options = get_options(v.get_string());
@@ -182,9 +185,9 @@ bool SyslogModule::begin(const char*, int, SnortConfig*)
     return true;
 }
 
-bool SyslogModule::end(const char*, int, SnortConfig*)
+bool SyslogModule::end(const char*, int, SnortConfig* sc)
 {
-    if ( SnortConfig::daemon_mode() )
+    if ( sc->daemon_mode() )
         options |= LOG_PID;
 
     return true;
@@ -211,11 +214,10 @@ static void AlertSyslog(
         else
             SnortSnprintfAppend(event_string, sizeof(event_string), "ALERT ");
 
-        if ((event.sig_info->class_type != nullptr)
-            && (event.sig_info->class_type->name != nullptr))
+        if ( event.sig_info->class_type and !event.sig_info->class_type->text.empty() )
         {
             SnortSnprintfAppend(event_string, sizeof(event_string),
-                "[Classification: %s] ", event.sig_info->class_type->name);
+                "[Classification: %s] ", event.sig_info->class_type->text.c_str());
         }
 
         if (event.sig_info->priority != 0)
@@ -224,10 +226,10 @@ static void AlertSyslog(
                 "[Priority: %u] ", event.sig_info->priority);
         }
 
-        if (SnortConfig::alert_interface())
+        if (p->context->conf->alert_interface())
         {
             SnortSnprintfAppend(event_string, sizeof(event_string),
-                "<%s> ", PRINT_INTERFACE(SFDAQ::get_interface_spec()));
+                "<%s> ", SFDAQ::get_input_spec());
         }
     }
     if ((p != nullptr) && p->ptrs.ip_api.is_ip())
@@ -251,13 +253,13 @@ static void AlertSyslog(
             const char* ip_fmt = "%s -> %s";
             InetBuf src, dst;
 
-            if (SnortConfig::obfuscate())
+            if (p->context->conf->obfuscate())
             {
-                ObfuscateIpToText(p->ptrs.ip_api.get_src(), SnortConfig::get_conf()->homenet,
-                    SnortConfig::get_conf()->obfuscation_net, src);
+                ObfuscateIpToText(p->ptrs.ip_api.get_src(), p->context->conf->get_conf()->homenet,
+                    p->context->conf->get_conf()->obfuscation_net, src);
 
-                ObfuscateIpToText(p->ptrs.ip_api.get_dst(), SnortConfig::get_conf()->homenet,
-                    SnortConfig::get_conf()->obfuscation_net, dst);
+                ObfuscateIpToText(p->ptrs.ip_api.get_dst(), p->context->conf->get_conf()->homenet,
+                    p->context->conf->get_conf()->obfuscation_net, dst);
 
                 SnortSnprintfAppend(event_string, sizeof(event_string), ip_fmt, src, dst);
             }
@@ -273,13 +275,13 @@ static void AlertSyslog(
             const char* ip_fmt = "%s:%d -> %s:%d";
             InetBuf src, dst;
 
-            if (SnortConfig::obfuscate())
+            if (p->context->conf->obfuscate())
             {
-                ObfuscateIpToText(p->ptrs.ip_api.get_src(), SnortConfig::get_conf()->homenet,
-                    SnortConfig::get_conf()->obfuscation_net, src);
+                ObfuscateIpToText(p->ptrs.ip_api.get_src(), p->context->conf->get_conf()->homenet,
+                    p->context->conf->get_conf()->obfuscation_net, src);
 
-                ObfuscateIpToText(p->ptrs.ip_api.get_dst(), SnortConfig::get_conf()->homenet,
-                    SnortConfig::get_conf()->obfuscation_net, dst);
+                ObfuscateIpToText(p->ptrs.ip_api.get_dst(), p->context->conf->get_conf()->homenet,
+                    p->context->conf->get_conf()->obfuscation_net, dst);
 
                 SnortSnprintfAppend(event_string, sizeof(event_string), ip_fmt,
                     src, p->ptrs.sp, dst, p->ptrs.dp);
@@ -340,7 +342,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* syslog_ctor(SnortConfig*, Module* mod)
+static Logger* syslog_ctor(Module* mod)
 { return new SyslogLogger((SyslogModule*)mod); }
 
 static void syslog_dtor(Logger* p)

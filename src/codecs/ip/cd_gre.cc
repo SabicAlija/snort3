@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,10 +24,16 @@
 
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
+#include "log/messages.h"
 #include "log/text_log.h"
 #include "main/snort_config.h"
-#include "packet_io/active.h"
 #include "protocols/gre.h"
+
+#include "checksum.h"
+
+#ifdef UNIT_TEST
+#include "catch/snort_catch.h"
+#endif
 
 using namespace snort;
 
@@ -47,10 +53,10 @@ static const RuleMap gre_rules[] =
     { 0, nullptr }
 };
 
-class GreModule : public CodecModule
+class GreModule : public BaseCodecModule
 {
 public:
-    GreModule() : CodecModule(CD_GRE_NAME, CD_GRE_HELP) { }
+    GreModule() : BaseCodecModule(CD_GRE_NAME, CD_GRE_HELP) { }
 
     const RuleMap* get_rules() const override
     { return gre_rules; }
@@ -64,6 +70,10 @@ public:
     void get_protocol_ids(std::vector<ProtocolId>& v) override;
     bool decode(const RawData&, CodecData&, DecodeData&) override;
     void log(TextLog* const, const uint8_t* pkt, const uint16_t len) override;
+    bool encode(const uint8_t* const raw_in, const uint16_t raw_len,
+        EncState&, Buffer&, Flow*) override;
+    void update(const ip::IpApi& api, const EncodeFlags flags, uint8_t* raw_pkt,
+        uint16_t lyr_len, uint32_t& updated_len) override;
 };
 
 static const uint32_t GRE_HEADER_LEN = 4;
@@ -89,11 +99,65 @@ static const uint32_t GRE_V1_ACK_LEN = 4;
 } // anonymous namespace
 
 void GreCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::GRE); }
+{ v.emplace_back(ProtocolId::GRE); }
 
 /*
  * see RFCs 1701, 2784 and 2637
  */
+
+void GreCodec::update(const ip::IpApi& api, const EncodeFlags /*flags*/, uint8_t* raw_pkt,
+    uint16_t lyr_len, uint32_t& updated_len)
+{
+    UNUSED(api);
+    gre::GREHdr* const greh = reinterpret_cast<gre::GREHdr*>(raw_pkt);
+
+    updated_len += lyr_len;
+
+    if (GRE_CHKSUM(greh))
+    {
+        assert(lyr_len >= 6);
+        // Checksum field is zero for computing checksum
+        *(uint16_t*)(raw_pkt + 4) = 0;
+        *(uint16_t*)(raw_pkt + 4) = checksum::cksum_add((uint16_t*)raw_pkt, updated_len);
+    }
+}
+
+bool GreCodec::encode(const uint8_t* const raw_in, const uint16_t raw_len,
+    EncState& enc, Buffer& buf, Flow*)
+{
+    if (!buf.allocate(raw_len))
+        return false;
+
+    gre::GREHdr* const greh_out = reinterpret_cast<gre::GREHdr*>(buf.data());
+    memcpy(buf.data(), raw_in, raw_len);
+    enc.next_proto = IpProtocol::GRE;
+    enc.next_ethertype = greh_out->proto();
+
+    if (GRE_SEQ(greh_out))
+    {
+        uint16_t len = 4; // Flags, version and protocol
+
+        if (GRE_CHKSUM(greh_out))
+            len += 4;
+
+        if (GRE_KEY(greh_out))
+            len += 4;
+
+        *(uint32_t*)(buf.data() + len) += ntohl(1);
+    }
+
+    if (GRE_CHKSUM(greh_out))
+    {
+        assert(raw_len >= 6);
+        // Checksum field is zero for computing checksum
+        *(uint16_t*)(buf.data() + 4) = 0;
+        *(uint16_t*)(buf.data() + 4) = checksum::cksum_add((uint16_t*)buf.data(),
+            buf.size());
+    }
+
+    return true;
+}
+
 bool GreCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {
     if (raw.len < GRE_HEADER_LEN)
@@ -205,8 +269,8 @@ bool GreCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
         return false;
     }
 
-    if (SnortConfig::tunnel_bypass_enabled(TUNNEL_GRE))
-        Active::set_tunnel_bypass();
+    if (codec.conf->tunnel_bypass_enabled(TUNNEL_GRE))
+        codec.tunnel_bypass = true;
 
     codec.lyr_len = len;
     codec.next_prot_id = greh->proto();
@@ -272,3 +336,23 @@ const BaseApi* cd_gre[] =
     nullptr
 };
 
+//--------------------------------------------------------------------------
+// unit tests
+//--------------------------------------------------------------------------
+
+#ifdef UNIT_TEST
+TEST_CASE ("Validate error check for raw_len greater than GRE_HEADER_LEN", "[cd_gre]")
+{
+    GreCodec grecodec;
+    const uint8_t raw_in = 0;
+    uint8_t raw_len = GRE_HEADER_LEN + 1;
+    ip::IpApi ip_api;
+    EncState enc(ip_api, ENC_FLAG_VAL, IpProtocol::GRE, 0, 0);
+    uint16_t size = 1;
+    uint8_t t = 0;
+    Buffer buf(&t, size);
+    Flow *flow = NULL;
+
+    CHECK (grecodec.encode(&raw_in,raw_len,enc,buf,flow) == false);
+}
+#endif

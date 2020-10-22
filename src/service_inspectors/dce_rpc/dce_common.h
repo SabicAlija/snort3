@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -101,13 +101,14 @@ struct dce2CommonStats
 
 struct dce2CommonProtoConf
 {
+    bool limit_alerts;
     bool disable_defrag;
     int max_frag_len;
 };
 
 struct dce2CoProtoConf
 {
-    dce2CommonProtoConf common;
+    dce2CommonProtoConf common; // This member must be first
     DCE2_Policy policy;
     uint16_t co_reassemble_threshold;
 };
@@ -200,7 +201,6 @@ struct DCE2_SsnData
     DCE2_Policy server_policy;
     DCE2_Policy client_policy;
     int flags;
-    snort::Packet* wire_pkt;
     uint64_t alert_mask;
     DCE2_Roptions ropts;
     void* config;
@@ -261,21 +261,11 @@ inline uint16_t DCE2_GcMaxFragLen(dce2CommonProtoConf* config)
     return UINT16_MAX;
 }
 
-inline int DCE2_SsnFromServer(snort::Packet* p)
-{
-    return p->is_from_server();
-}
-
-inline int DCE2_SsnFromClient(snort::Packet* p)
-{
-    return p->is_from_client();
-}
-
 inline DCE2_Policy DCE2_SsnGetPolicy(DCE2_SsnData* sd)
 {
     assert(sd);
 
-    if (DCE2_SsnFromClient(sd->wire_pkt))
+    if ( snort::DetectionEngine::get_current_packet()->is_from_client() )
         return sd->server_policy;
     else
         return sd->client_policy;
@@ -283,7 +273,7 @@ inline DCE2_Policy DCE2_SsnGetPolicy(DCE2_SsnData* sd)
 
 inline void DCE2_SsnSetPolicy(DCE2_SsnData* sd, DCE2_Policy policy)
 {
-    if (DCE2_SsnFromClient(sd->wire_pkt))
+    if ( snort::DetectionEngine::get_current_packet()->is_from_client() )
         sd->client_policy = policy;
     else
         sd->server_policy = policy;
@@ -392,20 +382,27 @@ inline bool DCE2_SsnIsServerSambaPolicy(DCE2_SsnData* sd)
     return false;
 }
 
-inline void dce_alert(uint32_t gid, uint32_t sid, dce2CommonStats* stats)
+inline void dce_alert(uint32_t gid, uint32_t sid, dce2CommonStats* stats, DCE2_SsnData& sd)
 {
+    if ( ((dce2CommonProtoConf*)sd.config)->limit_alerts )
+    {
+        // Assuming the maximum sid for dce is less than 64
+        if ( sd.alert_mask & ((uint64_t)1 << sid) )
+            return;
+        sd.alert_mask |= ((uint64_t)1 << sid);
+    }
     snort::DetectionEngine::queue_event(gid,sid);
     stats->events++;
 }
 
-bool dce2_set_common_config(snort::Value&, dce2CommonProtoConf&);
-void print_dce2_common_config(dce2CommonProtoConf&);
-bool dce2_set_co_config(snort::Value&, dce2CoProtoConf&);
-void print_dce2_co_config(dce2CoProtoConf&);
-bool dce2_paf_abort(snort::Flow*, DCE2_SsnData*);
+bool dce2_set_common_config(const snort::Value&, dce2CommonProtoConf&);
+void print_dce2_common_config(const dce2CommonProtoConf&);
+bool dce2_set_co_config(const snort::Value&, dce2CoProtoConf&);
+void print_dce2_co_config(const dce2CoProtoConf&);
+bool dce2_paf_abort(DCE2_SsnData*);
 void DCE2_Detect(DCE2_SsnData*);
 snort::Packet* DCE2_GetRpkt(snort::Packet*, DCE2_RpktType, const uint8_t*, uint32_t);
-uint16_t DCE2_GetRpktMaxData(DCE2_SsnData*, DCE2_RpktType);
+uint16_t DCE2_GetRpktMaxData(DCE2_RpktType);
 DCE2_Ret DCE2_AddDataToRpkt(snort::Packet*, const uint8_t*, uint32_t);
 DCE2_TransType get_dce2_trans_type(const snort::Packet* p);
 

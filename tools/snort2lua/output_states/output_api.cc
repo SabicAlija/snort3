@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,7 +32,6 @@ extern const ConvertMap* log_tcpdump_map;
 extern const ConvertMap* log_unified2_map;
 extern const ConvertMap* alert_unixsock_map;
 extern const ConvertMap* unified2_map;
-extern const ConvertMap* sfunified2_map;
 extern const ConvertMap* sflog_unified2_map;
 extern const ConvertMap* sfalert_unified2_map;
 
@@ -49,7 +48,6 @@ const std::vector<const ConvertMap*> output_api =
     log_unified2_map,
     alert_unixsock_map,
     unified2_map,
-    sfunified2_map,
     sflog_unified2_map,
     sfalert_unified2_map
 };

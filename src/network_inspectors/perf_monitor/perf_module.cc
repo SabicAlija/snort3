@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,16 +22,24 @@
 #include "config.h"
 #endif
 
+#include "perf_module.h"
+
+#include <lua.hpp>
+
+#include "log/messages.h"
+#include "main/analyzer_command.h"
+#include "main/snort.h"
+#include "managers/module_manager.h"
+
+#include "perf_monitor.h"
+#include "perf_pegs.h"
+#include "perf_reload_tuner.h"
+
 #ifdef HAVE_FLATBUFFERS
 #define FLATBUFFERS_ENUM " | flatbuffers"
 #else
 #define FLATBUFFERS_ENUM
 #endif
-
-#include "perf_module.h"
-
-#include "log/messages.h"
-#include "managers/module_manager.h"
 
 using namespace snort;
 
@@ -52,10 +60,10 @@ static const Parameter module_params[] =
 
 static const Parameter s_params[] =
 {
-    { "base", Parameter::PT_BOOL, "nullptr", "true",
+    { "base", Parameter::PT_BOOL, nullptr, "true",
       "enable base statistics" },
 
-    { "cpu", Parameter::PT_BOOL, "nullptr", "false",
+    { "cpu", Parameter::PT_BOOL, nullptr, "false",
       "enable cpu statistics" },
 
     { "flow", Parameter::PT_BOOL, nullptr, "false",
@@ -64,16 +72,16 @@ static const Parameter s_params[] =
     { "flow_ip", Parameter::PT_BOOL, nullptr, "false",
       "enable statistics on host pairs" },
 
-    { "packets", Parameter::PT_INT, "0:", "10000",
+    { "packets", Parameter::PT_INT, "0:max32", "10000",
       "minimum packets to report" },
 
-    { "seconds", Parameter::PT_INT, "1:", "60",
+    { "seconds", Parameter::PT_INT, "1:max32", "60",
       "report interval" },
 
-    { "flow_ip_memcap", Parameter::PT_INT, "8200:", "52428800",
+    { "flow_ip_memcap", Parameter::PT_INT, "236:maxSZ", "52428800",
       "maximum memory in bytes for flow tracking" },
 
-    { "max_file_size", Parameter::PT_INT, "4096:", "1073741824",
+    { "max_file_size", Parameter::PT_INT, "4096:max53", "1073741824",
       "files will be rolled over if they exceed this size" },
 
     { "flow_ports", Parameter::PT_INT, "0:65535", "1023",
@@ -92,6 +100,127 @@ static const Parameter s_params[] =
       "output summary at shutdown" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
+class PerfMonFlowIPDebug : public AnalyzerCommand
+{
+public:
+    PerfMonFlowIPDebug(PerfConstraints* cs, bool en, PerfMonitor* pm) :
+        enable(en), constraints(cs), perf_monitor(pm) { }
+    ~PerfMonFlowIPDebug() override
+    { perf_monitor->swap_constraints(constraints); }
+
+    bool execute(Analyzer&, void**) override;
+    const char* stringify() override { return "FLOW_IP_PROFILING"; }
+
+private:
+    bool enable;
+    PerfConstraints* constraints;
+    PerfMonitor* perf_monitor;
+};
+
+static const Parameter flow_ip_profiling_params[] =
+{
+    { "seconds", Parameter::PT_INT, "1:max32", nullptr,
+      "report interval" },
+
+    { "packets", Parameter::PT_INT, "0:max32", nullptr,
+      "minimum packets to report" },
+
+    { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
+bool PerfMonFlowIPDebug::execute(Analyzer&, void**)
+{
+    if (enable)
+        perf_monitor->enable_profiling(constraints);
+    else
+        perf_monitor->disable_profiling(constraints);
+
+    return true;
+}
+
+static int enable_flow_ip_profiling(lua_State* L)
+{
+    PerfMonitor* perf_monitor =
+        (PerfMonitor*)InspectorManager::get_inspector(PERF_NAME, true);
+
+    if (!perf_monitor)
+    {
+        LogMessage("perf_monitor is not configured, "
+            "flow ip profiling cannot be enabled.\n");
+        return 0;
+    }
+
+    auto* new_constraints = new PerfConstraints(true, luaL_optint(L, 1, 0),
+        luaL_optint(L, 2, 0));
+
+    main_broadcast_command(new PerfMonFlowIPDebug(new_constraints, true, perf_monitor),
+        true);
+
+    LogMessage("Enabling flow ip profiling with sample interval %d packet count %d\n",
+        new_constraints->sample_interval, new_constraints->pkt_cnt);
+
+    return 0;
+}
+
+static int disable_flow_ip_profiling(lua_State*)
+{
+    PerfMonitor* perf_monitor =
+        (PerfMonitor*)InspectorManager::get_inspector(PERF_NAME, true);
+
+    if (!perf_monitor)
+    {
+        LogMessage("Attempting to disable flow ip profiling when "
+            "perf_monitor is not configured\n");
+        return 0;
+    }
+
+    if (!perf_monitor->is_flow_ip_enabled())
+    {
+        LogMessage("Attempting to disable flow ip profiling when "
+            "it is not running\n");
+        return 0;
+    }
+
+    auto* new_constraints = perf_monitor->get_original_constraints();
+
+    main_broadcast_command(new PerfMonFlowIPDebug(new_constraints, false, perf_monitor),
+        true);
+
+    LogMessage("Disabling flow ip profiling\n");
+
+    return 0;
+}
+
+static int show_flow_ip_profiling(lua_State*)
+{
+    bool status = false;
+
+    PerfMonitor* perf_monitor = (PerfMonitor*)InspectorManager::get_inspector(PERF_NAME, true);
+
+    if (perf_monitor)
+        status = perf_monitor->is_flow_ip_enabled();
+    else
+        LogMessage("perf_monitor is not configured\n");
+
+    LogMessage("Snort flow ip profiling is %s\n", status ? "enabled" : "disabled");
+
+    return 0;
+}
+
+static const Command perf_module_cmds[] =
+{
+    { "enable_flow_ip_profiling", enable_flow_ip_profiling,
+      flow_ip_profiling_params, "enable statistics on host pairs" },
+
+    { "disable_flow_ip_profiling", disable_flow_ip_profiling,
+      nullptr, "disable statistics on host pairs" },
+
+    { "show_flow_ip_profiling", show_flow_ip_profiling,
+      nullptr, "show status of statistics on host pairs" },
+
+    { nullptr, nullptr, nullptr, nullptr }
 };
 
 //-------------------------------------------------------------------------
@@ -138,32 +267,32 @@ bool PerfMonModule::set(const char*, Value& v, SnortConfig*)
     }
     else if ( v.is("packets") )
     {
-        config->pkt_cnt = v.get_long();
+        config->pkt_cnt = v.get_uint32();
     }
     else if ( v.is("seconds") )
     {
-        config->sample_interval = v.get_long();
+        config->sample_interval = v.get_uint32();
         if ( config->sample_interval == 0 )
             config->perf_flags |= PERF_SUMMARY;
     }
     else if ( v.is("flow_ip_memcap") )
     {
-        config->flowip_memcap = v.get_long();
+        config->flowip_memcap = v.get_size();
     }
     else if ( v.is("max_file_size") )
-        config->max_file_size = v.get_long() - ROLLOVER_THRESH;
+        config->max_file_size = v.get_uint64() - ROLLOVER_THRESH;
 
     else if ( v.is("flow_ports") )
     {
-        config->flow_max_port_to_track = v.get_long();
+        config->flow_max_port_to_track = v.get_uint16();
     }
     else if ( v.is("output") )
     {
-        config->output = (PerfOutput)v.get_long();
+        config->output = (PerfOutput)v.get_uint8();
     }
     else if ( v.is("format") )
     {
-        config->format = (PerfFormat)v.get_long();
+        config->format = (PerfFormat)v.get_uint8();
     }
     else if ( v.is("name") )
     {
@@ -190,19 +319,23 @@ bool PerfMonModule::set(const char*, Value& v, SnortConfig*)
 
 bool PerfMonModule::begin(const char* fqn, int idx, SnortConfig*)
 {
-    if (strcmp(fqn, "perf_monitor") == 0)
+    if ( strcmp(fqn, "perf_monitor") == 0 )
     {
         assert(config == nullptr);
         config = new PerfConfig;
     }
     if ( idx != 0 && strcmp(fqn, "perf_monitor.modules") == 0 )
-        config->modules.push_back(ModuleConfig());
+        config->modules.emplace_back(ModuleConfig());
 
     return true;
 }
 
-bool PerfMonModule::end(const char* fqn, int idx, SnortConfig*)
+bool PerfMonModule::end(const char* fqn, int idx, SnortConfig* sc)
 {
+
+    if ( Snort::is_reloading() && strcmp(fqn, "perf_monitor") == 0 )
+        sc->register_reload_resource_tuner(new PerfMonReloadTuner(config->flowip_memcap));
+
     if ( idx != 0 && strcmp(fqn, "perf_monitor.modules") == 0 )
         return config->modules.back().confirm_parse();
 
@@ -210,19 +343,27 @@ bool PerfMonModule::end(const char* fqn, int idx, SnortConfig*)
 }
 
 PerfConfig* PerfMonModule::get_config()
-{ 
+{
     PerfConfig* tmp = config;
+
+    tmp->constraints->flow_ip_enabled = config->perf_flags & PERF_FLOWIP;
+    tmp->constraints->sample_interval = config->sample_interval;
+    tmp->constraints->pkt_cnt = config->pkt_cnt;
+
     config = nullptr;
-    return tmp; 
+    return tmp;
 }
 
 const PegInfo* PerfMonModule::get_pegs() const
-{ return snort::simple_pegs; }
+{ return perf_module_pegs; }
 
 PegCount* PerfMonModule::get_counts() const
 { return (PegCount*)&pmstats; }
 
-void ModuleConfig::set_name(std::string name)
+const Command* PerfMonModule::get_commands() const
+{ return perf_module_cmds; }
+
+void ModuleConfig::set_name(const std::string& name)
 { this->name = name; }
 
 void ModuleConfig::set_peg_names(Value& peg_names)
@@ -247,7 +388,7 @@ bool ModuleConfig::resolve()
     ptr = ModuleManager::get_module(name.c_str());
     if ( ptr == nullptr )
     {
-        ParseWarning(WARN_CONF, "Perf monitor is unable to find the %s module.\n", name.c_str());
+        ParseError("Perf monitor is unable to find the %s module.\n", name.c_str());
         return false;
     }
 
@@ -258,7 +399,7 @@ bool ModuleConfig::resolve()
     if ( peg_names.empty() )
     {
         for ( unsigned i = 0; peg_info[i].name != nullptr; i++ )
-            pegs.push_back(i);
+            pegs.emplace_back(i);
     }
     else
     {
@@ -269,7 +410,7 @@ bool ModuleConfig::resolve()
             if ( peg_ittr != peg_names.end() )
             {
                 peg_ittr->second = true;
-                pegs.push_back(i);
+                pegs.emplace_back(i);
             }
         }
 
@@ -277,7 +418,7 @@ bool ModuleConfig::resolve()
         {
             if ( !i.second )
             {
-                ParseWarning(WARN_CONF, "Perf monitor is unable to find %s.%s count", name.c_str(), i.first.c_str());
+                ParseError("Perf monitor is unable to find %s.%s count", name.c_str(), i.first.c_str());
                 return false;
             }
         }
@@ -291,12 +432,12 @@ bool PerfConfig::resolve()
 {
     if ( modules.empty() )
     {
-        auto all_modules = ModuleManager::get_all_modules();       
+        auto all_modules = ModuleManager::get_all_modules();
         for ( auto& mod : all_modules )
         {
             ModuleConfig cfg;
             cfg.set_name(mod->get_name());
-            modules.push_back(cfg);
+            modules.emplace_back(cfg);
         }
     }
 
@@ -306,7 +447,7 @@ bool PerfConfig::resolve()
             return false;
 
         if ( mod.ptr->counts_need_prep() )
-            mods_to_prep.push_back(mod.ptr);
+            mods_to_prep.emplace_back(mod.ptr);
     }
 
     return true;

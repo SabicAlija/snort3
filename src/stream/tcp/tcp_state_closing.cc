@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,16 +28,11 @@
 #include "tcp_normalizers.h"
 #include "tcp_session.h"
 
-#ifdef UNIT_TEST
-#include "catch/snort_catch.h"
-#endif
-
-using namespace std;
+using namespace snort;
 
 TcpStateClosing::TcpStateClosing(TcpStateMachine& tsm) :
     TcpStateHandler(TcpStreamTracker::TCP_CLOSING, tsm)
-{
-}
+{ }
 
 bool TcpStateClosing::syn_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
@@ -47,8 +42,8 @@ bool TcpStateClosing::syn_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 
 bool TcpStateClosing::syn_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    trk.normalizer.ecn_tracker(tsd.get_tcph(), trk.session->config->require_3whs());
-    if ( tsd.get_seg_len() )
+    trk.normalizer.ecn_tracker(tsd.get_tcph(), trk.session->tcp_config->require_3whs());
+    if ( tsd.is_data_segment() )
         trk.session->handle_data_on_syn(tsd);
     return true;
 }
@@ -89,10 +84,10 @@ bool TcpStateClosing::fin_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 
 bool TcpStateClosing::fin_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
-    snort::Flow* flow = tsd.get_flow();
+    Flow* flow = tsd.get_flow();
 
     trk.update_tracker_ack_recv(tsd);
-    if ( SEQ_GT(tsd.get_seg_seq(), trk.get_fin_final_seq() ) )
+    if ( SEQ_GT(tsd.get_seq(), trk.get_fin_final_seq() ) )
     {
         trk.session->tel.set_tcp_event(EVENT_BAD_FIN);
         trk.normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
@@ -102,7 +97,7 @@ bool TcpStateClosing::fin_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
     if ( !flow->two_way_traffic() )
         trk.set_tf_flags(TF_FORCE_FLUSH);
 
-    if ( SEQ_EQ(tsd.get_seg_ack(), trk.get_snd_nxt() ) )
+    if ( SEQ_EQ(tsd.get_ack(), trk.get_snd_nxt() ) )
         trk.set_tcp_state(TcpStreamTracker::TCP_TIME_WAIT);
     return true;
 }
@@ -114,12 +109,9 @@ bool TcpStateClosing::rst_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
         trk.session->update_session_on_rst(tsd, true);
         trk.session->update_perf_base_state(TcpStreamTracker::TCP_CLOSING);
         trk.session->set_pkt_action_flag(ACTION_RST);
-        tsd.get_pkt()->flow->session_state |= STREAM_STATE_CLOSED;
+        tsd.get_flow()->session_state |= STREAM_STATE_CLOSED;
     }
-    else
-    {
-        trk.session->tel.set_tcp_event(EVENT_BAD_RST);
-    }
+
     return true;
 }
 
@@ -132,6 +124,20 @@ bool TcpStateClosing::do_post_sm_packet_actions(TcpSegmentDescriptor& tsd, TcpSt
 {
     trk.session->update_paws_timestamps(tsd);
     trk.session->check_for_window_slam(tsd);
+
+    // Handle getting stuck in CLOSED/FIN_WAIT on simultaneous close (FIN FIN ACK ACK)
+    if ( trk.get_tcp_event() != TcpStreamTracker::TCP_FIN_RECV_EVENT )
+    {
+        if ( ( trk.session->get_talker_state(tsd) == TcpStreamTracker::TCP_CLOSED ) &&
+            ( trk.session->get_listener_state(tsd) == TcpStreamTracker::TCP_TIME_WAIT ) )
+        {
+            Flow* flow = tsd.get_flow();
+            trk.session->clear_session(false, true, false, tsd.is_meta_ack_packet() ? nullptr : tsd.get_pkt() );
+            flow->session_state |= STREAM_STATE_CLOSED;
+            trk.session->set_pkt_action_flag(ACTION_LWSSN_CLOSED);
+        }
+    }
+
     return true;
 }
 

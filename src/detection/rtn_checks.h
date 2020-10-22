@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -34,8 +34,11 @@ int OptListEnd(void* option_data, class Cursor&, snort::Packet*);
 
 // detection
 int CheckBidirectional(snort::Packet*, RuleTreeNode*, RuleFpList*, int);
+
+int CheckProto(snort::Packet*, RuleTreeNode*, RuleFpList*, int);
 int CheckSrcIP(snort::Packet*, RuleTreeNode*, RuleFpList*, int);
 int CheckDstIP(snort::Packet*, RuleTreeNode*, RuleFpList*, int);
+
 int CheckSrcPortEqual(snort::Packet*, RuleTreeNode*, RuleFpList*, int);
 int CheckDstPortEqual(snort::Packet*, RuleTreeNode*, RuleFpList*, int);
 int CheckSrcPortNotEq(snort::Packet*, RuleTreeNode*, RuleFpList*, int);

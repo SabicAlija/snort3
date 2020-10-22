@@ -62,3 +62,4 @@ platform-independent abstraction layer for CPU and memory architecture
 information and management.  Currently it is being used as a cross-platform
 mechanism for managing CPU affinity of threads, but it will be used in the
 future for NUMA (non-uniform memory access) awareness among other things.
+

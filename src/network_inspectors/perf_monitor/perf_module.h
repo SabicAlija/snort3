@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,9 @@
 
 #include "framework/module.h"
 
+#include "perf_pegs.h"
+#include "perf_reload_tuner.h"
+
 #define PERF_NAME "perf_monitor"
 #define PERF_HELP "performance monitoring and flow statistics collection"
 
@@ -32,10 +35,8 @@
 #define PERF_BASE       0x00000001
 #define PERF_CPU        0x00000002
 #define PERF_FLOW       0x00000004
-#define PERF_EVENT      0x00000008
-#define PERF_BASE_MAX   0x00000010
-#define PERF_FLOWIP     0x00000020
-#define PERF_SUMMARY    0x00000040
+#define PERF_FLOWIP     0x00000008
+#define PERF_SUMMARY    0x00000010
 
 #define ROLLOVER_THRESH     512
 #define MAX_PERF_FILE_SIZE  UINT64_MAX
@@ -63,7 +64,7 @@ struct ModuleConfig
     snort::Module* ptr;
     IndexVec pegs;
 
-    void set_name(std::string name);
+    void set_name(const std::string& name);
     void set_peg_names(snort::Value& peg_names);
     bool confirm_parse();
     bool resolve();
@@ -73,18 +74,33 @@ private:
     std::unordered_map<std::string, bool> peg_names;
 };
 
+struct PerfConstraints
+{
+    bool flow_ip_enabled = false;
+    unsigned sample_interval = 0;
+    uint32_t pkt_cnt = 0;
+
+    PerfConstraints() = default;
+    PerfConstraints(bool en, unsigned interval, uint32_t cnt) :
+        flow_ip_enabled(en), sample_interval(interval), pkt_cnt(cnt) { }
+};
+
 struct PerfConfig
 {
     int perf_flags = 0;
     uint32_t pkt_cnt = 0;
-    int sample_interval = 0;
+    unsigned sample_interval = 0;
     uint64_t max_file_size = 0;
     int flow_max_port_to_track = 0;
-    uint32_t flowip_memcap = 0;
+    size_t flowip_memcap = 0;
     PerfFormat format = PerfFormat::CSV;
     PerfOutput output = PerfOutput::TO_FILE;
     std::vector<ModuleConfig> modules;
     std::vector<snort::Module*> mods_to_prep;
+    PerfConstraints* constraints;
+
+    PerfConfig() { constraints = new PerfConstraints; }
+    ~PerfConfig() { delete constraints; }
 
     bool resolve();
 };
@@ -96,6 +112,7 @@ public:
     PerfMonModule();
     ~PerfMonModule() override;
 
+    const snort::Command* get_commands() const override;
     bool set(const char*, snort::Value&, snort::SnortConfig*) override;
     bool begin(const char*, int, snort::SnortConfig*) override;
     bool end(const char*, int, snort::SnortConfig*) override;
@@ -116,7 +133,7 @@ private:
     PerfConfig* config = nullptr;
 };
 
-extern THREAD_LOCAL SimpleStats pmstats;
+extern THREAD_LOCAL PerfPegStats pmstats;
 extern THREAD_LOCAL snort::ProfileStats perfmonStats;
 
 #endif

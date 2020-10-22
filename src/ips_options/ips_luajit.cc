@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 #include "framework/cursor.h"
 #include "framework/decode_data.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "helpers/chunk.h"
 #include "lua/lua.h"
 #include "log/messages.h"
@@ -142,6 +142,7 @@ LuaJitOption::LuaJitOption(
     config += "}";
 
     unsigned max = ThreadConfig::get_instance_max();
+    states.reserve(max);
 
     for ( unsigned i = 0; i < max; ++i )
     {
@@ -157,8 +158,7 @@ LuaJitOption::~LuaJitOption()
 
 uint32_t LuaJitOption::hash() const
 {
-    uint32_t a = 0, b = 0, c = 0;
-    mix_str(a,b,c,get_name());
+    uint32_t a = IpsOption::hash(), b = 0, c = 0;
     mix_str(a,b,c,config.c_str());
     finalize(a,b,c);
     return c;
@@ -179,7 +179,7 @@ bool LuaJitOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus LuaJitOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(luaIpsPerfStats);
+    RuleProfile profile(luaIpsPerfStats);
 
     cursor = &c;
 

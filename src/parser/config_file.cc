@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,25 +24,16 @@
 #include "config_file.h"
 
 #include <cstring>
+#include <sstream>
+#include <string>
 
 #include "detection/detect.h"
 #include "detection/detection_engine.h"
 #include "log/messages.h"
-#include "main/snort.h"
+#include "main/analyzer.h"
 #include "main/policy.h"
 
-#include "mstring.h"
-
-#define CHECKSUM_MODE_OPT__ALL      "all"
-#define CHECKSUM_MODE_OPT__NONE     "none"
-#define CHECKSUM_MODE_OPT__IP       "ip"
-#define CHECKSUM_MODE_OPT__NO_IP    "noip"
-#define CHECKSUM_MODE_OPT__TCP      "tcp"
-#define CHECKSUM_MODE_OPT__NO_TCP   "notcp"
-#define CHECKSUM_MODE_OPT__UDP      "udp"
-#define CHECKSUM_MODE_OPT__NO_UDP   "noudp"
-#define CHECKSUM_MODE_OPT__ICMP     "icmp"
-#define CHECKSUM_MODE_OPT__NO_ICMP  "noicmp"
+using namespace snort;
 
 static std::string lua_conf;
 static std::string snort_conf_dir;
@@ -55,9 +46,6 @@ const char* get_snort_conf_dir()
 
 static int GetChecksumFlags(const char* args)
 {
-    char** toks;
-    int num_toks;
-    int i;
     int negative_flags = 0;
     int positive_flags = 0;
     int got_positive_flag = 0;
@@ -67,64 +55,66 @@ static int GetChecksumFlags(const char* args)
     if (args == nullptr)
         return CHECKSUM_FLAG__ALL;
 
-    toks = snort::mSplit(args, " \t", 10, &num_toks, 0);
-    for (i = 0; i < num_toks; i++)
+    std::stringstream ss(args);
+    std::string tok;
+
+    while ( ss >> tok )
     {
-        if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__ALL) == 0)
+        if ( tok == "all" )
         {
             positive_flags = CHECKSUM_FLAG__ALL;
             negative_flags = 0;
             got_positive_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__NONE) == 0)
+        else if ( tok == "none" )
         {
             positive_flags = 0;
             negative_flags = CHECKSUM_FLAG__ALL;
             got_negative_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__IP) == 0)
+        else if ( tok == "ip" )
         {
             positive_flags |= CHECKSUM_FLAG__IP;
             negative_flags &= ~CHECKSUM_FLAG__IP;
             got_positive_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__NO_IP) == 0)
+        else if ( tok == "noip" )
         {
             positive_flags &= ~CHECKSUM_FLAG__IP;
             negative_flags |= CHECKSUM_FLAG__IP;
             got_negative_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__TCP) == 0)
+        else if ( tok == "tcp" )
         {
             positive_flags |= CHECKSUM_FLAG__TCP;
             negative_flags &= ~CHECKSUM_FLAG__TCP;
             got_positive_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__NO_TCP) == 0)
+        else if ( tok == "notcp" )
         {
             positive_flags &= ~CHECKSUM_FLAG__TCP;
             negative_flags |= CHECKSUM_FLAG__TCP;
             got_negative_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__UDP) == 0)
+        else if ( tok == "udp" )
         {
             positive_flags |= CHECKSUM_FLAG__UDP;
             negative_flags &= ~CHECKSUM_FLAG__UDP;
             got_positive_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__NO_UDP) == 0)
+        else if ( tok == "noudp" )
         {
             positive_flags &= ~CHECKSUM_FLAG__UDP;
             negative_flags |= CHECKSUM_FLAG__UDP;
             got_negative_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__ICMP) == 0)
+        else if ( tok == "icmp" )
         {
             positive_flags |= CHECKSUM_FLAG__ICMP;
             negative_flags &= ~CHECKSUM_FLAG__ICMP;
             got_positive_flag = 1;
         }
-        else if (strcasecmp(toks[i], CHECKSUM_MODE_OPT__NO_ICMP) == 0)
+        else if ( tok == "noicmp" )
         {
             positive_flags &= ~CHECKSUM_FLAG__ICMP;
             negative_flags |= CHECKSUM_FLAG__ICMP;
@@ -132,7 +122,7 @@ static int GetChecksumFlags(const char* args)
         }
         else
         {
-            snort::ParseError("unknown command line checksum option: %s.", toks[i]);
+            ParseError("unknown command line checksum option: %s.", tok.c_str());
             return ret_flags;
         }
     }
@@ -160,19 +150,18 @@ static int GetChecksumFlags(const char* args)
         ret_flags = negative_flags;
     }
 
-    snort::mSplitFree(&toks, num_toks);
     return ret_flags;
 }
 
 void ConfigChecksumDrop(const char* args)
 {
-    NetworkPolicy* policy = snort::get_network_policy();
+    NetworkPolicy* policy = get_network_policy();
     policy->checksum_drop = GetChecksumFlags(args);
 }
 
 void ConfigChecksumMode(const char* args)
 {
-    NetworkPolicy* policy = snort::get_network_policy();
+    NetworkPolicy* policy = get_network_policy();
     policy->checksum_eval = GetChecksumFlags(args);
 }
 
@@ -180,7 +169,7 @@ void config_conf(const char* val)
 {
     lua_conf = val;
     SetSnortConfDir(lua_conf.c_str());
-    snort::Snort::set_main_hook(snort::DetectionEngine::inspect);
+    Analyzer::set_main_hook(DetectionEngine::inspect);
 }
 
 void SetSnortConfDir(const char* file)

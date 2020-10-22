@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -49,12 +49,11 @@ public:
 // class methods
 //-------------------------------------------------------------------------
 
-IpsOption::EvalStatus FileDataOption::eval(Cursor& c, Packet*)
+IpsOption::EvalStatus FileDataOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(fileDataPerfStats);
+    RuleProfile profile(fileDataPerfStats);
 
-    DataPointer dp;
-    DetectionEngine::get_file_data(dp);
+    DataPointer dp = DetectionEngine::get_file_data(p->context);
 
     if ( !dp.data || !dp.len )
         return NO_MATCH;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,8 @@
 #include "app_info_table.h"
 #include "search_engines/search_tool.h"
 #include "utils/util.h"
+
+using namespace snort;
 
 static const unsigned IMAP_USER_NAME_MAX_LEN = 32;
 static const unsigned IMAP_TAG_MAX_LEN = 6;
@@ -178,7 +180,7 @@ static int isImapTagChar(uint8_t tag)
 }
 
 static int imap_server_validate(ImapDetectorData* dd, const uint8_t* data, uint16_t size,
-    AppIdSession& asd, AppIdDetector* detector)
+    AppIdSession& asd, AppidChangeBits& change_bits, AppIdDetector* detector)
 {
     const uint8_t* end = data + size;
     ImapServiceData* id = &dd->server;
@@ -348,7 +350,7 @@ static int imap_server_validate(ImapDetectorData* dd, const uint8_t* data, uint1
         case IMAP_STATE_MID_OK_LOGIN:
             // add user successful - note: use  of LOGIN cmd implies no  IMAPS
             if ((id->flags & IMAP_FLAG_RESULT_OK) && dd->client.username[0])
-                detector->add_user(asd, dd->client.username, APP_ID_IMAP, true);
+                detector->add_user(asd, dd->client.username, APP_ID_IMAP, true, change_bits);
 
             id->state = IMAP_STATE_MID_LINE;
             break;
@@ -379,7 +381,7 @@ static int imap_server_validate(ImapDetectorData* dd, const uint8_t* data, uint1
                     id->state = IMAP_STATE_ALNUM_CODE_TERM;
                     // add user login failed - note: use  of LOGIN cmd implies no  IMAPS
                     if ((id->flags & IMAP_FLAG_RESULT_NO) && dd->client.username[0])
-                        detector->add_user(asd, dd->client.username, APP_ID_IMAP, false);
+                        detector->add_user(asd, dd->client.username, APP_ID_IMAP, false, change_bits);
                 }
             }
             else
@@ -516,7 +518,9 @@ ImapClientDetector::~ImapClientDetector()
 
 void ImapClientDetector::do_custom_init()
 {
-    cmd_matcher = new snort::SearchTool("ac_full", true);
+    if (cmd_matcher)
+        delete cmd_matcher;
+    cmd_matcher = new SearchTool;
 
     if ( !tcp_patterns.empty() )
     {
@@ -530,6 +534,12 @@ void ImapClientDetector::do_custom_init()
         }
     }
     cmd_matcher->prep();
+}
+
+void ImapClientDetector::do_custom_reload()
+{
+    assert(cmd_matcher);
+    cmd_matcher->reload();
 }
 
 static int pattern_match(void* id, void*, int match_end_pos, void* data, void*)
@@ -563,8 +573,6 @@ int ImapClientDetector::validate(AppIdDiscoveryArgs& args)
 {
     const uint8_t* s = args.data;
     const uint8_t* end = (args.data + args.size);
-    unsigned length;
-    AppIdFlowContentPattern* cmd = nullptr;
     char tag[IMAP_TAG_MAX_LEN + 1] = { 0 };
 
 #ifdef APP_ID_USES_REASSEMBLED
@@ -579,14 +587,13 @@ int ImapClientDetector::validate(AppIdDiscoveryArgs& args)
 
     if (args.dir == APP_ID_FROM_RESPONDER)
     {
-        if (imap_server_validate(dd, args.data, args.size, args.asd, this))
+        if (imap_server_validate(dd, args.data, args.size, args.asd, args.change_bits, this))
             args.asd.clear_session_flags(APPID_SESSION_CLIENT_GETS_SERVER_PACKETS);
         return APPID_INPROCESS;
     }
 
-    while ((length = (end - s)) > 0)
+    while (end > s)
     {
-        unsigned long pattern_index;
         if (fd->auth)
         {
             /* authentication exchange in progress ignore all client-side
@@ -632,9 +639,9 @@ int ImapClientDetector::validate(AppIdDiscoveryArgs& args)
             args.asd.clear_session_flags(APPID_SESSION_CLIENT_GETS_SERVER_PACKETS);
             return APPID_SUCCESS;
         }
-        cmd = nullptr;
-        pattern_index = num_imap_client_patterns;
-        length = end - s;
+        AppIdFlowContentPattern* cmd = nullptr;
+        unsigned long pattern_index = num_imap_client_patterns;
+        unsigned length = end - s;
         cmd_matcher->find_all((const char*)s, (length > longest_pattern ? longest_pattern : length),
             &pattern_match, false, (void*)&pattern_index);
 
@@ -683,7 +690,7 @@ int ImapClientDetector::validate(AppIdDiscoveryArgs& args)
                                 fd->count++;
                                 if (fd->count == MIN_CMDS)
                                 {
-                                    add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr);
+                                    add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr, args.change_bits);
                                     fd->detected = 1;
                                     if (fd->got_user)
                                     {
@@ -728,7 +735,7 @@ int ImapClientDetector::validate(AppIdDiscoveryArgs& args)
                                 fd->count++;
                                 if (fd->count == MIN_CMDS)
                                 {
-                                    add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr);
+                                    add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr, args.change_bits);
                                     fd->detected = 1;
                                     if (fd->got_user)
                                     {
@@ -777,7 +784,7 @@ int ImapClientDetector::validate(AppIdDiscoveryArgs& args)
                 fd->count++;
                 if (fd->count == MIN_CMDS)
                 {
-                    add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr);
+                    add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr, args.change_bits);
                     fd->detected = 1;
                     if (fd->got_user)
                     {
@@ -799,7 +806,7 @@ int ImapClientDetector::validate(AppIdDiscoveryArgs& args)
             fd->count++;
             if (fd->count == MIN_CMDS)
             {
-                add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr);
+                add_app(args.asd, APP_ID_IMAP, APP_ID_IMAP, nullptr, args.change_bits);
                 fd->detected = 1;
                 if (fd->got_user)
                 {
@@ -879,14 +886,14 @@ int ImapServiceDetector::validate(AppIdDiscoveryArgs& args)
             return APPID_SUCCESS;
     }
 
-    if (!imap_server_validate(dd, args.data, args.size, args.asd, this))
+    if (!imap_server_validate(dd, args.data, args.size, args.asd, args.change_bits, this))
     {
         if ((id->flags & IMAP_FLAG_RESULT_OK) &&
             dd->client.state == IMAP_CLIENT_STATE_STARTTLS_CMD)
-            return add_service(args.asd, args.pkt, args.dir, APP_ID_IMAPS);
+            return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_IMAPS);
 
         if (id->count >= IMAP_COUNT_THRESHOLD && !args.asd.is_service_detected())
-            return add_service(args.asd, args.pkt, args.dir, APP_ID_IMAP);
+            return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_IMAP);
     }
     else if (!args.asd.is_service_detected())
     {

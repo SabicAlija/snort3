@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -103,25 +103,22 @@ static dnp3_map_t indication_map[] =
 bool dnp3_func_is_defined(uint16_t code)
 {
     size_t num_funcs = sizeof(func_map) / sizeof(func_map[0]);
-    size_t i;
-    int func_is_defined = false;
 
     /* Check to see if code is higher than all codes in func map */
-    if (code > func_map[num_funcs-1].value)
-        return func_is_defined;
+    if (code > func_map[num_funcs - 1].value)
+        return false;
 
-    for (i = 0; i < num_funcs-1; i++)
+    for (size_t i = 0; i < num_funcs - 1; i++)
     {
         /* This short-circuit check assumes that the function map remains
            in-order. */
-        if (code <= func_map[i].value)
+        if (code < func_map[i].value)
             break;
+        if (code == func_map[i].value)
+            return true;
     }
 
-    if (code == func_map[i].value)
-        func_is_defined = true;
-
-    return func_is_defined;
+    return false;
 }
 
 int dnp3_func_str_to_code(const char* name)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,9 +21,12 @@
 #ifndef MAIN_H
 #define MAIN_H
 
+#include "main/request.h"
+
 struct lua_State;
 
 const char* get_prompt();
+Request& get_current_request();
 
 // commands provided by the snort module
 int main_delete_inspector(lua_State* = nullptr);

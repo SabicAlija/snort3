@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -53,18 +53,18 @@ enum
 #define MANIFEST_SEPARATORS         ",\r\n"
 #define MIN_MANIFEST_COLUMNS         3
 
-static char black_info[] = "blacklist";
-static char white_info[] = "whitelist";
+static char block_info[] = "blocklist";
+static char allow_info[] = "allowlist";
 static char monitor_info[] = "monitorlist";
 
-#define WHITE_TYPE_KEYWORD       "white"
-#define BLACK_TYPE_KEYWORD       "block"
+#define ALLOW_TYPE_KEYWORD       "allow"
+#define BLOCK_TYPE_KEYWORD       "block"
 #define MONITOR_TYPE_KEYWORD     "monitor"
 
 #define UNKNOWN_LIST    0
 #define MONITOR_LIST    1
-#define BLACK_LIST      2
-#define WHITE_LIST      3
+#define BLOCK_LIST      2
+#define ALLOW_LIST      3
 
 #define MAX_MSGS_TO_PRINT      20
 
@@ -137,15 +137,15 @@ void ip_list_init(uint32_t max_entries, ReputationConfig* config)
         for (size_t i = 0; i < config->list_files.size(); i++)
         {
             config->list_files[i]->list_index = (uint8_t)i + 1;
-            if (config->list_files[i]->file_type == WHITE_LIST)
+            if (config->list_files[i]->file_type == ALLOW_LIST)
             {
-                if (config->white_action == UNBLACK)
-                    config->list_files[i]->list_type = WHITELISTED_UNBLACK;
+                if (config->allow_action == DO_NOT_BLOCK)
+                    config->list_files[i]->list_type = TRUSTED_DO_NOT_BLOCK;
                 else
-                    config->list_files[i]->list_type = WHITELISTED_TRUST;
+                    config->list_files[i]->list_type = TRUSTED;
             }
-            else if (config->list_files[i]->file_type == BLACK_LIST)
-                config->list_files[i]->list_type = BLACKLISTED;
+            else if (config->list_files[i]->file_type == BLOCK_LIST)
+                config->list_files[i]->list_type = BLOCKED;
             else if (config->list_files[i]->file_type == MONITOR_LIST)
                 config->list_files[i]->list_type = MONITORED;
 
@@ -308,7 +308,7 @@ static int64_t update_entry_info(INFO* current, INFO new_entry, SaveDest save_de
     return bytes_allocated;
 }
 
-static int add_ip(snort::SfCidr* ip_addr,INFO info_ptr, ReputationConfig* config)
+static int add_ip(SfCidr* ip_addr,INFO info_ptr, ReputationConfig* config)
 {
     int ret;
     int final_ret = IP_INSERT_SUCCESS;
@@ -358,7 +358,7 @@ static int add_ip(snort::SfCidr* ip_addr,INFO info_ptr, ReputationConfig* config
 }
 
 // FIXIT-L X Remove this or at least move it to SfCidr?
-static int snort_pton_address(char const* src, snort::SfCidr* dest)
+static int snort_pton_address(char const* src, SfCidr* dest)
 {
     unsigned char _temp[sizeof(struct in6_addr)];
 
@@ -374,7 +374,7 @@ static int snort_pton_address(char const* src, snort::SfCidr* dest)
 
 // FIXIT-L X Remove this or at least move it to SfCidr?
 #define isident(x) (isxdigit((x)) || (x) == ':' || (x) == '.')
-static int snort_pton(char const* src, snort::SfCidr* dest)
+static int snort_pton(char const* src, SfCidr* dest)
 {
     char ipbuf[INET6_ADDRSTRLEN];
     char cidrbuf[sizeof("128")];
@@ -498,7 +498,7 @@ static int snort_pton(char const* src, snort::SfCidr* dest)
 
 static int process_line(char* line, INFO info, ReputationConfig* config)
 {
-    snort::SfCidr address;
+    SfCidr address;
 
     if ( !line || *line == '\0' )
         return IP_INSERT_SUCCESS;
@@ -555,14 +555,14 @@ static char* get_list_type_name(ListFile* list_info)
     {
     case DECISION_NULL:
         return nullptr;
-    case BLACKLISTED:
-        return black_info;
-    case WHITELISTED_UNBLACK:
-        return white_info;
+    case BLOCKED:
+        return block_info;
+    case TRUSTED_DO_NOT_BLOCK:
+        return allow_info;
     case MONITORED:
         return monitor_info;
-    case WHITELISTED_TRUST:
-        return white_info;
+    case TRUSTED:
+        return allow_info;
     default:
         return nullptr;
     }
@@ -679,7 +679,7 @@ static void load_list_file(ListFile* list_info, ReputationConfig* config)
 static int num_lines_in_file(char* fname)
 {
     FILE* fp;
-    uint32_t numlines = 0;
+    int numlines = 0;
     char buf[MAX_ADDR_LINE_LENGTH];
 
     fp = fopen(fname, "rb");
@@ -744,25 +744,25 @@ void estimate_num_entries(ReputationConfig* config)
     config->num_entries = total_lines;
 }
 
-void add_black_white_List(ReputationConfig* config)
+void add_block_allow_List(ReputationConfig* config)
 {
-    if (config->blacklist_path.size())
+    if (config->blocklist_path.size())
     {
         ListFile* listItem = new ListFile;
-        listItem->all_zones_enabled = true;
-        listItem->file_name = config->blacklist_path;
-        listItem->file_type = BLACK_LIST;
+        listItem->all_intfs_enabled = true;
+        listItem->file_name = config->blocklist_path;
+        listItem->file_type = BLOCK_LIST;
         listItem->list_id = 0;
-        config->list_files.push_back(listItem);
+        config->list_files.emplace_back(listItem);
     }
-    if (config->whitelist_path.size())
+    if (config->allowlist_path.size())
     {
         ListFile* listItem = new ListFile;
-        listItem->all_zones_enabled = true;
-        listItem->file_name = config->whitelist_path;
-        listItem->file_type = WHITE_LIST;
+        listItem->all_intfs_enabled = true;
+        listItem->file_name = config->allowlist_path;
+        listItem->file_type = ALLOW_LIST;
         listItem->list_id = 0;
-        config->list_files.push_back(listItem);
+        config->list_files.emplace_back(listItem);
     }
 }
 
@@ -786,15 +786,15 @@ static int get_file_type(char* type_name)
 
     type_name = ignore_start_space(type_name);
 
-    if (strncasecmp(type_name, WHITE_TYPE_KEYWORD, strlen(WHITE_TYPE_KEYWORD)) == 0)
+    if (strncasecmp(type_name, ALLOW_TYPE_KEYWORD, strlen(ALLOW_TYPE_KEYWORD)) == 0)
     {
-        type = WHITE_LIST;
-        type_name += strlen(WHITE_TYPE_KEYWORD);
+        type = ALLOW_LIST;
+        type_name += strlen(ALLOW_TYPE_KEYWORD);
     }
-    else if (strncasecmp(type_name, BLACK_TYPE_KEYWORD, strlen(BLACK_TYPE_KEYWORD)) == 0)
+    else if (strncasecmp(type_name, BLOCK_TYPE_KEYWORD, strlen(BLOCK_TYPE_KEYWORD)) == 0)
     {
-        type = BLACK_LIST;
-        type_name += strlen(BLACK_TYPE_KEYWORD);
+        type = BLOCK_LIST;
+        type_name += strlen(BLOCK_TYPE_KEYWORD);
     }
     else if (strncasecmp(type_name, MONITOR_TYPE_KEYWORD, strlen(MONITOR_TYPE_KEYWORD)) == 0)
     {
@@ -816,23 +816,23 @@ static int get_file_type(char* type_name)
 }
 
 //The format of manifest is:
-//    file_name, list_id, action (black, white, monitor), zone information
-//If no zone information provided, this means all zones are applied.
+//    file_name, list_id, action (block, allow, monitor), interface information
+//If no interface information provided, this means all interfaces are applied.
 
 static bool process_line_in_manifest(ListFile* list_item, const char* manifest, const char* line,
     int line_number, ReputationConfig* config)
 {
     char* token;
     int token_index = 0;
-    char* next_ptr = (char*)line;
-    bool has_zone = false;
+    char* next_ptr = const_cast<char*>(line);
+    bool has_intf = false;
 
-    list_item->zones.clear();
+    list_item->intfs.clear();
 
     while ((token = strtok_r(next_ptr, MANIFEST_SEPARATORS, &next_ptr)) != NULL)
     {
         char* end_str;
-        long zone_id;
+        long intf_id;
         long list_id;
 
         switch (token_index)
@@ -847,16 +847,16 @@ static bool process_line_in_manifest(ListFile* list_item, const char* manifest, 
             if ( *end_str )
             {
                 ErrorMessage("%s(%d) => Bad value (%s) specified for listID. "
-                    "Please specify an integer between %u and %u.\n",
-                    manifest, line_number, token, 0, MAX_LIST_ID);
+                    "Please specify an integer between 0 and %u.\n",
+                    manifest, line_number, token, MAX_LIST_ID);
                 return false;
             }
 
             if ((list_id < 0)  || (list_id > MAX_LIST_ID) || (errno == ERANGE))
             {
                 ErrorMessage(" %s(%d) => Value specified (%s) is out of "
-                    "bounds.  Please specify an integer between %u and %u.\n",
-                    manifest, line_number, token, 0, MAX_LIST_ID);
+                    "bounds.  Please specify an integer between 0 and %u.\n",
+                    manifest, line_number, token, MAX_LIST_ID);
                 return false;
             }
             list_item->list_id = (uint32_t)list_id;
@@ -869,35 +869,35 @@ static bool process_line_in_manifest(ListFile* list_item, const char* manifest, 
             {
                 ErrorMessage(" %s(%d) => Unknown action specified (%s)."
                     " Please specify a value: %s | %s | %s.\n", manifest, line_number, token,
-                    WHITE_TYPE_KEYWORD, BLACK_TYPE_KEYWORD, MONITOR_TYPE_KEYWORD);
+                    ALLOW_TYPE_KEYWORD, BLOCK_TYPE_KEYWORD, MONITOR_TYPE_KEYWORD);
                 return false;
             }
             break;
 
         default:
             token= ignore_start_space(token);
-            if (!(*token))
+            if ('0' == (*token))
                 break;
-            zone_id = SnortStrtol(token, &end_str, 10);
+            intf_id = SnortStrtol(token, &end_str, 10);
             end_str = ignore_start_space(end_str);
 
             if ( *end_str )
             {
-                ErrorMessage("%s(%d) => Bad value (%s) specified for zone. "
-                    "Please specify an integer between %u and %u.\n",
-                    manifest, line_number, token, 0, MAX_NUM_ZONES);
+                ErrorMessage("%s(%d) => Bad value (%s) specified for interface. "
+                    "Please specify an integer between 0 and %u.\n",
+                    manifest, line_number, token, MAX_NUM_INTFS);
                 return false;
             }
-            if ((zone_id < 0)  || (zone_id > MAX_NUM_ZONES ) || (errno == ERANGE))
+            if ((intf_id < 0)  || (intf_id > MAX_NUM_INTFS ) || (errno == ERANGE))
             {
-                ErrorMessage(" %s(%d) => Value specified (%s) for zone is "
-                    "out of bounds. Please specify an integer between %u and %u.\n",
-                    manifest, line_number, token, 0, MAX_NUM_ZONES );
+                ErrorMessage(" %s(%d) => Value specified (%s) for interface is "
+                    "out of bounds. Please specify an integer between 0 and %u.\n",
+                    manifest, line_number, token, MAX_NUM_INTFS);
                 return false;
             }
 
-            list_item->zones.insert(zone_id);
-            has_zone = true;
+            list_item->intfs.emplace(intf_id);
+            has_intf = true;
         }
 
         token_index++;
@@ -912,12 +912,12 @@ static bool process_line_in_manifest(ListFile* list_item, const char* manifest, 
         return false;
     }
 
-    if (!has_zone)
+    if (!has_intf)
     {
-        list_item->all_zones_enabled = true;
+        list_item->all_intfs_enabled = true;
     }
 
-    config->list_files.push_back(list_item);
+    config->list_files.emplace_back(list_item);
     return true;
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,12 @@
 // state.  Inspector state is stored in FlowData, and Flow manages a list
 // of FlowData items.
 
+#include <sys/time.h>
+
+#include "detection/ips_context_chain.h"
+#include "flow/deferred_trust.h"
+#include "flow/flow_data.h"
+#include "flow/flow_stash.h"
 #include "framework/data_bus.h"
 #include "framework/decode_data.h"
 #include "framework/inspector.h"
@@ -58,7 +64,6 @@
 
 #define SSNFLAG_DROP_CLIENT         0x00010000
 #define SSNFLAG_DROP_SERVER         0x00020000
-#define SSNFLAG_FORCE_BLOCK         0x00040000
 
 #define SSNFLAG_STREAM_ORDER_BAD    0x00100000
 #define SSNFLAG_CLIENT_SWAP         0x00200000
@@ -70,6 +75,8 @@
 
 #define SSNFLAG_ABORT_CLIENT        0x10000000
 #define SSNFLAG_ABORT_SERVER        0x20000000
+
+#define SSNFLAG_HARD_EXPIRATION     0x40000000
 
 #define SSNFLAG_NONE                0x00000000 /* nothing, an MT bag of chips */
 
@@ -87,48 +94,50 @@
 #define STREAM_STATE_TIMEDOUT          0x0080
 #define STREAM_STATE_UNREACH           0x0100
 #define STREAM_STATE_CLOSED            0x0800
-#define STREAM_STATE_IGNORE            0x1000
-#define STREAM_STATE_NO_PICKUP         0x2000
-#define STREAM_STATE_BLOCK_PENDING     0x4000
-
-#define FLOW_IS_OFFLOADED              0x01
-#define FLOW_WAS_OFFLOADED             0x02  // FIXIT-L debug only
+#define STREAM_STATE_BLOCK_PENDING     0x1000
 
 class BitOp;
-class FlowHAState;
 class Session;
 
 namespace snort
 {
+class FlowHAState;
 struct FlowKey;
+class IpsContext;
 struct Packet;
 
 typedef void (* StreamAppDataFree)(void*);
 
-class SO_PUBLIC FlowData
+struct FilteringState
 {
-public:
-    FlowData(unsigned u, Inspector* = nullptr);
-    virtual ~FlowData();
+    uint8_t generation_id = 0;
+    bool matched = false;
 
-    unsigned get_id()
-    { return id; }
+    void clear()
+    {
+        generation_id = 0;
+        matched = false;
+    }
 
-    static unsigned create_flow_data_id()
-    { return ++flow_data_id; }
+    bool was_checked(uint8_t id) const
+    {
+        return generation_id and (generation_id == id);
+    }
 
-    virtual void handle_expected(Packet*) { }
-    virtual void handle_retransmit(Packet*) { }
-    virtual void handle_eof(Packet*) { }
+    void set_matched(uint8_t id, bool match)
+    {
+        generation_id = id;
+        matched = match;
+    }
+};
 
-public:  // FIXIT-L privatize
-    FlowData* next;
-    FlowData* prev;
-
-private:
-    static unsigned flow_data_id;
-    Inspector* handler;
-    unsigned id;
+struct FlowStats
+{
+    uint64_t client_pkts;
+    uint64_t server_pkts;
+    uint64_t client_bytes;
+    uint64_t server_bytes;
+    struct timeval start_time;
 };
 
 struct LwState
@@ -155,6 +164,7 @@ public:
         ALLOW
     };
     Flow();
+    ~Flow();
 
     Flow(const Flow&) = delete;
     Flow& operator=(const Flow&) = delete;
@@ -180,19 +190,45 @@ public:
     void set_ttl(Packet*, bool client);
     void set_mpls_layer_per_dir(Packet*);
     Layer get_mpls_layer_per_dir(bool);
+    void swap_roles();
     void set_service(Packet* pkt, const char* new_service);
+    bool get_attr(const std::string& key, int32_t& val);
+    bool get_attr(const std::string& key, std::string& val);
+    void set_attr(const std::string& key, const int32_t& val);
+    void set_attr(const std::string& key, const std::string& val);
+    // Use this API when the publisher of the attribute allocated memory for it and can give up its
+    // ownership after the call.
+    void set_attr(const std::string& key, std::string* val)
+    {
+        assert(stash);
+        stash->store(key, val);
+    }
 
-    uint32_t update_session_flags(uint32_t flags)
-    { return ssn_state.session_flags = flags; }
+    template<typename T>
+    bool get_attr(const std::string& key, T& val)
+    {
+        assert(stash);
+        return stash->get(key, val);
+    }
 
-    uint32_t set_session_flags(uint32_t flags)
-    { return ssn_state.session_flags |= flags; }
+    template<typename T>
+    void set_attr(const std::string& key, const T& val)
+    {
+        assert(stash);
+        stash->store(key, val);
+    }
+
+    uint32_t update_session_flags(uint32_t ssn_flags)
+    { return ssn_state.session_flags = ssn_flags; }
+
+    uint32_t set_session_flags(uint32_t ssn_flags)
+    { return ssn_state.session_flags |= ssn_flags; }
 
     uint32_t get_session_flags()
     { return ssn_state.session_flags; }
 
-    uint32_t clear_session_flags(uint32_t flags)
-    { return ssn_state.session_flags &= ~flags; }
+    uint32_t clear_session_flags(uint32_t ssn_flags)
+    { return ssn_state.session_flags &= ~ssn_flags; }
 
     void set_to_client_detection(bool enable);
     void set_to_server_detection(bool enable);
@@ -202,9 +238,7 @@ public:
 
     int set_ignore_direction(char ignore_direction)
     {
-        if (ssn_state.ignore_direction != ignore_direction)
-            ssn_state.ignore_direction = ignore_direction;
-
+        ssn_state.ignore_direction = ignore_direction;
         return ssn_state.ignore_direction;
     }
 
@@ -240,10 +274,22 @@ public:
         ssn_client->add_ref();
     }
 
+    void clear_client()
+    {
+        ssn_client->rem_ref();
+        ssn_client = nullptr;
+    }
+
     void set_server(Inspector* ins)
     {
         ssn_server = ins;
         ssn_server->add_ref();
+    }
+
+    void clear_server()
+    {
+        ssn_server->rem_ref();
+        ssn_server = nullptr;
     }
 
     void set_clouseau(Inspector* ins)
@@ -268,6 +314,20 @@ public:
     {
         gadget->rem_ref();
         gadget = nullptr;
+        if (assistant_gadget != nullptr)
+            clear_assistant_gadget();
+    }
+
+    void set_assistant_gadget(Inspector* ins)
+    {
+        assistant_gadget = ins;
+        assistant_gadget->add_ref();
+    }
+
+    void clear_assistant_gadget()
+    {
+        assistant_gadget->rem_ref();
+        assistant_gadget = nullptr;
     }
 
     void set_data(Inspector* pd)
@@ -283,36 +343,67 @@ public:
     }
 
     void disable_inspection()
-    { disable_inspect = true; }
+    { flags.disable_inspect = true; }
 
     bool is_inspection_disabled() const
-    { return disable_inspect; }
+    { return flags.disable_inspect; }
 
-    bool is_offloaded() const
-    { return flow_flags & FLOW_IS_OFFLOADED; }
+    bool is_suspended() const
+    { return context_chain.front(); }
 
-    void set_offloaded()
-    { flow_flags |= (FLOW_IS_OFFLOADED|FLOW_WAS_OFFLOADED); }
+    void set_default_session_timeout(uint32_t dst, bool force)
+    {
+        if (force || (default_session_timeout == 0))
+            default_session_timeout = dst;
+    }
 
-    void clear_offloaded()
-    { flow_flags &= ~FLOW_IS_OFFLOADED; }
+    void set_hard_expiration()
+    { ssn_state.session_flags |= SSNFLAG_HARD_EXPIRATION; }
+
+    bool is_hard_expiration()
+    { return (ssn_state.session_flags & SSNFLAG_HARD_EXPIRATION) != 0; }
+
+    void set_deferred_trust(unsigned module_id, bool on)
+    { deferred_trust.set_deferred_trust(module_id, on); }
+
+    bool cannot_trust()
+    { return deferred_trust.is_active(); }
+
+    bool try_trust()
+    { return deferred_trust.try_trust(); }
+
+    void stop_deferring_trust()
+    { deferred_trust.clear(); }
+
+    void finalize_trust(Active& active)
+    {
+        deferred_trust.finalize(active);
+    }
+
+    void trust();
+
+    bool trust_is_deferred()
+    { return deferred_trust.is_deferred(); }
 
 public:  // FIXIT-M privatize if possible
     // fields are organized by initialization and size to minimize
     // void space and allow for memset of tail end of struct
 
     // these fields are const after initialization
+    DeferredTrust deferred_trust;
+
+    // Anything before this comment is not zeroed during construction
     const FlowKey* key;
-    Session* session;
     BitOp* bitop;
     FlowHAState* ha_state;
+    FlowStash* stash;
 
     uint8_t ip_proto;
     PktType pkt_type; // ^^
 
     // these fields are always set; not zeroed
-    uint64_t flow_flags;  // FIXIT-H required to ensure atomic?
     Flow* prev, * next;
+    Session* session;
     Inspector* ssn_client;
     Inspector* ssn_server;
 
@@ -320,23 +411,36 @@ public:  // FIXIT-M privatize if possible
     Layer mpls_client, mpls_server;
 
     // everything from here down is zeroed
+    IpsContextChain context_chain;
     FlowData* flow_data;
-    Inspector* clouseau;  // service identifier
-    Inspector* gadget;    // service handler
-    Inspector* data;
-    const char* service;
-
-    uint64_t expire_time;
+    FlowStats flowstats;
 
     SfIp client_ip;
     SfIp server_ip;
 
     LwState ssn_state;
     LwState previous_ssn_state;
-    FlowState flow_state;
+
+    Inspector* clouseau;  // service identifier
+    Inspector* gadget;    // service handler
+    Inspector* assistant_gadget;
+    Inspector* data;
+    const char* service;
+
+    uint64_t expire_time;
+
     unsigned inspection_policy_id;
     unsigned ips_policy_id;
     unsigned network_policy_id;
+    unsigned reputation_id;
+
+    uint32_t default_session_timeout;
+
+    int32_t client_intf;
+    int32_t server_intf;
+
+    int16_t client_group;
+    int16_t server_group;
 
     uint16_t client_port;
     uint16_t server_port;
@@ -344,11 +448,33 @@ public:  // FIXIT-M privatize if possible
     uint16_t ssn_policy;
     uint16_t session_state;
 
-    uint8_t inner_client_ttl, inner_server_ttl;
-    uint8_t outer_client_ttl, outer_server_ttl;
+    uint8_t inner_client_ttl;
+    uint8_t inner_server_ttl;
+    uint8_t outer_client_ttl;
+    uint8_t outer_server_ttl;
 
     uint8_t response_count;
-    bool disable_inspect;
+
+    struct
+    {
+        bool client_initiated : 1;  // Set if the first packet on the flow was from the side that is
+                                    // currently considered to be the client
+        bool app_direction_swapped : 1; // Packet direction swapped from application perspective
+        bool disable_inspect : 1;
+        bool reputation_src_dest : 1;
+        bool reputation_blocklist : 1;
+        bool reputation_monitor : 1;
+        bool reputation_allowlist : 1;
+        bool trigger_detained_packet_event : 1;
+        bool trigger_finalize_event : 1;
+        bool use_direct_inject : 1;
+        bool data_decrypted : 1;    // indicate data in current flow is decrypted TLS application
+                                    //data
+    } flags;
+
+    FlowState flow_state;
+
+    FilteringState filtering_state;
 
 private:
     void clean();
@@ -369,7 +495,6 @@ inline void Flow::set_to_server_detection(bool enable)
     else
         ssn_state.session_flags |= SSNFLAG_NO_DETECT_TO_SERVER;
 }
-
 }
 
 #endif

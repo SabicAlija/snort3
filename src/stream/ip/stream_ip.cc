@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -59,12 +59,6 @@ StreamIpConfig::StreamIpConfig()
     frag_engine.min_fragment_length = 0;
 }
 
-static void ip_show(StreamIpConfig* pc)
-{
-    LogMessage("Stream IP config:\n");
-    LogMessage("    Timeout: %d seconds\n", pc->session_timeout);
-}
-
 //-------------------------------------------------------------------------
 // inspector stuff
 //-------------------------------------------------------------------------
@@ -76,7 +70,7 @@ public:
     ~StreamIp() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
 
     NORETURN_ASSERT void eval(Packet*) override;
 
@@ -103,10 +97,13 @@ bool StreamIp::configure(SnortConfig* sc)
     return true;
 }
 
-void StreamIp::show(SnortConfig* sc)
+void StreamIp::show(const SnortConfig*) const
 {
-    ip_show(config);
-    defrag->show(sc);
+    if ( !config )
+        return;
+
+    defrag->show();
+    ConfigLogger::log_value("session_timeout", config->session_timeout);
 }
 
 NORETURN_ASSERT void StreamIp::eval(Packet*)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -39,25 +39,34 @@ class SO_PUBLIC DecodeConfig
 {
 public:
     void set_ignore_data(bool);
-    bool is_ignore_data();
+    bool is_ignore_data() const;
 
     void set_b64_depth(int);
-    int get_b64_depth();
+    int get_b64_depth() const;
 
     void set_qp_depth(int);
-    int get_qp_depth();
+    int get_qp_depth() const;
 
     void set_bitenc_depth(int);
-    int get_bitenc_depth();
+    int get_bitenc_depth() const;
 
     void set_uu_depth(int);
-    int get_uu_depth();
+    int get_uu_depth() const;
 
-    int64_t get_file_depth();
-    bool is_decoding_enabled();
+    void set_decompress_pdf(bool);
+    bool is_decompress_pdf() const;
+
+    void set_decompress_swf(bool);
+    bool is_decompress_swf() const;
+
+    void set_decompress_zip(bool);
+    bool is_decompress_zip() const;
+
+    int64_t get_file_depth() const;
+    bool is_decoding_enabled() const;
     void sync_all_depths();
-    void print_decode_conf();
-    int get_max_depth(int);
+    void show(bool = false) const;
+    int get_max_depth(int) const;
 
 private:
     bool ignore_data = false;
@@ -65,6 +74,9 @@ private:
     int qp_depth = DEFAULT_DEPTH;
     int bitenc_depth = DEFAULT_DEPTH;
     int uu_depth = DEFAULT_DEPTH;
+    bool decompress_pdf = false;
+    bool decompress_swf = false;
+    bool decompress_zip = false;
     int64_t file_depth = MIN_DEPTH;
     bool decode_enabled = true;
 };

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,6 +29,10 @@ public:
     BaseTracker(PerfConfig* perf);
 
     void process(bool) override;
+
+private:
+    std::vector<ModuleConfig> modules;
+    std::vector<snort::Module*> mods_to_prep;
 };
 
 #endif

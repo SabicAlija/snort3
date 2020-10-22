@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -66,6 +66,7 @@ bool RuleHeader::convert(std::istringstream& data_stream)
 template<const std::string* name>
 static ConversionState* rule_ctor(Converter& c)
 {
+    c.get_rule_api().set_rule_old_action(*name);
     c.get_rule_api().add_hdr_data(*name);
     return new RuleHeader(c);
 }
@@ -73,6 +74,7 @@ static ConversionState* rule_ctor(Converter& c)
 template<const std::string* name>
 static ConversionState* dep_rule_ctor(Converter& c)
 {
+    c.get_rule_api().set_rule_old_action(*name);
     c.get_rule_api().add_hdr_data(*name);
     c.get_rule_api().make_rule_a_comment();
     c.get_rule_api().add_comment("The '" + *name + "' ruletype is no longer supported");
@@ -82,6 +84,7 @@ static ConversionState* dep_rule_ctor(Converter& c)
 template<const std::string* name, const std::string* old>
 static ConversionState* conv_rule_ctor(Converter& c)
 {
+    c.get_rule_api().set_rule_old_action(*old);
     c.get_rule_api().add_hdr_data(*name);
     c.get_rule_api().add_comment(
         "The '" + *old + "' ruletype is no longer supported, using " + *name);
@@ -90,6 +93,7 @@ static ConversionState* conv_rule_ctor(Converter& c)
 
 static ConversionState* drop_rule_ctor(Converter& c)
 {
+    c.get_rule_api().set_rule_old_action("drop");
     c.get_rule_api().add_hdr_data("block");
     c.get_rule_api().add_comment(
         "Ruletype 'drop' discards the current packet only; "

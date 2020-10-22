@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,6 +40,10 @@
 
 #include "file_mempool.h"
 #include "file_stats.h"
+
+#ifdef UNIT_TEST
+#include "catch/snort_catch.h"
+#endif
 
 using namespace snort;
 
@@ -187,10 +191,10 @@ void FileCapture::init_mempool(int64_t max_file_mem, int64_t block_len)
 
 inline FileCaptureBlock* FileCapture::create_file_buffer()
 {
-    FileCaptureBlock* fileBlock;
-    uint64_t num_files_queued;
+    if (!file_mempool)
+        return nullptr;
 
-    fileBlock = (FileCaptureBlock*)file_mempool->m_alloc();
+    FileCaptureBlock* fileBlock = (FileCaptureBlock*)file_mempool->m_alloc();
 
     if (fileBlock == nullptr)
     {
@@ -203,7 +207,7 @@ inline FileCaptureBlock* FileCapture::create_file_buffer()
     fileBlock->length = 0;
     fileBlock->next = nullptr;     /*Only one block initially*/
 
-    num_files_queued = file_mempool->allocated();
+    uint64_t num_files_queued = file_mempool->allocated();
     if (file_counts.file_buffers_used_max < num_files_queued)
         file_counts.file_buffers_used_max = num_files_queued;
 
@@ -388,11 +392,6 @@ FileCaptureState FileCapture::reserve_file(const FileInfo* file)
         head = last = fileBlock;
     }
 
-    if (!fileBlock)
-    {
-        return error_capture(FILE_CAPTURE_MEMCAP);
-    }
-
     /*Copy the last piece of file to file buffer*/
     if (save_to_file_buffer(current_data,
             current_data_len, capture_max_size) )
@@ -508,6 +507,7 @@ void FileCapture::store_file()
         // Get file from file buffer
         if (!buff || !size )
         {
+            fclose(fh);
             return;
         }
 
@@ -552,3 +552,15 @@ void FileCapture::print_mem_usage()
     }
 }
 
+//--------------------------------------------------------------------------
+// unit tests
+//--------------------------------------------------------------------------
+
+#ifdef UNIT_TEST
+TEST_CASE ("Should not segfault when file mempool is not configured", "[file_capture]")
+{
+    FileCapture fc(0, 0);
+
+    CHECK(fc.process_buffer((const uint8_t*)"dummy", 5, SNORT_FILE_START) == FILE_CAPTURE_MEMCAP);
+}
+#endif

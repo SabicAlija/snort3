@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -45,7 +45,7 @@ struct SO_PUBLIC Parameter
         PT_LIST,       // range is Parameter*, no default
         PT_DYNAMIC,    // range is RangeQuery*
         PT_BOOL,       // if you are reading this, get more coffee
-        PT_INT,        // signed 64 bits or less determined by range
+        PT_INT,        // signed 53 bits or less determined by range
         PT_INTERVAL,   // string that defines an interval, bounds within range
         PT_REAL,       // double
         PT_PORT,       // 0 to 64K-1 unless specified otherwise
@@ -68,6 +68,9 @@ struct SO_PUBLIC Parameter
     const char* deflt;
     const char* help;
 
+    Parameter(const char* n, Type t, const void* r, const char* d, const char* h) :
+        name(n), type(t), range(r), deflt(d), help(h) { }
+
     const char* get_type() const;
     const char* get_range() const;
 
@@ -89,11 +92,13 @@ struct SO_PUBLIC Parameter
     double get_number() const;
     const char* get_string() const;
 
-    static const Parameter* find(const Parameter*, const Parameter*, const char*);
     static const Parameter* find(const Parameter*, const char*);
 
     // 0-based; -1 if not found; list is | delimited
     static int index(const char* list, const char* key);
+
+    // convert string to long (including 'maxN' literals)
+    static int64_t get_int(const char*);
 };
 }
 #endif

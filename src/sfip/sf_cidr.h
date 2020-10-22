@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,6 +32,11 @@ namespace snort
 
 struct SO_PUBLIC SfCidr
 {
+    /*
+     * Constructors
+     */
+    SfCidr() = default;
+
     /*
      * Modifiers (incl. convenience ones that delegate to addr)
      */
@@ -74,13 +79,13 @@ inline void SfCidr::clear()
 
 inline void SfCidr::set(const SfCidr& src)
 {
-    addr.set(src.addr);
+    addr = src.addr;
     bits = src.bits;
 }
 
 inline void SfCidr::set(const SfIp& src)
 {
-    addr.set(src);
+    addr = src;
     bits = 128;
 }
 

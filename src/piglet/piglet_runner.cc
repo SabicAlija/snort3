@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -46,7 +46,7 @@ static inline bool load_chunk(lua_State* L, const Chunk& chunk)
         L, chunk.buffer.c_str(), chunk.buffer.size(), chunk.filename.c_str());
 }
 
-static bool setup_globals(lua_State* L, Test& t)
+static bool setup_globals(lua_State* L, const Test& t)
 {
     // Add script_dir env var
     Lua::set_script_dir(L, SCRIPT_DIR_VARNAME, t.chunk->filename);

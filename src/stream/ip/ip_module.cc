@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,9 +26,12 @@
 
 #include "ip_session.h"
 #include "stream_ip.h"
+#include "trace/trace.h"
 
 using namespace snort;
 using namespace std;
+
+THREAD_LOCAL const Trace* stream_ip_trace = nullptr;
 
 #define DEFRAG_IPOPTIONS_STR \
     "inconsistent IP options on fragmented packets"
@@ -81,8 +84,6 @@ FragEngine::FragEngine()
 // stream_ip module
 //-------------------------------------------------------------------------
 
-Trace TRACE_NAME(stream_ip);
-
 static const RuleMap stream_ip_rules[] =
 {
     { DEFRAG_IPOPTIONS, DEFRAG_IPOPTIONS_STR },
@@ -102,13 +103,13 @@ static const RuleMap stream_ip_rules[] =
 
 static const Parameter s_params[] =
 {
-    { "max_frags", Parameter::PT_INT, "1:", "8192",
+    { "max_frags", Parameter::PT_INT, "1:max32", "8192",
       "maximum number of simultaneous fragments being tracked" },
 
-    { "max_overlaps", Parameter::PT_INT, "0:", "0",
+    { "max_overlaps", Parameter::PT_INT, "0:max32", "0",
       "maximum allowed overlaps per datagram; 0 is unlimited" },
 
-    { "min_frag_length", Parameter::PT_INT, "0:", "0",
+    { "min_frag_length", Parameter::PT_INT, "0:65535", "0",
       "alert if fragment length is below this limit before or after trimming" },
 
     { "min_ttl", Parameter::PT_INT, "1:255", "1",
@@ -117,15 +118,16 @@ static const Parameter s_params[] =
     { "policy", Parameter::PT_ENUM, IP_POLICIES, "linux",
       "fragment reassembly policy" },
 
-    { "session_timeout", Parameter::PT_INT, "1:86400", "30",
+    { "session_timeout", Parameter::PT_INT, "1:max31", "30",
       "session tracking timeout" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
-StreamIpModule::StreamIpModule() :
-    Module(MOD_NAME, MOD_HELP, s_params, false, &TRACE_NAME(stream_ip))
-{ config = nullptr; }
+StreamIpModule::StreamIpModule() : Module(MOD_NAME, MOD_HELP, s_params)
+{
+    config = nullptr;
+}
 
 StreamIpModule::~StreamIpModule()
 {
@@ -133,36 +135,20 @@ StreamIpModule::~StreamIpModule()
         delete config;
 }
 
+void StreamIpModule::set_trace(const Trace* trace) const
+{ stream_ip_trace = trace; }
+
+const TraceOption* StreamIpModule::get_trace_options() const
+{
+    static const TraceOption stream_ip_trace_options(nullptr, 0, nullptr);
+    return &stream_ip_trace_options;
+}
+
 const RuleMap* StreamIpModule::get_rules() const
 { return stream_ip_rules; }
 
-ProfileStats* StreamIpModule::get_profile(
-    unsigned index, const char*& name, const char*& parent) const
-{
-    switch ( index )
-    {
-    case 0:
-        name = "stream_ip";
-        parent = nullptr;
-        return &ip_perf_stats;
-
-    case 1:
-        name = "frag";
-        parent = "stream_ip";
-        return &fragPerfStats;
-
-    case 2:
-        name = "frag_insert";
-        parent = "frag";
-        return &fragInsertPerfStats;
-
-    case 3:
-        name = "frag_rebuild";
-        parent = "frag";
-        return &fragRebuildPerfStats;
-    }
-    return nullptr;
-}
+ProfileStats* StreamIpModule::get_profile() const
+{ return &ip_perf_stats; }
 
 StreamIpConfig* StreamIpModule::get_data()
 {
@@ -171,31 +157,29 @@ StreamIpConfig* StreamIpModule::get_data()
     return temp;
 }
 
-bool StreamIpModule::set(const char* f, Value& v, SnortConfig* c)
+bool StreamIpModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("max_frags") )
-        config->frag_engine.max_frags = v.get_long();
+        config->frag_engine.max_frags = v.get_uint32();
 
     else if ( v.is("max_overlaps") )
-        config->frag_engine.max_overlaps = v.get_long();
+        config->frag_engine.max_overlaps = v.get_uint32();
 
     else if ( v.is("min_frag_length") )
-        config->frag_engine.min_fragment_length = v.get_long();
+        config->frag_engine.min_fragment_length = v.get_uint32();
 
     else if ( v.is("min_ttl") )
-        config->frag_engine.min_ttl = v.get_long();
+        config->frag_engine.min_ttl = v.get_uint8();
 
     else if ( v.is("policy") )
-        config->frag_engine.frag_policy = v.get_long() + 1;
+        config->frag_engine.frag_policy = v.get_uint16() + 1;
 
     else if ( v.is("session_timeout") )
     {
         // FIXIT-L need to integrate to eliminate redundant data
-        config->session_timeout = v.get_long();
-        config->frag_engine.frag_timeout = v.get_long();
+        config->session_timeout = v.get_uint32();
+        config->frag_engine.frag_timeout = v.get_uint32();
     }
-    else
-        return Module::set(f, v, c);
 
     return true;
 }
@@ -205,11 +189,6 @@ bool StreamIpModule::begin(const char*, int, SnortConfig*)
     if ( !config )
         config = new StreamIpConfig;
 
-    return true;
-}
-
-bool StreamIpModule::end(const char*, int, SnortConfig*)
-{
     return true;
 }
 

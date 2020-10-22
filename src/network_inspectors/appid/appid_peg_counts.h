@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -70,8 +70,8 @@ public:
 
         void print()
         {
-            snort::LogMessage("flows: %" PRIu64 ", clients: %" PRIu64 ", users: %" PRIu64 ", payloads %" PRIu64
-                ", misc: %" PRIu64 ", incompatible: %" PRIu64 ", failed: %" PRIu64 "\n",
+            snort::LogMessage(" " FMTu64("-10") " " FMTu64("-10") " " FMTu64("-10") " " FMTu64("-10")
+                " " FMTu64("-10") " " FMTu64("-10") " " FMTu64("-10")"\n",
                 stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6]);
         }
     };
@@ -80,10 +80,12 @@ public:
     static void init_pegs();
     static void cleanup_pegs();
     static void cleanup_peg_info();
-    static void inc_service_count(AppId id);
-    static void inc_client_count(AppId id);
+
+    static void update_service_count(AppId id, bool increment);
+    static void update_client_count(AppId id, bool increment);
+    static void update_payload_count(AppId id, bool increment);
+
     static void inc_user_count(AppId id);
-    static void inc_payload_count(AppId id);
     static void inc_misc_count(AppId id);
 
     static void inc_incompatible_count(AppId id)

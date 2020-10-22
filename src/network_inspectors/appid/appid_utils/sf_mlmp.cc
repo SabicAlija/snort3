@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@
 
 #include "search_engines/search_tool.h"
 #include "utils/util.h"
+
+using namespace snort;
 
 struct tPatternNode
 {
@@ -59,7 +61,7 @@ struct tPatternPrimaryNode
 /*Node for mlmp tree */
 struct tMlmpTree
 {
-    snort::SearchTool* patternTree;
+    SearchTool* patternTree;
     tPatternPrimaryNode* patternList;
     uint32_t level;
 };
@@ -110,6 +112,12 @@ int mlmpProcessPatterns(tMlmpTree* root)
     if (rvalue)
         destroyTreesRecursively(root);
     return rvalue;
+}
+
+void mlmp_reload_patterns(tMlmpTree& root)
+{
+    assert(root.patternTree);
+    root.patternTree->reload();
 }
 
 void* mlmpMatchPatternUrl(tMlmpTree* root, tMlmpPattern* inputPatternList)
@@ -198,12 +206,12 @@ static int compareMlmpPatterns(const void* p1, const void* p2)
    detroyTreesRecursively. */
 static int createTreesRecusively(tMlmpTree* rootNode)
 {
-    snort::SearchTool* patternMatcher;
+    SearchTool* patternMatcher;
     tPatternPrimaryNode* primaryPatternNode;
     tPatternNode* ddPatternNode;
 
     /* set up the MPSE for url patterns */
-    patternMatcher = rootNode->patternTree = new snort::SearchTool("ac_full", true);
+    patternMatcher = rootNode->patternTree = new SearchTool;
 
     for (primaryPatternNode = rootNode->patternList;
         primaryPatternNode;
@@ -440,7 +448,7 @@ static int addPatternRecursively(tMlmpTree* rootNode, const tMlmpPattern* inputP
     tPatternNode* newNode;
     tPatternPrimaryNode* prevPrimaryPatternNode = nullptr;
     tPatternPrimaryNode* primaryNode = nullptr;
-    const tMlmpPattern* patterns = inputPatternList;
+    const tMlmpPattern* patterns;
     uint32_t partTotal = 0;
     uint32_t i;
 

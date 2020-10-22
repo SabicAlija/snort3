@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -248,70 +248,20 @@ std::string get_rule_option_args(std::istringstream& stream)
     do
     {
         std::getline(stream, tmp, ';');
+
+        if (tmp.empty())
+            break;
+
         args += tmp + ";";
     }
     while (tmp.back() == '\\');
 
     // semicolon will be added when printing
-    args.pop_back();
+    if (!args.empty())
+        args.pop_back();
+
     trim(args);
     return args;
-}
-
-std::string rule_option_find_val(std::istringstream& data_stream,
-    const std::string& opt_name)
-{
-    std::string rule_keyword;
-    std::string val = std::string();
-    const std::streamoff curr_pos = data_stream.tellg();
-
-    if (curr_pos == -1)
-        data_stream.clear();
-
-    data_stream.seekg(0);
-    std::getline(data_stream, rule_keyword, '(');
-    std::streamoff tmp_pos = data_stream.tellg();
-
-    // This loop is a near duplicate of set_next_rule_state.
-    while (std::getline(data_stream, rule_keyword, ':'))
-    {
-        std::size_t semi_colon_pos = rule_keyword.find(';');
-        if (semi_colon_pos != std::string::npos)
-        {
-            // found an option without a colon, so set stream
-            // to semi-colon
-            std::istringstream::off_type off = 1 +
-                (std::streamoff)(tmp_pos) + (std::streamoff)(semi_colon_pos);
-            data_stream.seekg(off);
-            rule_keyword = rule_keyword.substr(0, semi_colon_pos);
-        }
-
-        // now, lets get the next option.
-        util::trim(rule_keyword);
-
-        if (rule_keyword == opt_name)
-        {
-            // Get the value if there is one!
-            if (semi_colon_pos == std::string::npos)
-                val = util::get_rule_option_args(data_stream);
-
-            break;
-        }
-
-        if (semi_colon_pos == std::string::npos)
-            std::getline(data_stream, rule_keyword, ';');
-
-        tmp_pos = data_stream.tellg();
-    }
-
-    // reset the original state
-    if (curr_pos == -1)
-        data_stream.setstate(std::ios::eofbit);
-    else
-        data_stream.clear();
-
-    data_stream.seekg(curr_pos);
-    return val;
 }
 
 bool file_exists(const std::string& name)

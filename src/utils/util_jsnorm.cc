@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -637,7 +637,6 @@ static int PNormDecode(char* src, uint16_t srclen, char* dst, uint16_t dstlen, u
         ptr++;
     }
 
-    //dst = s.output.data;  FIXIT-L dead store; should be?
     *bytes_copied = s.output.len;
 
     return iRet;
@@ -1023,23 +1022,16 @@ static int Unescape_exec(UnescapeState* s, ActionUnsc a, int c, JSState* js)
 
 static int Unescape_scan_fsm(UnescapeState* s, int c, JSState* js)
 {
-    int indexed = 0;
-    int value = 0;
-    int uc;
-    const JSNorm* m = unescape_norm + s->fsm;
-
-    uc = toupper(c);
-
     if (isspace(c))
     {
-        c = uc =' ';
+        c = ' ';
         return(Unescape_exec(s, UNESC_ACT_SPACE, c, js));
     }
 
-    value = valid_chars[uc];
-
-    if (value)
-        indexed = 1;
+    const JSNorm* m = unescape_norm + s->fsm;
+    int uc = toupper(c);
+    int value = valid_chars[uc];
+    int indexed = value ? 1 : 0;
 
     do
     {
@@ -1212,16 +1204,14 @@ static int JSNorm_exec(JSNormState* s, ActionJSNorm a, int c, const char* src, u
 static int JSNorm_scan_fsm(JSNormState* s, int c, const char* src, uint16_t srclen, const char** ptr,
     JSState* js)
 {
-    char uc;
-    const JSNorm* m = javascript_norm + s->fsm;
-
-    uc = toupper(c);
-
     if (isspace(c))
     {
-        c = uc =' ';
+        c = ' ';
         return(JSNorm_exec(s, ACT_SPACE, c, src, srclen, ptr, js));
     }
+
+    const JSNorm* m = javascript_norm + s->fsm;
+    int uc = toupper(c);
 
     do
     {
@@ -1277,59 +1267,10 @@ int JSNormalizeDecode(const char* src, uint16_t srclen, char* dst, uint16_t dest
         (*ptr)++;
     }
 
-    //dst = s.dest.data; FIXIT-L dead store; should be?
     *bytes_copied = s.dest.len;
 
     return RET_OK;
 }
-
-/*
-int main(int argc, char *argv[])
-{
-    FILE *iFile = NULL;
-    FILE *oFile = NULL;
-    char input[65535];
-    char output[65535];
-    int bytes_copied = 0;
-    int bytes_read = 0;
-    int ret = 0;
-    char *ptr = input;
-    JSState js;
-
-    if( argc == 3 )
-    {
-        iFile = fopen(argv[1], "r");
-        oFile = fopen(argv[2], "w");
-    }
-
-    if(!oFile || !iFile)
-    {
-        fprintf(stderr, "usage: %s <in_file> <out_file>\n", argv[0]);
-        return -1;
-    }
-
-    bytes_read = fread(input, 1, sizeof(input), iFile);
-    js.allowed_spaces = 3;
-    js.allowed_levels = 1;
-    js.alerts = 0;
-
-    ret = JSNormalizeDecode(input, bytes_read, output, sizeof(output),&ptr, &bytes_copied, &js, NULL);
-    if( ret == RET_OK)
-    {
-        fwrite( output, 1, bytes_copied, oFile);
-        printf("OUTPUT IS %.*s\n",bytes_copied,output);
-        printf("REMAINING is %s\n",ptr);
-        if( js.alerts & ALERT_MIXED_ENCODINGS )
-            printf("ALERT MIXED ENCODINGS\n");
-        if(js.alerts & ALERT_SPACES_EXCEEDED)
-            printf("ALERT SPACES EXCEEDED\n");
-        if(js.alerts & ALERT_LEVELS_EXCEEDED)
-            printf("ALERT LEVELS EXCEEDED\n");
-    }
-    fclose(iFile);
-    fclose(oFile);
-    return 0;
-
-}*/
-
 }
+
+

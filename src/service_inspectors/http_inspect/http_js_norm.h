@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,8 +25,7 @@
 #include "search_engines/search_tool.h"
 
 #include "http_field.h"
-#include "http_event_gen.h"
-#include "http_infractions.h"
+#include "http_event.h"
 #include "http_module.h"
 
 //-------------------------------------------------------------------------

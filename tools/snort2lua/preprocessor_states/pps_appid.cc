@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -68,23 +68,15 @@ bool AppId::convert(std::istringstream& data_stream)
         {
             tmpval = parse_int_option("memcap", arg_stream, false);
         }
-        else if (keyword == "debug")
+        else if (keyword == "list_odp_detectors")
         {
             std::string val;
             if (!(arg_stream >> val))
-                data_api.failed_conversion(arg_stream,  "appid: debug <missing_arg>");
+                data_api.failed_conversion(arg_stream,  "appid: list_odp_detectors <missing_arg>");
             else if (val == "yes")
-                table_api.add_option("debug", true);
+                table_api.add_option("list_odp_detectors", true);
             else
-                table_api.add_option("debug", false);
-        }
-        else if (keyword == "dump_ports")
-        {
-            table_api.add_option("dump_ports", true);
-        }
-        else if (keyword == "instance_id")
-        {
-            tmpval = parse_int_option("instance_id", arg_stream, false);
+                table_api.add_option("list_odp_detectors", false);
         }
         else if (keyword == "app_stats_filename")
         {
@@ -106,10 +98,6 @@ bool AppId::convert(std::istringstream& data_stream)
         else if (keyword == "app_stats_rollover_size")
         {
             tmpval = parse_int_option("app_stats_rollover_size", arg_stream, false);
-        }
-        else if (keyword == "app_stats_rollover_time")
-        {
-            tmpval = parse_int_option("app_stats_rollover_time", arg_stream, false);
         }
         else if (keyword == "app_detector_dir")
         {
@@ -134,6 +122,19 @@ bool AppId::convert(std::istringstream& data_stream)
             else
             {
                 data_api.failed_conversion(arg_stream,  "appid: thirdparty_appid_dir <missing_arg>");
+                tmpval = false;
+            }
+        }
+        else if (keyword == "tp_config_path")
+        {
+            std::string file_name;
+            if (arg_stream >> file_name)
+            {
+                tmpval = table_api.add_option("tp_appid_config", file_name);
+            }
+            else
+            {
+                data_api.failed_conversion(arg_stream,  "appid: tp_config_path <missing_arg>");
                 tmpval = false;
             }
         }

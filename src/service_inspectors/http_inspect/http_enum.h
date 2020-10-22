@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,53 +26,53 @@ namespace HttpEnums
 {
 static const int MAX_OCTETS = 63780;
 static const int GZIP_BLOCK_SIZE = 2048;
-static const int FINAL_GZIP_BLOCK_SIZE = 2304; // compromise value, too big causes gzip overruns
-                                               // too small leaves too many little end sections
+static const int MAX_SECTION_STRETCH = 1460;
+
 static const uint32_t HTTP_GID = 119;
 static const int GZIP_WINDOW_BITS = 31;
 static const int DEFLATE_WINDOW_BITS = 15;
 static const int MAX_FIELD_NAME_LENGTH = 100;
+// Plan to support max 8 xff headers
+static const uint8_t MAX_XFF_HEADERS = 8;
+static const uint8_t MAX_CUSTOM_HEADERS = MAX_XFF_HEADERS;
 
 // This can grow into a bitmap for the get_buf() form parameter
 static const uint64_t FORM_REQUEST = 0x1;
 
-// Field status codes for when no valid value is present in length or integer value. Positive
-// values are actual length or field value.
-enum StatusCode { STAT_NO_SOURCE=-16, STAT_NOT_CONFIGURED=-15, STAT_NOT_COMPUTE=-14,
-    STAT_PROBLEMATIC=-12, STAT_NOT_PRESENT=-11, STAT_EMPTY_STRING=0, STAT_OTHER=1 };
-
-// Message originator--client or server
-enum SourceId { SRC__NOT_COMPUTE=-14, SRC_CLIENT=0, SRC_SERVER=1 };
-
 // Type of message section
 enum SectionType { SEC_DISCARD = -19, SEC_ABORT = -18, SEC__NOT_COMPUTE=-14, SEC__NOT_PRESENT=-11,
     SEC_REQUEST = 2, SEC_STATUS, SEC_HEADER, SEC_BODY_CL, SEC_BODY_CHUNK, SEC_TRAILER,
-    SEC_BODY_OLD };
+    SEC_BODY_OLD, SEC_BODY_H2 };
 
 enum DetectionStatus { DET_REACTIVATING = 1, DET_ON, DET_DEACTIVATING, DET_OFF };
 
 // Message buffers available to clients
 // This enum must remain synchronized with HttpApi::classic_buffer_names[]
 enum HTTP_BUFFER { HTTP_BUFFER_CLIENT_BODY = 1, HTTP_BUFFER_COOKIE, HTTP_BUFFER_HEADER,
-    HTTP_BUFFER_METHOD, HTTP_BUFFER_RAW_BODY, HTTP_BUFFER_RAW_COOKIE, HTTP_BUFFER_RAW_HEADER,
-    HTTP_BUFFER_RAW_REQUEST, HTTP_BUFFER_RAW_STATUS, HTTP_BUFFER_RAW_TRAILER, HTTP_BUFFER_RAW_URI,
-    HTTP_BUFFER_STAT_CODE, HTTP_BUFFER_STAT_MSG, HTTP_BUFFER_TRAILER, HTTP_BUFFER_TRUE_IP,
-    HTTP_BUFFER_URI, HTTP_BUFFER_VERSION, HTTP_BUFFER_MAX };
+    HTTP_BUFFER_METHOD, HTTP_BUFFER_PARAM, HTTP_BUFFER_RAW_BODY, HTTP_BUFFER_RAW_COOKIE,
+    HTTP_BUFFER_RAW_HEADER, HTTP_BUFFER_RAW_REQUEST, HTTP_BUFFER_RAW_STATUS,
+    HTTP_BUFFER_RAW_TRAILER, HTTP_BUFFER_RAW_URI, HTTP_BUFFER_STAT_CODE, HTTP_BUFFER_STAT_MSG,
+    HTTP_BUFFER_TRAILER, HTTP_BUFFER_TRUE_IP, HTTP_BUFFER_URI, HTTP_BUFFER_VERSION,
+    HTTP_BUFFER_MAX };
 
 // Peg counts
 // This enum must remain synchronized with HttpModule::peg_names[] in http_tables.cc
 enum PEG_COUNT { PEG_FLOW = 0, PEG_SCAN, PEG_REASSEMBLE, PEG_INSPECT, PEG_REQUEST, PEG_RESPONSE,
     PEG_GET, PEG_HEAD, PEG_POST, PEG_PUT, PEG_DELETE, PEG_CONNECT, PEG_OPTIONS, PEG_TRACE,
     PEG_OTHER_METHOD, PEG_REQUEST_BODY, PEG_CHUNKED, PEG_URI_NORM, PEG_URI_PATH, PEG_URI_CODING,
-    PEG_CONCURRENT_SESSIONS, PEG_MAX_CONCURRENT_SESSIONS, PEG_COUNT_MAX };
+    PEG_CONCURRENT_SESSIONS, PEG_MAX_CONCURRENT_SESSIONS, PEG_DETAINED, PEG_SCRIPT_DETECTION,
+    PEG_PARTIAL_INSPECT, PEG_EXCESS_PARAMS, PEG_PARAMS, PEG_CUTOVERS, PEG_SSL_SEARCH_ABND_EARLY,
+    PEG_COUNT_MAX };
 
 // Result of scanning by splitter
-enum ScanResult { SCAN_NOT_FOUND, SCAN_FOUND, SCAN_FOUND_PIECE, SCAN_DISCARD, SCAN_DISCARD_PIECE,
-    SCAN_ABORT };
+enum ScanResult { SCAN_NOT_FOUND, SCAN_NOT_FOUND_ACCELERATE, SCAN_FOUND, SCAN_FOUND_PIECE,
+    SCAN_DISCARD, SCAN_DISCARD_PIECE, SCAN_ABORT };
 
 // State machine for chunk parsing
 enum ChunkState { CHUNK_NEWLINES, CHUNK_ZEROS, CHUNK_LEADING_WS, CHUNK_NUMBER, CHUNK_TRAILING_WS,
     CHUNK_OPTIONS, CHUNK_HCRLF, CHUNK_DATA, CHUNK_DCRLF1, CHUNK_DCRLF2, CHUNK_BAD };
+
+enum AcceleratedBlocking { AB_DETAIN, AB_INSPECT, AB_NONE };
 
 // List of possible HTTP versions.
 enum VersionId { VERS__NO_SOURCE=-16, VERS__NOT_COMPUTE=-14, VERS__PROBLEMATIC=-12,
@@ -105,7 +105,7 @@ enum UriType { URI__NOT_COMPUTE=-14, URI__PROBLEMATIC=-12, URI_ASTERISK = 2, URI
 enum CompressId { CMP_NONE=2, CMP_GZIP, CMP_DEFLATE };
 
 // Message section in which an IPS option provides the buffer
-enum InspectSection { IS_NONE, IS_DETECTION, IS_BODY, IS_TRAILER };
+enum InspectSection { IS_NONE, IS_HEADER, IS_FLEX_HEADER, IS_FIRST_BODY, IS_BODY, IS_TRAILER };
 
 // Part of the URI to be provided
 enum UriComponent { UC_SCHEME = 1, UC_HOST, UC_PORT, UC_PATH, UC_QUERY, UC_FRAGMENT };
@@ -123,7 +123,7 @@ enum HeaderId { HEAD__NOT_COMPUTE=-14, HEAD__PROBLEMATIC=-12, HEAD__NOT_PRESENT=
     HEAD_CONTENT_LENGTH, HEAD_CONTENT_LOCATION, HEAD_CONTENT_MD5, HEAD_CONTENT_RANGE,
     HEAD_CONTENT_TYPE, HEAD_EXPIRES, HEAD_LAST_MODIFIED, HEAD_X_FORWARDED_FOR, HEAD_TRUE_CLIENT_IP,
     HEAD_X_WORKING_WITH, HEAD_CONTENT_TRANSFER_ENCODING, HEAD_MIME_VERSION, HEAD_PROXY_AGENT,
-    HEAD__MAX_VALUE };
+    HEAD_CONTENT_DISPOSITION, HEAD__MAX_VALUE };
 
 // All the infractions we might find while parsing and analyzing a message
 enum Infraction
@@ -215,7 +215,7 @@ enum Infraction
     INF_PDF_UNSUP_COMP_TYPE,
     INF_PDF_CASC_COMP,
     INF_PDF_PARSE_FAILURE,
-    INF_PDF_SWF_OVERRUN,
+    INF_FILE_DECOMPR_OVERRUN,
     INF_BAD_CHAR_IN_HEADER_NAME,
     INF_HEADER_WRAPPING,
     INF_CHUNK_BAD_SEP,
@@ -233,6 +233,16 @@ enum Infraction
     INF_VERSION_NOT_UPPERCASE,
     INF_CHUNK_LEADING_WS,
     INF_BAD_HEADER_WHITESPACE,
+    INF_H2_NON_IDENTITY_TE,
+    INF_H2_DATA_OVERRUNS_CL,
+    INF_H2_DATA_UNDERRUNS_CL,
+    INF_CONNECT_REQUEST_BODY,
+    INF_EARLY_C2S_TRAFFIC_AFTER_CONNECT,
+    INF_200_CONNECT_RESP_WITH_CL,
+    INF_200_CONNECT_RESP_WITH_TE,
+    INF_100_CONNECT_RESP,
+    INF_EARLY_CONNECT_RESPONSE,
+    INF_MALFORMED_CD_FILENAME,
     INF__MAX_VALUE
 };
 
@@ -284,7 +294,7 @@ enum EventSid
     EVENT_UNESCAPED_SPACE_URI,
     EVENT_PIPELINE_MAX,
 
-    EVENT_ANOM_SERVER = 101,
+    EVENT_OBSOLETE_ANOM_SERVER = 101,      // Previously used, do not reuse this number
     EVENT_INVALID_STATCODE,
     EVENT_UNUSED_1,
     EVENT_UTF_NORM_FAIL,
@@ -330,7 +340,7 @@ enum EventSid
     EVENT_UNKNOWN_ENCODING,
     EVENT_STACKED_ENCODINGS,
     EVENT_RESPONSE_WO_REQUEST,
-    EVENT_PDF_SWF_OVERRUN,
+    EVENT_FILE_DECOMPR_OVERRUN,
     EVENT_BAD_CHAR_IN_HEADER_NAME,         // 230
     EVENT_BAD_CONTENT_LENGTH,
     EVENT_HEADER_WRAPPING,
@@ -349,7 +359,18 @@ enum EventSid
     EVENT_206_WITHOUT_RANGE,
     EVENT_VERSION_NOT_UPPERCASE,
     EVENT_BAD_HEADER_WHITESPACE,
-    EVENT_GZIP_EARLY_END,                  // 248
+    EVENT_GZIP_EARLY_END,
+    EVENT_EXCESS_REPEAT_PARAMS,
+    EVENT_H2_NON_IDENTITY_TE,              // 250
+    EVENT_H2_DATA_OVERRUNS_CL,
+    EVENT_H2_DATA_UNDERRUNS_CL,
+    EVENT_CONNECT_REQUEST_BODY,
+    EVENT_EARLY_C2S_TRAFFIC_AFTER_CONNECT,
+    EVENT_200_CONNECT_RESP_WITH_CL,
+    EVENT_200_CONNECT_RESP_WITH_TE,
+    EVENT_100_CONNECT_RESP,
+    EVENT_EARLY_CONNECT_RESPONSE,          // 258
+    EVENT_MALFORMED_CD_FILENAME,
     EVENT__MAX_VALUE
 };
 
@@ -363,6 +384,9 @@ extern const bool is_sp_tab_cr_lf_vt_ff[256];
 extern const bool is_sp_tab_quote_dquote[256];
 extern const bool is_print_char[256]; // printable includes SP, tab, CR, LF
 extern const bool is_sp_comma[256];
+
+enum H2BodyState { H2_BODY_NOT_COMPLETE, H2_BODY_COMPLETE, H2_BODY_COMPLETE_EXPECT_TRAILERS };
+
 } // end namespace HttpEnums
 
 #endif

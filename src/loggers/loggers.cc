@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@ extern const BaseApi* alert_fast[];
 extern const BaseApi* alert_full[];
 extern const BaseApi* alert_json[];
 extern const BaseApi* alert_syslog[];
+extern const BaseApi* alert_talos[];
 extern const BaseApi* alert_unixsock[];
 extern const BaseApi* log_hext[];
 extern const BaseApi* log_pcap[];
@@ -57,6 +58,7 @@ void load_loggers()
     PluginManager::load_plugins(alert_full);
     PluginManager::load_plugins(alert_json);
     PluginManager::load_plugins(alert_syslog);
+    PluginManager::load_plugins(alert_talos);
     PluginManager::load_plugins(alert_unixsock);
 
     // loggers

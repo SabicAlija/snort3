@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -86,7 +86,7 @@ bool ServiceModule::set(const char*, Value& v, SnortConfig*)
             return true;
         }
     }
-    services.push_back(svc);
+    services.emplace_back(svc);
 
     return true;
 }

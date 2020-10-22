@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -34,6 +34,7 @@ enum class PruneReason : uint8_t
     PREEMPTIVE,
     MEMCAP,
     HA,
+    STALE,
     NONE,
     MAX
 };
@@ -44,7 +45,14 @@ struct PruneStats
 
     PegCount prunes[static_cast<reason_t>(PruneReason::MAX)] { };
 
-    PegCount get_total() const;
+    PegCount get_total() const
+    {
+        PegCount total = 0;
+        for ( reason_t i = 0; i < static_cast<reason_t>(PruneReason::NONE); ++i )
+            total += prunes[i];
+
+        return total;
+    }
 
     PegCount& get(PruneReason reason)
     { return prunes[static_cast<reason_t>(reason)]; }
@@ -56,14 +64,38 @@ struct PruneStats
     { ++get(reason); }
 };
 
-inline PegCount PruneStats::get_total() const
+enum class FlowDeleteState : uint8_t
 {
-    PegCount total = 0;
-    for ( reason_t i = 0; i < static_cast<reason_t>(PruneReason::NONE); ++i )
-        total += prunes[i];
+    FREELIST,
+    ALLOWED,
+    OFFLOADED,
+    BLOCKED,
+    MAX
+};
 
-    return total;
-}
+struct FlowDeleteStats
+{
+    using state_t = std::underlying_type<FlowDeleteState>::type;
+
+    PegCount deletes[static_cast<state_t>(FlowDeleteState::MAX)] { };
+
+    PegCount get_total() const
+    {
+        PegCount total = 0;
+        for ( state_t i = 0; i < static_cast<state_t>(FlowDeleteState::MAX); ++i )
+            total += deletes[i];
+
+        return total;
+    }
+    PegCount& get(FlowDeleteState state)
+    { return deletes[static_cast<state_t>(state)]; }
+
+    const PegCount& get(FlowDeleteState state) const
+    { return deletes[static_cast<state_t>(state)]; }
+
+    void update(FlowDeleteState state)
+    { ++get(state); }
+};
 
 #endif
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,10 +29,12 @@
 #include <cassert>
 
 #include "detection/pattern_match_data.h"
+#include "detection/treenodes.h"
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
+#include "helpers/hyper_scratch_allocator.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
 #include "profiler/profiler.h"
@@ -42,13 +44,14 @@ using namespace snort;
 #define s_name "regex"
 
 #define s_help \
-    "rule option for matching payload data with hyperscan regex"
+    "rule option for matching payload data with hyperscan regex; uses pcre syntax"
 
 struct RegexConfig
 {
     hs_database_t* db;
     std::string re;
     PatternMatchData pmd;
+    bool pcre_upgrade;
 
     RegexConfig()
     { reset(); }
@@ -58,22 +61,11 @@ struct RegexConfig
         memset(&pmd, 0, sizeof(pmd));
         re.clear();
         db = nullptr;
+        pcre_upgrade = false;
     }
 };
 
-// we need to update scratch in the main thread as each pattern is processed
-// and then clone to thread specific after all rules are loaded.  s_scratch is
-// a prototype that is large enough for all uses.
-
-// FIXIT-L s_scratch persists for the lifetime of the program.  it is
-// modeled off 2X where, due to so rule processing at startup, it is necessary
-// to monotonically grow the ovector.  however, we should be able to free
-// s_scratch after cloning since so rules are now parsed the same as text
-// rules.
-
-static hs_scratch_t* s_scratch = nullptr;
-static unsigned scratch_index;
-static THREAD_LOCAL unsigned s_to = 0;
+static HyperScratchAllocator* scratcher = nullptr;
 static THREAD_LOCAL ProfileStats regex_perf_stats;
 
 //-------------------------------------------------------------------------
@@ -111,12 +103,9 @@ RegexOption::RegexOption(const RegexConfig& c) :
 {
     config = c;
 
-    if ( /*hs_error_t err =*/ hs_alloc_scratch(config.db, &s_scratch) )
-    {
-        // FIXIT-L why is this failing but everything is working?
-        //ParseError("can't initialize regex for '%s' (%d) %p",
-        //    config.re.c_str(), err, s_scratch);
-    }
+    if ( !scratcher->allocate(config.db) )
+        ParseError("can't allocate scratch for regex '%s'", config.re.c_str());
+
     config.pmd.pattern_buf = config.re.c_str();
     config.pmd.pattern_size = config.re.size();
 
@@ -132,41 +121,54 @@ RegexOption::~RegexOption()
 
 uint32_t RegexOption::hash() const
 {
-    uint32_t a = config.pmd.flags, b = config.pmd.mpse_flags, c = 0;
+    uint32_t a = config.pmd.flags;
+    uint32_t b = config.pmd.mpse_flags;
+    uint32_t c = config.pmd.pm_type;
+
+    mix(a, b, c);
+    a += IpsOption::hash();
+
     mix_str(a, b, c, config.re.c_str());
-    mix_str(a, b, c, get_name());
     finalize(a, b, c);
+
     return c;
 }
 
-// see ContentOption::operator==()
 bool RegexOption::operator==(const IpsOption& ips) const
 {
-#if 0
     if ( !IpsOption::operator==(ips) )
         return false;
 
-    RegexOption& rhs = (RegexOption&)ips;
+    const RegexOption& rhs = (const RegexOption&)ips;
 
     if ( config.re == rhs.config.re and
-        config.pmd.flags == rhs.config.pmd.flags and
-        config.pmd.mpse_flags == rhs.config.pmd.mpse_flags )
+         config.pmd.pm_type == rhs.config.pmd.pm_type and
+         config.pmd.flags == rhs.config.pmd.flags and
+         config.pmd.mpse_flags == rhs.config.pmd.mpse_flags )
         return true;
-#endif
-    return this == &ips;
+
+    return false;
 }
+
+struct ScanContext
+{
+    unsigned index;
+    bool found = false;
+};
 
 static int hs_match(
     unsigned int /*id*/, unsigned long long /*from*/, unsigned long long to,
-    unsigned int /*flags*/, void* /*context*/)
+    unsigned int /*flags*/, void* context)
 {
-    s_to = (unsigned)to;
-    return 1;  // stop search
+    ScanContext* scan = (ScanContext*)context;
+    scan->index = (unsigned)to;
+    scan->found = true;
+    return 1;
 }
 
 IpsOption::EvalStatus RegexOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(regex_perf_stats);
+    RuleProfile profile(regex_perf_stats);
 
     unsigned pos = c.get_delta();
 
@@ -176,27 +178,24 @@ IpsOption::EvalStatus RegexOption::eval(Cursor& c, Packet*)
     if ( pos > c.size() )
         return NO_MATCH;
 
-    hs_scratch_t *ss = (hs_scratch_t *) SnortConfig::get_conf()->state[get_instance_id()][scratch_index];
-
-    s_to = 0;
+    ScanContext scan;
 
     hs_error_t stat = hs_scan(
         config.db, (const char*)c.buffer()+pos, c.size()-pos, 0,
-        ss, hs_match, nullptr);
+        scratcher->get(), hs_match, &scan);
 
-    if ( s_to and stat == HS_SCAN_TERMINATED )
+    if ( scan.found and stat == HS_SCAN_TERMINATED )
     {
-        c.set_pos(s_to);
-        c.set_delta(s_to);
+        scan.index += pos;
+        c.set_pos(scan.index);
+        c.set_delta(scan.index);
         return MATCH;
     }
     return NO_MATCH;
 }
 
 bool RegexOption::retry(Cursor&)
-{
-    return !is_relative();
-}
+{ return !is_relative(); }
 
 //-------------------------------------------------------------------------
 // module
@@ -229,10 +228,8 @@ class RegexModule : public Module
 {
 public:
     RegexModule() : Module(s_name, s_help, s_params)
-    {
-        scratch_index = SnortConfig::request_scratch(
-            RegexModule::scratch_setup, RegexModule::scratch_cleanup);
-    }
+    { scratcher = new HyperScratchAllocator; }
+
     ~RegexModule() override;
 
     bool begin(const char*, int, SnortConfig*) override;
@@ -253,21 +250,109 @@ public:
 
 private:
     RegexConfig config;
-    static void scratch_setup(SnortConfig* sc);
-    static void scratch_cleanup(SnortConfig* sc);
+    bool convert_pcre_to_regex_form();
 };
 
 RegexModule::~RegexModule()
 {
     if ( config.db )
         hs_free_database(config.db);
+
+    delete scratcher;
 }
 
-bool RegexModule::begin(const char*, int, SnortConfig*)
+bool RegexModule::begin(const char* name, int, SnortConfig*)
 {
     config.reset();
-    config.pmd.flags |= PatternMatchData::NO_FP;
     config.pmd.mpse_flags |= HS_FLAG_SINGLEMATCH;
+
+    if ( strcmp(name, "pcre") == 0 )
+        config.pcre_upgrade = true;
+
+    return true;
+}
+
+// The regex string is in pcre syntax so it must be scrubbed to remove
+// two characters from  the front; an extra '"' and the '/' and also the same
+// two characters from the end of the string as well as any pcre modifier flags
+// included in the expression.  The modifier flags are checked to set the
+// corresponding hyperscan regex engine flags.
+bool RegexModule::convert_pcre_to_regex_form()
+{
+    // we get string with quotes so length is at least 3
+    // start with a bang:  ! "/regex/smi"
+    if ( config.re[0] == '!' )
+    {
+        if ( !config.pcre_upgrade )
+            ParseError("regex does not (yet) support negation");
+        return false;
+    }
+
+    // remove quotes: "/regex/smi" -> /regex/smi
+    config.re.erase(0, 1);
+    config.re.erase(config.re.length() - 1, 1);
+
+    // remove leading slash: /regex/smi -> regex/smi
+    size_t len = config.re.length();
+
+    if ( len < 3 or config.re[0] != '/' )
+    {
+        ParseError("regex uses pcre syntax");
+        return false;
+    }
+    config.re.erase(0, 1);
+
+    // remove trailing slash: regex/smi -> regexsmi
+    size_t re_end = config.re.rfind("/");
+
+    if ( re_end == std::string::npos )
+    {
+        ParseError("regex uses pcre syntax");
+        return false;
+    }
+    config.re.erase(re_end, 1);
+
+    // capture and remove optional modifiers: regex/smi -> regex, smi
+    std::string modifiers;
+    len = config.re.length() - re_end;
+
+    if ( len > 0 )
+    {
+        modifiers = config.re.substr(re_end, len);
+        config.re.erase(re_end, len);
+    }
+
+    // finally, process the modifiers
+    for ( char& c : modifiers )
+    {
+        switch ( c )
+        {
+        case 'i':
+            config.pmd.mpse_flags |= HS_FLAG_CASELESS;
+            config.pmd.set_no_case();
+            break;
+
+        case 'm':
+            config.pmd.mpse_flags |= HS_FLAG_MULTILINE;
+            break;
+
+        case 's':
+            config.pmd.mpse_flags |= HS_FLAG_DOTALL;
+            break;
+
+        case 'O':
+            if ( !config.pcre_upgrade )
+                ParseWarning(WARN_RULES, "regex does not support override, ignored");
+            break;
+
+        case 'R':
+            config.pmd.set_relative();
+            break;
+
+        default:
+            return false;
+        }
+    }
     return true;
 }
 
@@ -276,29 +361,17 @@ bool RegexModule::set(const char*, Value& v, SnortConfig*)
     if ( v.is("~re") )
     {
         config.re = v.get_string();
-        // remove quotes
-        config.re.erase(0, 1);
-        config.re.erase(config.re.length()-1, 1);
+        return convert_pcre_to_regex_form();
     }
-    else if ( v.is("dotall") )
-        config.pmd.mpse_flags |= HS_FLAG_DOTALL;
-
     else if ( v.is("fast_pattern") )
-    {
-        config.pmd.flags &= ~PatternMatchData::NO_FP;
-        config.pmd.flags |= PatternMatchData::FAST_PAT;
-    }
-    else if ( v.is("multiline") )
-        config.pmd.mpse_flags |= HS_FLAG_MULTILINE;
+        config.pmd.set_fast_pattern();
+
 
     else if ( v.is("nocase") )
     {
         config.pmd.mpse_flags |= HS_FLAG_CASELESS;
         config.pmd.set_no_case();
     }
-    else if ( v.is("relative") )
-        config.pmd.set_relative();
-
     else
         return false;
 
@@ -313,43 +386,21 @@ bool RegexModule::end(const char*, int, SnortConfig*)
         return false;
     }
 
+    if ( !config.pmd.is_fast_pattern() )
+        config.pmd.flags |= PatternMatchData::NO_FP;
+
     hs_compile_error_t* err = nullptr;
 
     if ( hs_compile(config.re.c_str(), config.pmd.mpse_flags, HS_MODE_BLOCK,
         nullptr, &config.db, &err) or !config.db )
     {
-        ParseError("can't compile regex '%s'", config.re.c_str());
+        // gracefully fall back to pcre upon upgrade failure
+        if ( !config.pcre_upgrade )
+            ParseError("can't compile regex '%s'", config.re.c_str());
         hs_free_compile_error(err);
         return false;
     }
     return true;
-}
-
-void RegexModule::scratch_setup(SnortConfig* sc)
-{
-    for ( unsigned i = 0; i < sc->num_slots; ++i )
-    {
-        hs_scratch_t** ss = (hs_scratch_t**) &sc->state[i][scratch_index];
-
-        if ( s_scratch )
-            hs_clone_scratch(s_scratch, ss);
-        else
-            ss = nullptr;
-    }
-}
-
-void RegexModule::scratch_cleanup(SnortConfig* sc)
-{
-    for ( unsigned i = 0; i < sc->num_slots; ++i )
-    {
-        hs_scratch_t* ss = (hs_scratch_t*) sc->state[i][scratch_index];
-
-        if ( ss )
-        {
-            hs_free_scratch(ss);
-            ss = nullptr;
-        }
-    }
 }
 
 //-------------------------------------------------------------------------
@@ -362,24 +413,17 @@ static Module* mod_ctor()
 static void mod_dtor(Module* p)
 { delete p; }
 
-static IpsOption* regex_ctor(Module* m, OptTreeNode*)
+static IpsOption* regex_ctor(Module* m, OptTreeNode* otn)
 {
     RegexModule* mod = (RegexModule*)m;
     RegexConfig c;
     mod->get_data(c);
+    c.pmd.pm_type = otn->sticky_buf;
     return new RegexOption(c);
 }
 
 static void regex_dtor(IpsOption* p)
 { delete p; }
-
-static void regex_pterm(SnortConfig*)
-{
-    if ( s_scratch )
-        hs_free_scratch(s_scratch);
-
-    s_scratch = nullptr;
-}
 
 static const IpsApi regex_api =
 {
@@ -398,7 +442,7 @@ static const IpsApi regex_api =
     OPT_TYPE_DETECTION,
     0, 0,
     nullptr,
-    regex_pterm,
+    nullptr,
     nullptr,
     nullptr,
     regex_ctor,

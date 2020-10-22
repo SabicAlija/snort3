@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,11 +20,13 @@
 #ifndef HTTP_MSG_REQUEST_H
 #define HTTP_MSG_REQUEST_H
 
+#include "http_common.h"
+#include "http_enum.h"
+#include "http_msg_start.h"
+#include "http_query_parser.h"
 #include "http_str_to_code.h"
 #include "http_uri.h"
 #include "http_uri_norm.h"
-#include "http_msg_start.h"
-#include "http_field.h"
 
 //-------------------------------------------------------------------------
 // HttpMsgRequest class
@@ -34,19 +36,22 @@ class HttpMsgRequest : public HttpMsgStart
 {
 public:
     HttpMsgRequest(const uint8_t* buffer, const uint16_t buf_size, HttpFlowData* session_data_,
-        HttpEnums::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+        HttpCommon::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
         const HttpParaList* params_);
-    ~HttpMsgRequest() override { delete uri; }
+    ~HttpMsgRequest() override;
     void gen_events() override;
     void update_flow() override;
+    void publish() override;
     const Field& get_method() { return method; }
     const Field& get_uri();
     const Field& get_uri_norm_classic();
     HttpUri* get_http_uri() { return uri; }
+    ParameterMap& get_query_params();
+    ParameterMap& get_body_params();
 
     static bool is_webdav(HttpEnums::MethodId method)
     {
-        if(method > HttpEnums::MethodId::METH__WEBDAV_LOW and 
+        if(method > HttpEnums::MethodId::METH__WEBDAV_LOW and
            method < HttpEnums::MethodId::METH__WEBDAV_HIGH)
         {
             return true;
@@ -68,6 +73,9 @@ private:
 
     Field method;
     HttpUri* uri = nullptr;
+
+    ParameterMap* query_params = nullptr;
+    ParameterMap* body_params = nullptr;
 };
 
 #endif

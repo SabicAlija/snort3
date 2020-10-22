@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -34,7 +34,7 @@ class Binder
 {
 public:
     enum IncludeType
-    { IT_NONE, IT_FILE, IT_INSPECTION, IT_IPS, IT_NETWORK };
+    { IT_NONE, IT_FILE, IT_INSPECTION, IT_IPS };
 
     typedef std::pair<std::string, IncludeType> IncludeTypePair;
 
@@ -65,6 +65,7 @@ public:
     void add_when_src_net(const std::string&);
     void add_when_dst_net(const std::string&);
     void add_when_port(const std::string&);
+    void add_when_zone(const std::string&);
     void add_when_src_port(const std::string&);
     void add_when_dst_port(const std::string&);
     void set_when_src_zone(const std::string&);
@@ -140,7 +141,7 @@ private:
                           // by either the destructor or user
 
     unsigned priority = PRIORITY_LAST;
-    
+
     int when_ips_policy_id = -1;
     std::string when_service;
     std::string when_role;
@@ -152,8 +153,9 @@ private:
     std::vector<std::string> ports;
     std::vector<std::string> src_ports;
     std::vector<std::string> dst_ports;
-    std::string when_src_zone;
-    std::string when_dst_zone;
+    std::vector<std::string> when_src_zone;
+    std::vector<std::string> when_dst_zone;
+    std::vector<std::string> zones;
 
     std::string use_type;
     std::string use_name;

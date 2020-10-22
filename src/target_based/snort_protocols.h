@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2006-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,7 +40,6 @@ enum SnortProtocols : SnortProtocolId
     SNORT_PROTO_ICMP,
     SNORT_PROTO_TCP,
     SNORT_PROTO_UDP,
-    SNORT_PROTO_USER,
     SNORT_PROTO_FILE,
     SNORT_PROTO_MAX
 };

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,12 +33,12 @@
 #define SNORT_FILE_TYPE_UNKNOWN          UINT16_MAX
 #define SNORT_FILE_TYPE_CONTINUE         0
 
-class FileCapture;
 class FileConfig;
 class FileSegments;
 
 namespace snort
 {
+class FileCapture;
 class FileInspect;
 class Flow;
 
@@ -63,7 +63,6 @@ public:
     std::string sha_to_string(const uint8_t* sha256);
     void set_file_id(uint64_t index);
     uint64_t get_file_id() const;
-    FileVerdict verdict = FILE_VERDICT_UNKNOWN;
 
     // Configuration functions
     void config_file_type(bool enabled);
@@ -76,8 +75,13 @@ public:
     // Preserve the file in memory until it is released
     // The file reserved will be returned and it will be detached from file context/session
     FileCaptureState reserve_file(FileCapture*& dest);
+    int64_t get_max_file_capture_size();
 
     FileState get_file_state() { return file_state; }
+
+    FileVerdict verdict = FILE_VERDICT_UNKNOWN;
+    bool processing_complete = false;
+    struct timeval pending_expire_time = {0, 0};
 
 protected:
     std::string file_name;
@@ -110,15 +114,16 @@ public:
     // Return:
     //    true: continue processing/log/block this file
     //    false: ignore this file
-    bool process(Flow*, const uint8_t* file_data, int data_size, FilePosition, FilePolicyBase*);
-    bool process(Flow*, const uint8_t* file_data, int data_size, uint64_t offset, FilePolicyBase*);
+    bool process(Packet*, const uint8_t* file_data, int data_size, FilePosition, FilePolicyBase*);
+    bool process(Packet*, const uint8_t* file_data, int data_size, uint64_t offset, FilePolicyBase*,
+        FilePosition position=SNORT_FILE_POSITION_UNKNOWN);
     void process_file_type(const uint8_t* file_data, int data_size, FilePosition);
     void process_file_signature_sha256(const uint8_t* file_data, int data_size, FilePosition);
     void update_file_size(int data_size, FilePosition position);
     void stop_file_capture();
     FileCaptureState process_file_capture(const uint8_t* file_data, int data_size, FilePosition);
     void log_file_event(Flow*, FilePolicyBase*);
-    FileVerdict file_signature_lookup(Flow*);
+    FileVerdict file_signature_lookup(Packet*);
 
     void set_signature_state(bool gen_sig);
 
@@ -130,6 +135,8 @@ public:
     static void print_file_data(FILE* fp, const uint8_t* data, int len, int max_depth);
     void print(std::ostream&);
     char* get_UTF8_fname(size_t* converted_len);
+    void set_not_cacheable() { cacheable = false; }
+    bool is_cacheable() { return cacheable; }
 
 private:
     uint64_t processed_bytes = 0;
@@ -138,10 +145,10 @@ private:
     FileSegments* file_segments;
     FileInspect* inspector;
     FileConfig*  config;
+    bool cacheable = true;
 
-    inline int get_data_size_from_depth_limit(FileProcessType type, int data_size);
     inline void finalize_file_type();
-    inline void finish_signature_lookup(Flow*, bool, FilePolicyBase*);
+    inline void finish_signature_lookup(Packet*, bool, FilePolicyBase*);
 };
 }
 #endif

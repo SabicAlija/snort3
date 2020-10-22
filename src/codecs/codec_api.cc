@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -68,6 +68,7 @@ extern const BaseApi* cd_transbridge[];
 extern const BaseApi* cd_udp[];
 extern const BaseApi* cd_user[];
 extern const BaseApi* cd_vlan[];
+extern const BaseApi* cd_vxlan[];
 #endif
 
 void load_codecs()
@@ -110,6 +111,7 @@ void load_codecs()
     PluginManager::load_plugins(cd_udp);
     PluginManager::load_plugins(cd_user);
     PluginManager::load_plugins(cd_vlan);
+    PluginManager::load_plugins(cd_vxlan);
 #endif
 }
 

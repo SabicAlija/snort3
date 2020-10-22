@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,7 +38,7 @@
 
 #define TRACKER_NAME PERF_NAME "_cpu"
 
-using namespace std;
+using namespace snort;
 
 static inline uint64_t get_microseconds(struct timeval t)
 {
@@ -47,7 +47,7 @@ static inline uint64_t get_microseconds(struct timeval t)
 
 CPUTracker::CPUTracker(PerfConfig *perf) : PerfTracker(perf, TRACKER_NAME)
 {
-    formatter->register_section("thread_" + to_string(snort::get_instance_id()));
+    formatter->register_section("thread_" + std::to_string(get_instance_id()));
     formatter->register_field("cpu_user", &user_stat);
     formatter->register_field("cpu_system", &system_stat);
     formatter->register_field("cpu_wall", &wall_stat);
@@ -155,8 +155,7 @@ TEST_CASE("timeval to scalar", "[cpu_tracker]")
     t.tv_usec = 0;
     CHECK(get_microseconds(t) == 0);
 
-    //integer overflow
-    t.tv_sec = 0xFFFFFFFF;
+    t.tv_sec = std::numeric_limits<std::int32_t>::max();
     t.tv_usec = 999999;
     auto ms = get_microseconds(t);
     t2.tv_sec = ms / 1000000;

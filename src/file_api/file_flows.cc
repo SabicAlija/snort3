@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,6 +29,8 @@
 
 #include "file_flows.h"
 
+#include "detection/detection_engine.h"
+#include "log/messages.h"
 #include "main/snort_config.h"
 #include "managers/inspector_manager.h"
 #include "protocols/packet.h"
@@ -36,7 +38,9 @@
 #include "file_cache.h"
 #include "file_config.h"
 #include "file_lib.h"
+#include "file_module.h"
 #include "file_service.h"
+#include "file_stats.h"
 
 using namespace snort;
 
@@ -63,7 +67,7 @@ namespace snort
     }
 }
 
-void FileFlows::handle_retransmit (Packet*)
+void FileFlows::handle_retransmit(Packet* p)
 {
     if (file_policy == nullptr)
         return;
@@ -72,10 +76,10 @@ void FileFlows::handle_retransmit (Packet*)
     if ((file == nullptr) or (file->verdict != FILE_VERDICT_PENDING))
         return;
 
-    FileVerdict verdict = file_policy->signature_lookup(flow, file);
+    FileVerdict verdict = file_policy->signature_lookup(p, file);
     FileCache* file_cache = FileService::get_file_cache();
     if (file_cache)
-        file_cache->apply_verdict(flow, file, verdict, false, file_policy);
+        file_cache->apply_verdict(p, file, verdict, false, file_policy);
     file->log_file_event(flow, file_policy);
 }
 
@@ -93,14 +97,8 @@ FileFlows* FileFlows::get_file_flows(Flow* flow)
     {
         fd = new FileFlows(flow, fi);
         flow->set_flow_data(fd);
-    }
-    else
-        return fd;
-
-    FileConfig* fc = fi->config;
-    if (fc and fd)
-    {
-        fd->set_file_policy(&(fc->get_file_policy()));
+        if (fi->config)
+            fd->set_file_policy(&(fi->config->get_file_policy()));
     }
 
     return fd;
@@ -111,14 +109,22 @@ FilePolicyBase* FileFlows::get_file_policy(Flow* flow)
     FileFlows* fd = (FileFlows*)flow->get_flow_data(FileFlows::file_flow_data_id);
 
     if (fd)
-        return fd->get_file_policy(flow);
+        return fd->get_file_policy();
 
     return nullptr;
 }
 
 void FileFlows::set_current_file_context(FileContext* ctx)
 {
+    // If we finished processing a file context object last time, delete it
+    if (current_context_delete_pending)
+    {
+        delete current_context;
+        current_context_delete_pending = false;
+    }
     current_context = ctx;
+    // Not using current_file_id so clear it
+    current_file_id = 0;
 }
 
 FileContext* FileFlows::get_current_file_context()
@@ -139,6 +145,14 @@ uint64_t FileFlows::get_new_file_instance()
 FileFlows::~FileFlows()
 {
     delete(main_context);
+    if (current_context_delete_pending)
+        delete(current_context);
+
+    // Delete any remaining FileContexts stored on the flow
+    for (auto const& elem : partially_processed_contexts)
+    {
+        delete elem.second;
+    }
 }
 
 FileContext* FileFlows::find_main_file_context(FilePosition pos, FileDirection dir, size_t index)
@@ -159,22 +173,87 @@ FileContext* FileFlows::find_main_file_context(FilePosition pos, FileDirection d
     context->check_policy(flow, dir, file_policy);
 
     if (!index)
+    {
         context->set_file_id(get_new_file_instance());
+        context->set_not_cacheable();
+    }
     else
         context->set_file_id(index);
 
     return context;
 }
 
-FileContext* FileFlows::get_file_context(uint64_t file_id, bool to_create)
+FileContext* FileFlows::get_partially_processed_context(uint64_t file_id)
 {
-    // search for file based on id to support multiple files
-    FileCache* file_cache = FileService::get_file_cache();
-    assert(file_cache);
+    auto elem = partially_processed_contexts.find(file_id);
+    if (elem != partially_processed_contexts.end())
+        return elem->second;
+    return nullptr;
+}
 
-    FileContext* context = file_cache->get_file(flow, file_id, to_create);
-    current_file_id = file_id;
+FileContext* FileFlows::get_file_context(
+    uint64_t file_id, bool to_create, uint64_t multi_file_processing_id)
+{
+    // First check if this file is currently being processed
+    if (!multi_file_processing_id)
+        multi_file_processing_id = file_id;
+    FileContext *context = get_partially_processed_context(multi_file_processing_id);
+
+    // Otherwise check if it has been fully processed and is in the file cache. If the file is not
+    // in the cache, don't add it.
+    if (!context)
+    {
+        FileCache* file_cache = FileService::get_file_cache();
+        assert(file_cache);
+        context = file_cache->get_file(flow, file_id, false);
+    }
+
+    // If we haven't found the context, create it and store it on the file flows object
+    if (!context and to_create)
+    {
+        // If we have reached the max file per flow limit, alert and increment the peg count
+        FileConfig* fc = get_file_config(SnortConfig::get_conf());
+        if (partially_processed_contexts.size() == fc->max_files_per_flow)
+        {
+            file_counts.files_over_flow_limit_not_processed++;
+            events.create_event(EVENT_FILE_DROPPED_OVER_LIMIT);
+        }
+        else
+        {
+            context = new FileContext;
+            partially_processed_contexts[multi_file_processing_id] = context;
+            if (partially_processed_contexts.size() > file_counts.max_concurrent_files_per_flow)
+                file_counts.max_concurrent_files_per_flow = partially_processed_contexts.size();
+        }
+    }
+
     return context;
+}
+
+// Remove a file context from the flow's partially processed store. Don't delete the context
+// yet because detection needs access; pointer is stored in current_context. The file context will
+// be deleted when the next file is processed
+void FileFlows::remove_processed_file_context(uint64_t file_id)
+{
+    FileContext *context = get_partially_processed_context(file_id);
+    partially_processed_contexts.erase(file_id);
+    if (context)
+        current_context_delete_pending = true;
+}
+
+// Remove file context explicitly
+void FileFlows::remove_processed_file_context(uint64_t file_id, uint64_t multi_file_processing_id)
+{
+    if (!multi_file_processing_id)
+        multi_file_processing_id = file_id;
+
+    FileContext* context = get_file_context(file_id, false, multi_file_processing_id);
+    if (context)
+    {
+        set_current_file_context(context);
+        context->processing_complete = true;
+        remove_processed_file_context(multi_file_processing_id);
+    }
 }
 
 /* This function is used to process file that is sent in pieces
@@ -183,20 +262,31 @@ FileContext* FileFlows::get_file_context(uint64_t file_id, bool to_create)
  *    true: continue processing/log/block this file
  *    false: ignore this file
  */
-bool FileFlows::file_process(uint64_t file_id, const uint8_t* file_data,
-    int data_size, uint64_t offset, FileDirection dir)
+bool FileFlows::file_process(Packet* p, uint64_t file_id, const uint8_t* file_data,
+    int data_size, uint64_t offset, FileDirection dir, uint64_t multi_file_processing_id,
+    FilePosition position)
 {
     int64_t file_depth = FileService::get_max_file_depth();
+    bool continue_processing;
+    bool cacheable = file_id or offset;
 
-    if ((file_depth < 0)or (offset > (uint64_t)file_depth))
+    if (!multi_file_processing_id)
+        multi_file_processing_id = file_id;
+
+    if ((file_depth < 0) or (offset > (uint64_t)file_depth))
     {
         return false;
     }
 
-    FileContext* context = get_file_context(file_id, true);
+    FileContext* context = get_file_context(file_id, true, multi_file_processing_id);
 
     if (!context)
         return false;
+
+    if (!cacheable)
+        context->set_not_cacheable();
+
+    set_current_file_context(context);
 
     if (!context->get_processed_bytes())
     {
@@ -204,21 +294,35 @@ bool FileFlows::file_process(uint64_t file_id, const uint8_t* file_data,
         context->set_file_id(file_id);
     }
 
-    if (context->verdict != FILE_VERDICT_UNKNOWN)
+    if ( offset != 0 and context->is_cacheable() and
+        (FileService::get_file_cache()->cached_verdict_lookup(p, context, file_policy) !=
+            FILE_VERDICT_UNKNOWN) )
+    {
+        context->processing_complete = true;
+        remove_processed_file_context(multi_file_processing_id);
+        return false;
+    }
+
+    if (context->processing_complete and context->verdict != FILE_VERDICT_UNKNOWN)
     {
         /*A new file session, but policy might be different*/
         context->check_policy(flow, dir, file_policy);
 
-        if ((context->get_file_sig_sha256())
-            || !context->is_file_signature_enabled())
+        if ((context->get_file_sig_sha256()) || !context->is_file_signature_enabled())
         {
             /* Just check file type and signature */
-            FilePosition position = SNORT_FILE_FULL;
-            return context->process(flow, file_data, data_size, position, file_policy);
+            continue_processing = context->process(p, file_data, data_size, SNORT_FILE_FULL,
+                    file_policy);
+            if (context->processing_complete)
+                remove_processed_file_context(multi_file_processing_id);
+            return continue_processing;
         }
     }
 
-    return context->process(flow, file_data, data_size, offset, file_policy);
+    continue_processing = context->process(p, file_data, data_size, offset, file_policy, position);
+    if (context->processing_complete)
+        remove_processed_file_context(multi_file_processing_id);
+    return continue_processing;
 }
 
 /*
@@ -226,7 +330,7 @@ bool FileFlows::file_process(uint64_t file_id, const uint8_t* file_data,
  *    true: continue processing/log/block this file
  *    false: ignore this file
  */
-bool FileFlows::file_process(const uint8_t* file_data, int data_size,
+bool FileFlows::file_process(Packet* p, const uint8_t* file_data, int data_size,
     FilePosition position, bool upload, size_t file_index)
 {
     FileContext* context;
@@ -243,20 +347,22 @@ bool FileFlows::file_process(const uint8_t* file_data, int data_size,
     set_current_file_context(context);
 
     context->set_signature_state(gen_signature);
-    return context->process(flow, file_data, data_size, position, file_policy);
+    return context->process(p, file_data, data_size, position, file_policy);
 }
 
-void FileFlows::set_file_name(const uint8_t* fname, uint32_t name_size)
+void FileFlows::set_file_name(const uint8_t* fname, uint32_t name_size, uint64_t file_id)
 {
-    FileContext* context = get_current_file_context();
+    FileContext* context;
+    if (file_id)
+        context = get_file_context(file_id, false);
+    else
+        context = get_current_file_context();
     if ( !context )
         return;
 
     if ( !context->is_file_name_set() )
     {
-        if (fname and name_size)
-            context->set_file_name((const char*)fname, name_size);
-
+        context->set_file_name((const char*)fname, name_size);
         context->log_file_event(flow, file_policy);
     }
 }
@@ -291,6 +397,44 @@ bool FileInspect::configure(SnortConfig*)
     }
 
     return true;
+}
+
+static void file_config_show(const FileConfig* fc)
+{
+    const FilePolicy& fp = fc->get_file_policy();
+
+    if ( ConfigLogger::log_flag("enable_type", fp.get_file_type()) )
+        ConfigLogger::log_value("type_depth", fc->file_type_depth);
+
+    if ( ConfigLogger::log_flag("enable_signature", fp.get_file_signature()) )
+        ConfigLogger::log_value("signature_depth", fc->file_signature_depth);
+
+    if ( ConfigLogger::log_flag("block_timeout_lookup", fc->block_timeout_lookup) )
+        ConfigLogger::log_value("block_timeout", fc->file_block_timeout);
+
+    if ( ConfigLogger::log_flag("enable_capture", fp.get_file_capture()) )
+    {
+        ConfigLogger::log_value("capture_memcap", fc->capture_memcap);
+        ConfigLogger::log_value("capture_max_size", fc->capture_max_size);
+        ConfigLogger::log_value("capture_min_size", fc->capture_min_size);
+        ConfigLogger::log_value("capture_block_size", fc->capture_block_size);
+    }
+
+    ConfigLogger::log_value("lookup_timeout", fc->file_lookup_timeout);
+    ConfigLogger::log_value("max_files_cached", fc->max_files_cached);
+    ConfigLogger::log_value("max_files_per_flow", fc->max_files_per_flow);
+    ConfigLogger::log_value("show_data_depth", fc->show_data_depth);
+
+    ConfigLogger::log_flag("trace_type", fc->trace_type);
+    ConfigLogger::log_flag("trace_signature", fc->trace_signature);
+    ConfigLogger::log_flag("trace_stream", fc->trace_stream);
+    ConfigLogger::log_value("verdict_delay", fc->verdict_delay);
+}
+
+void FileInspect::show(const SnortConfig*) const
+{
+    if ( config )
+        file_config_show(config);
 }
 
 static Module* mod_ctor()
@@ -348,4 +492,3 @@ static const InspectApi file_inspect_api =
 };
 
 const BaseApi* sin_file_flow = &file_inspect_api.base;
-

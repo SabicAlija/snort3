@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -24,19 +24,28 @@
 // fast pattern utilities
 #include <vector>
 #include "framework/ips_option.h"
+#include "framework/mpse.h"
+#include "ports/port_group.h"
 
 struct OptFpList;
 struct OptTreeNode;
 
 struct PatternMatchData* get_pmd(OptFpList*, SnortProtocolId, snort::RuleDirection);
-bool is_fast_pattern_only(OptFpList*);
-void validate_fast_pattern(OptTreeNode*);
 
-int flp_trim(const char* p, int plen, const char** buff);
+bool make_fast_pattern_only(const OptFpList*, const PatternMatchData*);
+bool is_fast_pattern_only(const OptTreeNode*, const OptFpList*, snort::Mpse::MpseType);
+
+PmType get_pm_type(snort::CursorActionType);
+
 bool set_fp_content(OptTreeNode*);
 
 std::vector <PatternMatchData*> get_fp_content(
     OptTreeNode*, OptFpList*&, bool srvc, bool only_literals, bool& exclude);
+
+void queue_mpse(snort::Mpse*);
+unsigned compile_mpses(struct snort::SnortConfig*, bool parallel = false);
+
+void validate_services(struct snort::SnortConfig*, OptTreeNode*);
 
 #endif
 

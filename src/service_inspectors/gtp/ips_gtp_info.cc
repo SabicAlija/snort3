@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 
 // gtp_info rule option implementation
 
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
@@ -58,7 +58,7 @@ public:
     EvalStatus eval(Cursor&, Packet*) override;
 
 public:
-    // byte n is for version n (named types can have 
+    // byte n is for version n (named types can have
     // different codes in different versions)
     uint8_t types[MAX_GTP_VERSION_CODE + 1];
 };
@@ -77,15 +77,16 @@ uint32_t GtpInfoOption::hash() const
     uint32_t b = types[1];
     uint32_t c = types[2];
 
-    mix_str(a, b, c, get_name());
-    finalize(a,b,c);
+    mix(a, b, c);
+    a += IpsOption::hash();
 
+    finalize(a,b,c);
     return c;
 }
 
 bool GtpInfoOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const GtpInfoOption& rhs = (const GtpInfoOption&)ips;
@@ -99,7 +100,7 @@ bool GtpInfoOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus GtpInfoOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(gtp_info_prof);
+    RuleProfile profile(gtp_info_prof);
 
     if ( !p or !p->flow )
         return NO_MATCH;
@@ -109,7 +110,7 @@ IpsOption::EvalStatus GtpInfoOption::eval(Cursor& c, Packet* p)
     if ( !gfd or !gfd->ropts.gtp_infoElements )
         return NO_MATCH;
 
-    GTP_Roptions& ropts = gfd->ropts;
+    const GTP_Roptions& ropts = gfd->ropts;
 
     // match the status code
     uint8_t ieType = types[ropts.gtp_version];

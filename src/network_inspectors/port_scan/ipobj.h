@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -62,9 +62,9 @@ struct IPSET
 
    Snort Accepts:
 
-    IP-Address		192.168.1.1
-    IP-Address/MaskBits	192.168.1.0/24
-    IP-Address/Mask		192.168.1.0/255.255.255.0
+    IP-Address          192.168.1.1
+    IP-Address/MaskBits 192.168.1.0/24
+    IP-Address/Mask     192.168.1.0/255.255.255.0
 
    These can all be handled via the CIDR block notation : IP/MaskBits
 
@@ -77,9 +77,7 @@ struct IPSET
 IPSET* ipset_new();
 int ipset_add(IPSET* ipset, snort::SfCidr* ip, void* port, int notflag);
 int ipset_contains(IPSET* ipset, const snort::SfIp* ip, void* port);
-IPSET* ipset_copy(IPSET* ipset);
 void ipset_free(IPSET* ipset);
-int ipset_print(IPSET* ipset);
 
 // helper functions -- all the sets work in host order
 int ipset_parse(IPSET* ipset, const char* ipstr);

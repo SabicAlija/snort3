@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -44,12 +44,12 @@ ServiceDetector::ServiceDetector()
     client = false;
 }
 
-void ServiceDetector::register_appid(AppId appId, unsigned extractsInfo)
+void ServiceDetector::register_appid(AppId appId, unsigned extractsInfo, OdpContext& odp_ctxt)
 {
-    AppInfoTableEntry* pEntry = AppInfoManager::get_instance().get_app_info_entry(appId);
+    AppInfoTableEntry* pEntry = odp_ctxt.get_app_info_mgr().get_app_info_entry(appId);
     if (!pEntry)
     {
-        if ( AppInfoManager::get_instance().configured() )
+        if ( odp_ctxt.get_app_info_mgr().configured() )
         {
             ParseWarning(WARN_RULES,
                 "appid: no entry for %d in appMapping.data; no rule support for this ID.",
@@ -80,17 +80,20 @@ int ServiceDetector::service_inprocess(AppIdSession& asd, const Packet* pkt, App
     return APPID_SUCCESS;
 }
 
-int ServiceDetector::update_service_data(AppIdSession& asd, const Packet* pkt, AppidSessionDirection dir, AppId appId,
-    const char* vendor, const char* version)
+int ServiceDetector::update_service_data(AppIdSession& asd, const Packet* pkt,
+    AppidSessionDirection dir, AppId appId, const char* vendor, const char* version,
+    AppidChangeBits& change_bits, AppIdServiceSubtype* subtype)
 {
     uint16_t port = 0;
     const SfIp* ip = nullptr;
 
     asd.service_detector = this;
-    asd.service.set_vendor(vendor);
-    asd.service.set_version(version);
+    asd.set_service_vendor(vendor, change_bits);
+    asd.set_service_version(version, change_bits);
+    if (subtype)
+        asd.add_service_subtype(*subtype, change_bits);
     asd.set_service_detected();
-    asd.service.set_id(appId);
+    asd.set_service_id(appId, asd.get_odp_ctxt());
 
     if (asd.get_session_flags(APPID_SESSION_IGNORE_HOST))
         return APPID_SUCCESS;
@@ -134,35 +137,25 @@ int ServiceDetector::update_service_data(AppIdSession& asd, const Packet* pkt, A
 
 int ServiceDetector::add_service_consume_subtype(AppIdSession& asd, const Packet* pkt,
     AppidSessionDirection dir, AppId appId, const char* vendor, const char* version,
-    AppIdServiceSubtype* subtype)
+    AppIdServiceSubtype* subtype, AppidChangeBits& change_bits)
 {
-    asd.subtype = subtype;
-    return update_service_data(asd, pkt, dir, appId, vendor, version);
+    return update_service_data(asd, pkt, dir, appId, vendor, version, change_bits, subtype);
 }
 
-int ServiceDetector::add_service(AppIdSession& asd, const Packet* pkt, AppidSessionDirection dir,
-    AppId appId, const char* vendor, const char* version, const AppIdServiceSubtype* subtype)
+int ServiceDetector::add_service(AppidChangeBits& change_bits, AppIdSession& asd,
+    const Packet* pkt, AppidSessionDirection dir, AppId appId, const char* vendor,
+    const char* version, AppIdServiceSubtype* subtype)
 {
     AppIdServiceSubtype* new_subtype = nullptr;
 
     for (; subtype; subtype = subtype->next)
     {
-        AppIdServiceSubtype* tmp_subtype = (AppIdServiceSubtype*)snort_calloc(
-            sizeof(AppIdServiceSubtype));
-        if (subtype->service)
-            tmp_subtype->service = snort_strdup(subtype->service);
-
-        if (subtype->vendor)
-            tmp_subtype->vendor = snort_strdup(subtype->vendor);
-
-        if (subtype->version)
-            tmp_subtype->version = snort_strdup(subtype->version);
+        AppIdServiceSubtype* tmp_subtype = new AppIdServiceSubtype(*subtype);
 
         tmp_subtype->next = new_subtype;
         new_subtype = tmp_subtype;
     }
-    asd.subtype = new_subtype;
-    return update_service_data(asd, pkt, dir, appId, vendor, version);
+    return update_service_data(asd, pkt, dir, appId, vendor, version, change_bits, new_subtype);
 }
 
 int ServiceDetector::incompatible_data(AppIdSession& asd, const Packet* pkt, AppidSessionDirection dir)
@@ -173,41 +166,4 @@ int ServiceDetector::incompatible_data(AppIdSession& asd, const Packet* pkt, App
 int ServiceDetector::fail_service(AppIdSession& asd, const Packet* pkt, AppidSessionDirection dir)
 {
     return static_cast<ServiceDiscovery*>(handler)->fail_service(asd, pkt, dir, this);
-}
-
-void ServiceDetector::initialize_expected_session(AppIdSession& parent, AppIdSession& expected,
-    uint64_t flags, AppidSessionDirection dir)
-{
-    if (dir == APP_ID_FROM_INITIATOR)
-    {
-        expected.set_session_flags(flags |
-            parent.get_session_flags(
-            APPID_SESSION_INITIATOR_CHECKED |
-            APPID_SESSION_INITIATOR_MONITORED |
-            APPID_SESSION_RESPONDER_CHECKED |
-            APPID_SESSION_RESPONDER_MONITORED));
-    }
-    else if (dir == APP_ID_FROM_RESPONDER)
-    {
-        if (parent.get_session_flags(APPID_SESSION_INITIATOR_CHECKED))
-            flags |= APPID_SESSION_RESPONDER_CHECKED;
-
-        if (parent.get_session_flags(APPID_SESSION_INITIATOR_MONITORED))
-            flags |= APPID_SESSION_RESPONDER_MONITORED;
-
-        if (parent.get_session_flags(APPID_SESSION_RESPONDER_CHECKED))
-            flags |= APPID_SESSION_INITIATOR_CHECKED;
-
-        if (parent.get_session_flags(APPID_SESSION_RESPONDER_MONITORED))
-            flags |= APPID_SESSION_INITIATOR_MONITORED;
-    }
-
-    expected.set_session_flags(flags |
-        parent.get_session_flags(
-        APPID_SESSION_SPECIAL_MONITORED |
-        APPID_SESSION_DISCOVER_APP |
-        APPID_SESSION_DISCOVER_USER));
-
-    expected.service_disco_state = APPID_DISCO_STATE_FINISHED;
-    expected.client_disco_state = APPID_DISCO_STATE_FINISHED;
 }

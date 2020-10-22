@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -62,9 +62,9 @@ void AppIdDebug::activate(const uint32_t* ip1, const uint32_t* ip2, uint16_t por
         sport = port1;
         dport = port2;
     }
-    else if (session->common.initiator_port)
+    else if (session->initiator_port)
     {
-        if (session->common.initiator_port == port1)
+        if (session->initiator_port == port1)
         {
             sip = (const ip::snort_in6_addr*)ip1;
             dip = (const ip::snort_in6_addr*)ip2;
@@ -79,7 +79,7 @@ void AppIdDebug::activate(const uint32_t* ip1, const uint32_t* ip2, uint16_t por
             dport = port1;
         }
     }
-    else if (memcmp(session->common.initiator_ip.get_ip6_ptr(),
+    else if (memcmp(session->get_initiator_ip().get_ip6_ptr(),
                 ip1, sizeof(ip::snort_in6_addr)) == 0)
     {
         sip = (const ip::snort_in6_addr*)ip1;
@@ -111,7 +111,7 @@ void AppIdDebug::activate(const Flow *flow, const AppIdSession* session, bool lo
     }
     const FlowKey* key = flow->key;
 
-    // FIXIT-H FlowKey does not yet support different address families for src and dst IPs
+    // FIXIT-E FlowKey does not yet support different address families for src and dst IPs
     // (e.g., IPv4 src and IPv6 dst, or vice-versa). Once it is supported, we need to pass
     // two key->version here to create the proper debug_session string.
     activate(key->ip_l, key->ip_h, key->port_l, key->port_h, (IpProtocol)(key->ip_protocol),

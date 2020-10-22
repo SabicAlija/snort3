@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -39,12 +39,6 @@ StreamUserConfig::StreamUserConfig()
     session_timeout = 60;
 }
 
-static void user_show (StreamUserConfig* pc)
-{
-    LogMessage("Stream user config:\n");
-    LogMessage("    Timeout: %d seconds\n", pc->session_timeout);
-}
-
 //-------------------------------------------------------------------------
 // inspector stuff
 //-------------------------------------------------------------------------
@@ -55,7 +49,7 @@ public:
     StreamUser(StreamUserConfig*);
     ~StreamUser() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
 
     NORETURN_ASSERT void eval(Packet*) override;
 
@@ -73,9 +67,12 @@ StreamUser::~StreamUser()
     delete config;
 }
 
-void StreamUser::show(SnortConfig*)
+void StreamUser::show(const SnortConfig*) const
 {
-    user_show(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_value("session_timeout", config->session_timeout);
 }
 
 NORETURN_ASSERT void StreamUser::eval(Packet*)

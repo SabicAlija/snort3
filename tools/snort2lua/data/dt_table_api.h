@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -58,7 +58,7 @@ class TableApi
 {
 public:
     TableApi() = default;
-    TableApi(TableApi* d, TableDelegation& td) : delegate(d), delegations(td) {}
+    TableApi(TableApi* d, const TableDelegation& td) : delegate(d), delegations(td) {}
     virtual ~TableApi();
 
     void reset_state();
@@ -86,6 +86,9 @@ public:
 
 // open a nested table that does not contain a name --> {...})
     void open_table(bool one_line = false);
+
+// open a table using the syntax name["key"] = {...}
+    void open_associative_table(const char* name, const char* key);
 
 // close the nested table.  go to previous table level
     void close_table();
@@ -147,7 +150,7 @@ private:
     template<typename T>
     bool do_add_option(const std::string& opt_name, const T val, const std::string& s_val);
 
-    template<typename T> 
+    template<typename T>
     void do_append_option(const std::string& opt_name, const T val, const std::string& s_val);
 
     void create_append_data(std::string& fqn, Table*& t);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,7 +31,11 @@
 
 struct BindStats
 {
-    PegCount packets;
+    PegCount new_flows;
+    PegCount service_changes;
+    PegCount assistant_inspectors;
+    PegCount new_standby_flows;
+    PegCount no_match;
     PegCount verdicts[BindUse::BA_MAX];
 };
 
@@ -56,20 +60,22 @@ public:
     PegCount* get_counts() const override;
     snort::ProfileStats* get_profile() const override;
 
-    std::vector<Binding*>& get_data();
+    std::vector<Binding>& get_bindings();
+    std::vector<Binding>& get_policy_bindings();
 
     Usage get_usage() const override
     { return INSPECT; }
 
 private:
-    Binding* work;
-    std::vector<Binding*> bindings;
-    bool unsplit_nets;
-    bool unsplit_ports;
-    unsigned use_name_count;
-    unsigned use_type_count;
+    Binding binding;
+    std::vector<Binding> bindings;
+    std::vector<Binding> policy_bindings;
+    std::string policy_filename;
+    std::string policy_type;
 
-    void add_file(const char* name, const char* type);
+    bool add_policy_file(const char* name, const char* type);
+    void commit_binding();
+    void commit_policy_binding();
 };
 
 #endif

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,7 @@
 
 #include "appid_http_session.h"
 
+#include "memory/memory_cap.h"
 #include "profiler/profiler.h"
 
 #include "app_info_table.h"
@@ -32,46 +33,29 @@
 #include "appid_debug.h"
 #include "appid_session.h"
 #include "detector_plugins/http_url_patterns.h"
-#include "http_xff_fields.h"
-#ifdef ENABLE_APPID_THIRD_PARTY
 #include "tp_lib_handler.h"
-#endif
+#define PORT_MAX 65535
 
 using namespace snort;
 
-static const char* httpFieldName[ NUM_HTTP_FIELDS ] = // for use in debug messages
+AppIdHttpSession::AppIdHttpSession(AppIdSession& asd, uint32_t http2_stream_id)
+    : asd(asd), http2_stream_id(http2_stream_id)
 {
-    "useragent",
-    "host",
-    "referer",
-    "uri",
-    "cookie",
-    "req_body",
-    "content_type",
-    "location",
-    "body",
-};
-
-snort::ProfileStats httpPerfStats;
-
-AppIdHttpSession::AppIdHttpSession(AppIdSession& asd)
-    : asd(asd)
-{
-    http_matchers = HttpPatternMatchers::get_instance();
-
     for ( int i = 0; i < NUM_HTTP_FIELDS; i++)
     {
         meta_offset[i].first = 0;
         meta_offset[i].second = 0;
     }
+    memory::MemoryCap::update_allocations(sizeof(AppIdHttpSession));
 }
 
 AppIdHttpSession::~AppIdHttpSession()
 {
-    delete xff_addr;
-
     for ( int i = 0; i < NUM_METADATA_FIELDS; i++)
         delete meta_data[i];
+    if (tun_dest)
+        delete tun_dest;
+    memory::MemoryCap::update_deallocations(sizeof(AppIdHttpSession));
 }
 
 void AppIdHttpSession::free_chp_matches(ChpMatchDescriptor& cmd, unsigned num_matches)
@@ -81,7 +65,99 @@ void AppIdHttpSession::free_chp_matches(ChpMatchDescriptor& cmd, unsigned num_ma
             cmd.chp_matches[i].clear();
 }
 
-int AppIdHttpSession::initial_chp_sweep(ChpMatchDescriptor& cmd)
+void AppIdHttpSession::set_http_change_bits(AppidChangeBits& change_bits, HttpFieldIds id)
+{
+    switch (id)
+    {
+    case REQ_HOST_FID:
+        change_bits.set(APPID_HOST_BIT);
+        break;
+    case MISC_URL_FID:
+        change_bits.set(APPID_URL_BIT);
+        break;
+    case REQ_AGENT_FID:
+        change_bits.set(APPID_USERAGENT_BIT);
+        break;
+    case MISC_RESP_CODE_FID:
+        change_bits.set(APPID_RESPONSE_BIT);
+        break;
+    case REQ_REFERER_FID:
+        change_bits.set(APPID_REFERER_BIT);
+        break;
+    default:
+        break;
+    }
+}
+
+void AppIdHttpSession::set_tun_dest()
+{
+    assert(meta_data[REQ_URI_FID]);
+    char *host = nullptr, *host_start, *host_end = nullptr, *url_end;
+    char *port_str = nullptr;
+    uint16_t port = 0;
+    int is_IPv6 = 0;
+    char* url = strdup(meta_data[REQ_URI_FID]->c_str());
+    url_end = url + strlen(url) - 1;
+    host_start = url;
+
+    if (url[0] == '[')
+    {
+        is_IPv6 = 1;
+        port_str = strchr(url, ']');
+        if (port_str && port_str < url_end)
+        {
+            if (*(++port_str) != ':')
+            {
+                port_str = nullptr;
+            }
+        }
+    }
+    else if(isdigit(url[0]))
+    {
+        port_str = strrchr(url, ':');
+    }
+
+    if (port_str && port_str < url_end )
+    {
+        host_end = port_str;
+        if (*(++port_str) != '\0')
+        {
+            char *end = NULL;
+            long ret = strtol(port_str, &end, 10);
+            if (end != port_str && *end == '\0' && ret >= 1 && ret <= PORT_MAX)
+            {
+                port = (uint16_t)ret;
+            }
+        }
+    }
+
+    if (port)
+    {
+        if (is_IPv6)
+        {
+            host_start++;
+            host_end--;
+        }
+
+        if (host_start <= host_end)
+        {
+            char tmp = *host_end;
+            *host_end = '\0';
+            host = strdup(host_start);
+            *host_end = tmp;
+        }
+    }
+    if (host)
+    {
+        if(tun_dest)
+            delete tun_dest;
+        tun_dest= new TunnelDest(host, port);
+        free(host);
+    }
+    free(url );
+}
+
+bool AppIdHttpSession::initial_chp_sweep(ChpMatchDescriptor& cmd, HttpPatternMatchers& http_matchers)
 {
     CHPApp* cah = nullptr;
 
@@ -90,14 +166,14 @@ int AppIdHttpSession::initial_chp_sweep(ChpMatchDescriptor& cmd)
         if (cmd.buffer[i] && cmd.length[i])
         {
             cmd.cur_ptype = (HttpFieldIds)i;
-            http_matchers->scan_key_chp(cmd);
+            http_matchers.scan_key_chp(cmd);
         }
     }
 
     if (cmd.match_tally.empty())
     {
         free_chp_matches(cmd, MAX_KEY_PATTERN);
-        return 0;
+        return false;
     }
 
     int longest = 0;
@@ -117,7 +193,7 @@ int AppIdHttpSession::initial_chp_sweep(ChpMatchDescriptor& cmd)
     if ( !cah )
     {
         free_chp_matches(cmd, MAX_KEY_PATTERN);
-        return 0;
+        return false;
     }
 
     /***************************************************************
@@ -132,10 +208,8 @@ int AppIdHttpSession::initial_chp_sweep(ChpMatchDescriptor& cmd)
             && !asd.get_session_flags(APPID_SESSION_SPDY_SESSION))
         {
             asd.clear_session_flags(APPID_SESSION_CHP_INSPECTING);
-#ifdef ENABLE_APPID_THIRD_PARTY
             if (asd.tpsession)
                 asd.tpsession->clear_attr(TP_ATTR_CONTINUE_MONITORING);
-#endif
         }
     }
     chp_candidate = cah->appIdInstance;
@@ -143,7 +217,6 @@ int AppIdHttpSession::initial_chp_sweep(ChpMatchDescriptor& cmd)
     num_matches = cah->num_matches;
     num_scans = cah->num_scans;
 
-#ifdef ENABLE_APPID_THIRD_PARTY
     if (asd.tpsession)
     {
         if ((ptype_scan_counts[RSP_CONTENT_TYPE_FID]))
@@ -161,9 +234,8 @@ int AppIdHttpSession::initial_chp_sweep(ChpMatchDescriptor& cmd)
         else
             asd.tpsession->clear_attr(TP_ATTR_COPY_RESPONSE_BODY);
     }
-#endif
 
-    return 1;
+    return true;
 }
 
 void AppIdHttpSession::init_chp_match_descriptor(ChpMatchDescriptor& cmd)
@@ -184,7 +256,7 @@ void AppIdHttpSession::init_chp_match_descriptor(ChpMatchDescriptor& cmd)
     }
 }
 
-void AppIdHttpSession::process_chp_buffers()
+void AppIdHttpSession::process_chp_buffers(AppidChangeBits& change_bits, HttpPatternMatchers& http_matchers)
 {
     ChpMatchDescriptor cmd;
 
@@ -194,178 +266,208 @@ void AppIdHttpSession::process_chp_buffers()
 
     if ( !chp_candidate )
     {
-        if ( !initial_chp_sweep(cmd) )
+        if ( !initial_chp_sweep(cmd, http_matchers) )
             chp_finished = true; // this is a failure case.
     }
 
-    if ( !chp_finished && chp_candidate )
+    if (chp_finished or !chp_candidate)
+        return;
+
+    char* user = nullptr;
+    char* version = nullptr;
+
+    for (unsigned i = 0; i < NUM_HTTP_FIELDS; i++)
     {
-        char* user = nullptr;
-        char* version = nullptr;
+        if ( !ptype_scan_counts[i] )
+            continue;
 
-        for (unsigned i = 0; i < NUM_HTTP_FIELDS; i++)
+        if ( cmd.buffer[i] && cmd.length[i] )
         {
-            if ( !ptype_scan_counts[i] )
-                continue;
-
-            if ( cmd.buffer[i] && cmd.length[i] )
+            int num_found = 0;
+            cmd.cur_ptype = (HttpFieldIds)i;
+            AppId ret = http_matchers.scan_chp(cmd, &version, &user, &num_found, this, asd.get_odp_ctxt());
+            total_found += num_found;
+            if (!ret || num_found < ptype_req_counts[i])
             {
-                int num_found = 0;
-                cmd.cur_ptype = (HttpFieldIds)i;
-                AppId ret = http_matchers->scan_chp(cmd, &version, &user, &num_found, this,
-                    asd.config->mod_config);
-                total_found += num_found;
-                if (!ret || num_found < ptype_req_counts[i])
+                // No match at all or the required matches for the field was NOT made
+                if (!num_matches)
                 {
-                    // No match at all or the required matches for the field was NOT made
-                    if (!num_matches)
-                    {
-                        // num_matches == 0 means: all must succeed
-                        // give up early
-                        chp_candidate = 0;
-                        break;
-                    }
-                }
-            }
-            else if ( !num_matches )
-            {
-                // num_matches == 0 means: all must succeed  give up early
-                chp_candidate = 0;
-                break;
-            }
-
-            // Decrement the expected scan count toward 0.
-            ptype_scan_counts[i] = 0;
-            num_scans--;
-            // if we have reached the end of the list of scans (which have something to do), then
-            // num_scans == 0
-            if (num_scans == 0)
-            {
-                // we finished the last scan
-                // either the num_matches value was zero and we failed early-on or we need to check
-                // for the min.
-                if (num_matches &&
-                    total_found < num_matches)
-                {
-                    // There was a minimum scans match count (num_matches != 0)
-                    // And we did not reach that minimum
+                    // num_matches == 0 means: all must succeed
+                    // give up early
                     chp_candidate = 0;
                     break;
                 }
-                // All required matches were met.
-                chp_finished = true;
+            }
+        }
+        else if ( !num_matches )
+        {
+            // num_matches == 0 means: all must succeed  give up early
+            chp_candidate = 0;
+            break;
+        }
+
+        // Decrement the expected scan count toward 0.
+        ptype_scan_counts[i] = 0;
+        num_scans--;
+        // if we have reached the end of the list of scans (which have something to do), then
+        // num_scans == 0
+        if (num_scans == 0)
+        {
+            // we finished the last scan
+            // either the num_matches value was zero and we failed early-on or we need to check
+            // for the min.
+            if (num_matches && total_found < num_matches)
+            {
+                // There was a minimum scans match count (num_matches != 0)
+                // And we did not reach that minimum
+                chp_candidate = 0;
                 break;
             }
-        }
-
-        // pass the index of last chp_matcher, not the length the array!
-        free_chp_matches(cmd, NUM_HTTP_FIELDS-1);
-
-        if ( !chp_candidate )
-        {
+            // All required matches were met.
             chp_finished = true;
-            if ( version )
-            {
-                snort_free(version);
-                version = nullptr;
-            }
+            break;
+        }
+    }
 
-            if ( user )
-            {
-                snort_free(user);
-                user = nullptr;
-            }
+    // pass the index of last chp_matcher, not the length the array!
+    free_chp_matches(cmd, NUM_HTTP_FIELDS-1);
 
-            cmd.free_rewrite_buffers();
-            memset(ptype_scan_counts, 0, sizeof(ptype_scan_counts));
-
-            // Make it possible for other detectors to run.
-            skip_simple_detect = false;
-            return;
+    if ( !chp_candidate )
+    {
+        chp_finished = true;
+        if ( version )
+        {
+            snort_free(version);
+            version = nullptr;
         }
 
-        if (chp_candidate && chp_finished)
+        if ( user )
         {
-            AppId chp_final = chp_alt_candidate ? chp_alt_candidate
-                : CHP_APPIDINSTANCE_TO_ID(chp_candidate);
+            snort_free(user);
+            user = nullptr;
+        }
 
+        memset(ptype_scan_counts, 0, sizeof(ptype_scan_counts));
+
+        // Make it possible for other detectors to run.
+        skip_simple_detect = false;
+        return;
+    }
+
+    if (chp_finished)
+    {
+        AppId chp_final = chp_alt_candidate ? chp_alt_candidate
+            : CHP_APPIDINSTANCE_TO_ID(chp_candidate);
+
+        if (app_type_flags & APP_TYPE_SERVICE)
+            asd.set_service_appid_data(chp_final, change_bits, version);
+
+        if (app_type_flags & APP_TYPE_CLIENT)
+            set_client(chp_final, change_bits, "CHP", version);
+
+        if ( app_type_flags & APP_TYPE_PAYLOAD )
+            set_payload(chp_final, change_bits, "CHP", version);
+
+        if ( version )
+        {
+            snort_free(version);
+            version = nullptr;
+        }
+
+        if ( user )
+        {
             if (app_type_flags & APP_TYPE_SERVICE)
-                asd.set_service_appid_data(chp_final, nullptr, version);
-
-            if (app_type_flags & APP_TYPE_CLIENT)
-                asd.set_client_appid_data(chp_final, version);
-
-            if ( app_type_flags & APP_TYPE_PAYLOAD )
-                asd.set_payload_appid_data((AppId)chp_final, version);
-
-            if ( version )
-            {
-                snort_free(version);
-                version = nullptr;
-            }
-
-            if ( user )
-            {
-                if (app_type_flags & APP_TYPE_SERVICE)
-                    asd.client.update_user(chp_final, user);
-                else
-                    asd.client.update_user(asd.service.get_id(), user);
-                user = nullptr;
-                asd.set_session_flags(APPID_SESSION_LOGIN_SUCCEEDED);
-            }
-
-            for (unsigned i = 0; i < NUM_HTTP_FIELDS; i++)
-                if ( cmd.chp_rewritten[i] )
-                {
-                    if (appidDebug->is_active())
-                        LogMessage("AppIdDbg %s Rewritten %s: %s\n",
-                            appidDebug->get_debug_session(),
-                            httpFieldName[i], cmd.chp_rewritten[i]);
-
-                    set_field((HttpFieldIds)i, (const uint8_t*)cmd.chp_rewritten[i],
-                        strlen(cmd.chp_rewritten[i]));
-                    delete [] cmd.chp_rewritten[i];
-                    cmd.chp_rewritten[i] = nullptr;
-                }
-
-            chp_candidate = 0;
-            //if we're doing safesearch rewrites, we want to continue to hold the flow
-            if (!rebuilt_offsets)
-                chp_hold_flow = 0;
-            asd.scan_flags &= ~SCAN_HTTP_VIA_FLAG;
-            asd.scan_flags &= ~SCAN_HTTP_USER_AGENT_FLAG;
-            asd.scan_flags &= ~SCAN_HTTP_HOST_URL_FLAG;
-            memset(ptype_scan_counts, 0, sizeof(ptype_scan_counts));
+                client.update_user(chp_final, user, change_bits);
+            else
+                client.update_user(asd.get_service_id(), user, change_bits);
+            user = nullptr;
+            change_bits.set(APPID_CLIENT_LOGIN_SUCCEEDED_BIT);
         }
-        else /* if we have a candidate, but we're not finished */
-        {
-            if ( user )
-            {
-                snort_free(user);
-                user = nullptr;
-            }
 
-            cmd.free_rewrite_buffers();
+        chp_candidate = 0;
+        chp_hold_flow = 0;
+        asd.scan_flags &= ~SCAN_HTTP_VIA_FLAG;
+        asd.scan_flags &= ~SCAN_HTTP_USER_AGENT_FLAG;
+        asd.scan_flags &= ~SCAN_HTTP_HOST_URL_FLAG;
+        memset(ptype_scan_counts, 0, sizeof(ptype_scan_counts));
+    }
+    else /* if we have a candidate, but we're not finished */
+    {
+        if ( user )
+        {
+            snort_free(user);
+            user = nullptr;
         }
     }
 }
 
-int AppIdHttpSession::process_http_packet(AppidSessionDirection direction)
+void AppIdHttpSession::set_client(AppId app_id, AppidChangeBits& change_bits, const char* type,
+    const char* version)
 {
-    snort::Profile http_profile_context(httpPerfStats);
-    AppId service_id = APP_ID_NONE;
-    AppId client_id = APP_ID_NONE;
-    AppId payload_id = APP_ID_NONE;
-    bool have_tp = asd.tpsession;
+    if (app_id <= APP_ID_NONE or (app_id == client.get_id()))
+        return;
 
+    client.set_id(app_id);
+    change_bits.set(APPID_CLIENT_BIT);
+    client.set_version(version, change_bits);
+
+    if (appidDebug->is_active())
+    {
+        const char *app_name = asd.get_odp_ctxt().get_app_info_mgr().get_app_name(app_id);
+        LogMessage("AppIdDbg %s %s is client %s (%d)\n", appidDebug->get_debug_session(),
+            type, app_name ? app_name : "unknown", app_id);
+    }
+}
+
+void AppIdHttpSession::set_payload(AppId app_id, AppidChangeBits& change_bits, const char* type,
+    const char* version)
+{
+    if (app_id == APP_ID_NONE or (app_id == payload.get_id()))
+        return;
+
+    payload.set_id(app_id);
+    change_bits.set(APPID_PAYLOAD_BIT);
+    payload.set_version(version, change_bits);
+
+    if (appidDebug->is_active())
+    {
+        const char *app_name = asd.get_odp_ctxt().get_app_info_mgr().get_app_name(app_id);
+        if(app_id == APP_ID_UNKNOWN)
+            LogMessage("AppIdDbg %s Payload is Unknown (%d)\n", appidDebug->get_debug_session(),
+                app_id);
+        else
+            LogMessage("AppIdDbg %s %s is payload %s (%d)\n", appidDebug->get_debug_session(),
+                type, app_name ? app_name : "unknown", app_id);
+    }
+}
+
+void AppIdHttpSession::set_referred_payload(AppId app_id, AppidChangeBits& change_bits)
+{
+    if (app_id <= APP_ID_NONE or (app_id == referred_payload_app_id))
+        return;
+
+    referred_payload_app_id = app_id;
+    change_bits.set(APPID_REFERRED_BIT);
+
+    if (appidDebug->is_active())
+    {
+        const char *app_name = asd.get_odp_ctxt().get_app_info_mgr().get_app_name(app_id);
+        LogMessage("AppIdDbg %s URL is referred %s (%d)\n", appidDebug->get_debug_session(),
+            app_name ? app_name : "unknown", app_id);
+    }
+}
+
+int AppIdHttpSession::process_http_packet(AppidSessionDirection direction,
+    AppidChangeBits& change_bits, HttpPatternMatchers& http_matchers)
+{
     const std::string* useragent = meta_data[REQ_AGENT_FID];
     const std::string* host = meta_data[REQ_HOST_FID];
     const std::string* referer = meta_data[REQ_REFERER_FID];
     const std::string* uri = meta_data[REQ_URI_FID];
+    bool is_payload_processed = false;
 
     // For fragmented HTTP headers, do not process if none of the fields are set.
     // These fields will get set when the HTTP header is reassembled.
-
     if ( !useragent && !host && !referer && !uri )
     {
         if (!skip_simple_detect)
@@ -386,7 +488,7 @@ int AppIdHttpSession::process_http_packet(AppidSessionDirection direction)
                 if (appidDebug->is_active())
                     LogMessage("AppIdDbg %s Bad http response code.\n",
                         appidDebug->get_debug_session());
-                asd.reset_session_data();
+                asd.reset_session_data(change_bits);
                 return 0;
             }
         }
@@ -395,7 +497,7 @@ int AppIdHttpSession::process_http_packet(AppidSessionDirection direction)
         {
             set_session_flags(APPID_SESSION_RESPONSE_CODE_CHECKED);
             /* didn't receive response code in first X packets. Stop processing this session */
-            asd.reset_session_data();
+            asd.reset_session_data(change_bits);
             if (appidDebug->is_active())
                 LogMessage("AppIdDbg %s No response code received\n",
                     appidDebug->get_debug_session());
@@ -404,362 +506,218 @@ int AppIdHttpSession::process_http_packet(AppidSessionDirection direction)
 #endif
     }
 
-    if (asd.service.get_id() == APP_ID_NONE)
+    if (asd.get_service_id() == APP_ID_NONE or asd.get_service_id() == APP_ID_HTTP2)
     {
-        asd.service.set_id(APP_ID_HTTP);
-        asd.set_session_flags(APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_HTTP_SESSION);
+        if (asd.get_service_id() == APP_ID_NONE)
+            asd.set_service_id(APP_ID_HTTP, asd.get_odp_ctxt());
+        asd.set_session_flags(APPID_SESSION_SERVICE_DETECTED);
         asd.service_disco_state = APPID_DISCO_STATE_FINISHED;
     }
 
     if (!chp_finished || chp_hold_flow)
-        process_chp_buffers();
+        process_chp_buffers(change_bits, http_matchers);
 
-    if (!skip_simple_detect)  // true if processCHP found match
+    if (skip_simple_detect) // true if process_chp_buffers() found match
+        return 0;
+
+    if (!asd.get_session_flags(APPID_SESSION_APP_REINSPECT))
     {
-        if (!asd.get_session_flags(APPID_SESSION_APP_REINSPECT))
+        // Scan Server Header for Vendor & Version
+        const std::string* server = meta_data[MISC_SERVER_FID];
+        if ( (asd.scan_flags & SCAN_HTTP_VENDOR_FLAG) and server)
         {
-            // Scan Server Header for Vendor & Version
-            // FIXIT-M: Should we be checking the scan_flags even when
-            //     tp_appid_module is off?
-            const std::string* server = meta_data[MISC_SERVER_FID];
-            if ( (have_tp && (asd.scan_flags & SCAN_HTTP_VENDOR_FLAG) && server)
-                || (!have_tp && server) )
+            if ( asd.get_service_id() == APP_ID_NONE or asd.get_service_id() == APP_ID_HTTP  or
+                asd.get_service_id() == APP_ID_HTTP2)
             {
-                if ( asd.service.get_id() == APP_ID_NONE || asd.service.get_id() == APP_ID_HTTP )
+                char* vendorVersion = nullptr;
+                char* vendor = nullptr;
+                AppIdServiceSubtype* subtype = nullptr;
+
+                http_matchers.get_server_vendor_version(server->c_str(), server->size(),
+                    &vendorVersion, &vendor, &subtype);
+                if (vendor || vendorVersion)
                 {
-                    //AppIdServiceSubtype* local_subtype = nullptr;
-                    char* vendorVersion = nullptr;
-                    char* vendor = nullptr;
+                    asd.set_service_vendor(vendor, change_bits);
+                    asd.set_service_version(vendorVersion, change_bits);
+                    asd.scan_flags &= ~SCAN_HTTP_VENDOR_FLAG;
 
-                    http_matchers->get_server_vendor_version(server->c_str(), server->size(),
-                        &vendorVersion, &vendor, &asd.subtype);
-                    if (vendor || vendorVersion)
-                    {
-                        asd.service.set_vendor(vendor);
-                        asd.service.set_version(vendorVersion);
-                        asd.scan_flags &= ~SCAN_HTTP_VENDOR_FLAG;
-
-                        snort_free(vendor);
-                        snort_free(vendorVersion);
-                    }
-#if 0
-                    if (local_subtype)  // FIXIT-W always false
-                    {
-                        AppIdServiceSubtype** tmpSubtype;
-
-                        for (tmpSubtype = &asd.subtype; *tmpSubtype; tmpSubtype =
-                            &(*tmpSubtype)->next)
-                            ;
-
-                        *tmpSubtype = local_subtype;
-                    }
-#endif
+                    snort_free(vendor);
+                    snort_free(vendorVersion);
                 }
-            }
 
-            if (is_webdav)
-            {
-                if (appidDebug->is_active() and asd.payload.get_id() != APP_ID_WEBDAV)
-                    LogMessage("AppIdDbg %s Data is webdav\n", appidDebug->get_debug_session());
-                asd.set_payload_appid_data(APP_ID_WEBDAV, nullptr);
-            }
-
-            // Scan User-Agent for Browser types or Skype
-            if ( (asd.scan_flags & SCAN_HTTP_USER_AGENT_FLAG)
-                && asd.client.get_id() <= APP_ID_NONE && useragent )
-            {
-                char* version = nullptr;
-
-                http_matchers->identify_user_agent(useragent->c_str(), useragent->size(),
-                    service_id, client_id, &version);
-                if (appidDebug->is_active())
-                {
-                    if (service_id > APP_ID_NONE and service_id != APP_ID_HTTP and
-                        asd.service.get_id() != service_id)
-                    {
-                        const char *app_name = AppInfoManager::get_instance().get_app_name(service_id);
-                        LogMessage("AppIdDbg %s User Agent is service %s (%d)\n",
-                            appidDebug->get_debug_session(), app_name ? app_name : "unknown", service_id);
-                    }
-                    if (client_id > APP_ID_NONE and client_id != APP_ID_HTTP and
-                        asd.client.get_id() != client_id)
-                    {
-                        const char *app_name = AppInfoManager::get_instance().get_app_name(client_id);
-                        LogMessage("AppIdDbg %s User Agent is client %s (%d)\n",
-                            appidDebug->get_debug_session(), app_name ? app_name : "unknown", client_id);
-                    }
-                }
-                asd.set_service_appid_data(service_id, nullptr, nullptr);
-                asd.set_client_appid_data(client_id, version);
-                asd.scan_flags &= ~SCAN_HTTP_USER_AGENT_FLAG;
-                snort_free(version);
-            }
-
-            /* Scan Via Header for squid */
-            const std::string* via = meta_data[MISC_VIA_FID];
-            if ( !asd.is_payload_appid_set() && (asd.scan_flags & SCAN_HTTP_VIA_FLAG) && via )
-            {
-                payload_id = http_matchers->get_appid_by_pattern(via->c_str(), via->size(),
-                    nullptr);
-                if (appidDebug->is_active() && payload_id > APP_ID_NONE &&
-                    asd.payload.get_id() != payload_id)
-                {
-                    const char *app_name = AppInfoManager::get_instance().get_app_name(payload_id);
-                    LogMessage("AppIdDbg %s VIA is payload %s (%d)\n", appidDebug->get_debug_session(),
-                        app_name ? app_name : "unknown",
-                        payload_id);
-                }
-                asd.set_payload_appid_data((AppId)payload_id, nullptr);
-                asd.scan_flags &= ~SCAN_HTTP_VIA_FLAG;
+                if (subtype)
+                    asd.add_service_subtype(*subtype, change_bits);
             }
         }
 
-        /* Scan X-Working-With HTTP header */
-        // FIXIT-M: Should we be checking the scan_flags even when
-        //     tp_appid_module is off?
-        const std::string* x_working_with = meta_data[MISC_XWW_FID];
-        if ( (have_tp && (asd.scan_flags & SCAN_HTTP_XWORKINGWITH_FLAG) &&
-            x_working_with) || (!have_tp && x_working_with))
+        if (is_webdav)
+            set_payload(APP_ID_WEBDAV, change_bits, "webdav");
+
+        // Scan User-Agent for Browser types or Skype
+        if ( (asd.scan_flags & SCAN_HTTP_USER_AGENT_FLAG)
+            and client.get_id() <= APP_ID_NONE and useragent )
         {
-            AppId appId;
             char* version = nullptr;
+            AppId service_id = APP_ID_NONE;
+            AppId client_id = APP_ID_NONE;
 
-            appId = http_matchers->scan_header_x_working_with(x_working_with->c_str(),
-                x_working_with->size(), &version);
-            if ( appId )
+            http_matchers.identify_user_agent(useragent->c_str(), useragent->size(),
+                service_id, client_id, &version);
+            if (appidDebug->is_active())
             {
-                if (direction == APP_ID_FROM_INITIATOR)
+                if (service_id > APP_ID_NONE and service_id != APP_ID_HTTP and
+                    asd.get_service_id() != service_id)
                 {
-                    if (appidDebug->is_active() && client_id > APP_ID_NONE && client_id !=
-                        APP_ID_HTTP && asd.client.get_id() != client_id)
-                    {
-                        const char *app_name = AppInfoManager::get_instance().get_app_name(appId);
-                        LogMessage("AppIdDbg %s X is client %s (%d)\n", appidDebug->get_debug_session(),
-                        app_name ? app_name : "unknown", appId);
-                    }
-                    asd.set_client_appid_data(appId, version);
+                    const char *app_name = asd.get_odp_ctxt().get_app_info_mgr().get_app_name(service_id);
+                    LogMessage("AppIdDbg %s User Agent is service %s (%d)\n",
+                        appidDebug->get_debug_session(), app_name ? app_name : "unknown", service_id);
                 }
-                else
-                {
-                    if (appidDebug->is_active() && service_id > APP_ID_NONE && service_id !=
-                        APP_ID_HTTP && asd.service.get_id() != service_id)
-                    {
-                        const char *app_name = AppInfoManager::get_instance().get_app_name(appId);
-                        LogMessage("AppIdDbg %s X service %s (%d)\n", appidDebug->get_debug_session(),
-                            app_name ? app_name : "unknown", appId);
-                    }
-                    asd.set_service_appid_data(appId, nullptr, version);
-                }
-                asd.scan_flags &= ~SCAN_HTTP_XWORKINGWITH_FLAG;
             }
+            asd.set_service_appid_data(service_id, change_bits);
+            if (client_id != APP_ID_HTTP)
+                set_client(client_id, change_bits, "User Agent", version);
 
+            asd.scan_flags &= ~SCAN_HTTP_USER_AGENT_FLAG;
             snort_free(version);
         }
 
-        // Scan Content-Type Header for multimedia types and scan contents
-        // FIXIT-M: Should we be checking the scan_flags even when
-        //     tp_appid_module is off?
-        const std::string* content_type = meta_data[RSP_CONTENT_TYPE_FID];
-        if ( (have_tp && (asd.scan_flags & SCAN_HTTP_CONTENT_TYPE_FLAG)
-            && content_type && !asd.is_payload_appid_set())
-            || (!have_tp && !asd.is_payload_appid_set() && content_type) )
+        /* Scan Via Header for squid */
+        const std::string* via = meta_data[MISC_VIA_FID];
+        if ( !asd.get_tp_payload_app_id() and payload.get_id() <= APP_ID_NONE and
+            (asd.scan_flags & SCAN_HTTP_VIA_FLAG) and via )
         {
-            payload_id = http_matchers->get_appid_by_content_type(content_type->c_str(),
-                content_type->size());
-            if (appidDebug->is_active() && payload_id > APP_ID_NONE
-                && asd.payload.get_id() != payload_id)
-            {
-                const char *app_name = AppInfoManager::get_instance().get_app_name(payload_id);
-                LogMessage("AppIdDbg %s Content-Type is payload %s (%d)\n",
-                    appidDebug->get_debug_session(),
-                    app_name ? app_name : "unknown",
-                    payload_id);
-            }
-            asd.set_payload_appid_data((AppId)payload_id, nullptr);
-            asd.scan_flags &= ~SCAN_HTTP_CONTENT_TYPE_FLAG;
+            AppId payload_id = http_matchers.get_appid_by_pattern(via->c_str(), via->size(),
+                nullptr);
+            set_payload(payload_id, change_bits, "VIA");
+            is_payload_processed = true;
+            asd.scan_flags &= ~SCAN_HTTP_VIA_FLAG;
         }
+    }
 
-        if (asd.scan_flags & SCAN_HTTP_HOST_URL_FLAG)
+    /* Scan X-Working-With HTTP header */
+    const std::string* x_working_with = meta_data[MISC_XWW_FID];
+    if ( (asd.scan_flags & SCAN_HTTP_XWORKINGWITH_FLAG) and x_working_with)
+    {
+        char* version = nullptr;
+
+        AppId app_id = http_matchers.scan_header_x_working_with(x_working_with->c_str(),
+            x_working_with->size(), &version);
+
+        if (direction == APP_ID_FROM_INITIATOR)
+            set_client(app_id, change_bits, "X-working-with", version);
+        else
         {
-            AppId referredPayloadAppId = 0;
-            char* version = nullptr;
-            char* my_host = host ? snort_strdup(host->c_str()) : nullptr;
-            const char* refStr = referer ? referer->c_str() : nullptr;
-            const std::string* url = meta_data[MISC_URL_FID];
-            const char* urlStr = url ? url->c_str() : nullptr;
-            if ( http_matchers->get_appid_from_url(my_host, urlStr, &version,
-                refStr, &client_id, &service_id, &payload_id,
-                &referredPayloadAppId, false) )
+            if (app_id and asd.get_service_id() != app_id)
             {
-                // do not overwrite a previously-set client or service
-                if (asd.client.get_id() <= APP_ID_NONE)
+                asd.set_service_appid_data(app_id, change_bits, version);
+                if (appidDebug->is_active())
                 {
-                    if (appidDebug->is_active() && client_id > APP_ID_NONE && client_id !=
-                        APP_ID_HTTP && asd.client.get_id() != client_id)
-                    {
-                        const char *app_name = AppInfoManager::get_instance().get_app_name(client_id);
-                        LogMessage("AppIdDbg %s URL is client %s (%d)\n",
-                            appidDebug->get_debug_session(),
-                            app_name ? app_name : "unknown",
-                            client_id);
-                    }
-                    asd.set_client_appid_data(client_id, nullptr);
+                    const char *app_name = asd.get_odp_ctxt().get_app_info_mgr().get_app_name(app_id);
+                    LogMessage("AppIdDbg %s X service %s (%d)\n", appidDebug->get_debug_session(),
+                        app_name ? app_name : "unknown", app_id);
                 }
+            }
+        }
+        asd.scan_flags &= ~SCAN_HTTP_XWORKINGWITH_FLAG;
 
-                if (asd.service.get_id() <= APP_ID_NONE)
-                {
-                    if (appidDebug->is_active() && service_id > APP_ID_NONE && service_id !=
-                        APP_ID_HTTP && asd.service.get_id() != service_id)
-                    {
-                        const char *app_name = AppInfoManager::get_instance().get_app_name(service_id);
-                        LogMessage("AppIdDbg %s URL is service %s (%d)\n",
-                            appidDebug->get_debug_session(),
-                            app_name ? app_name : "unknown",
-                            service_id);
-                    }
-                    asd.set_service_appid_data(service_id, nullptr, nullptr);
-                }
+        snort_free(version);
+    }
 
-                // DO overwrite a previously-set data
-                if (appidDebug->is_active() && payload_id > APP_ID_NONE &&
-                    asd.payload.get_id() != payload_id)
+    // Scan Content-Type Header for multimedia types and scan contents
+    const std::string* content_type = meta_data[RSP_CONTENT_TYPE_FID];
+    if ( (asd.scan_flags & SCAN_HTTP_CONTENT_TYPE_FLAG)
+         and content_type and !asd.get_tp_payload_app_id() and payload.get_id() <= APP_ID_NONE)
+    {
+        AppId payload_id = http_matchers.get_appid_by_content_type(content_type->c_str(),
+            content_type->size());
+        set_payload(payload_id, change_bits, "Content-Type");
+        is_payload_processed = true;
+        asd.scan_flags &= ~SCAN_HTTP_CONTENT_TYPE_FLAG;
+    }
+
+    if (asd.scan_flags & SCAN_HTTP_HOST_URL_FLAG)
+    {
+        AppId referredPayloadAppId = APP_ID_NONE;
+        char* version = nullptr;
+        char* my_host = host ? snort_strdup(host->c_str()) : nullptr;
+        const char* refStr = referer ? referer->c_str() : nullptr;
+        const std::string* url = meta_data[MISC_URL_FID];
+        const char* urlStr = url ? url->c_str() : nullptr;
+        AppId service_id = APP_ID_NONE;
+        AppId client_id = APP_ID_NONE;
+        AppId payload_id = APP_ID_NONE;
+
+        if ( http_matchers.get_appid_from_url(my_host, urlStr, &version,
+            refStr, &client_id, &service_id, &payload_id,
+            &referredPayloadAppId, false, asd.get_odp_ctxt()) )
+        {
+            // do not overwrite a previously-set client or service
+            if (client.get_id() <= APP_ID_NONE and client_id != APP_ID_HTTP)
+                set_client(client_id, change_bits, "URL", version);
+
+            if (asd.get_service_id() <= APP_ID_NONE)
+            {
+                if (appidDebug->is_active() && service_id > APP_ID_NONE && service_id !=
+                    APP_ID_HTTP && asd.get_service_id() != service_id)
                 {
-                    const char *app_name = AppInfoManager::get_instance().get_app_name(payload_id);
-                    LogMessage("AppIdDbg %s URL is payload %s (%d)\n", appidDebug->get_debug_session(),
+                    const char *app_name = asd.get_odp_ctxt().get_app_info_mgr().get_app_name(service_id);
+                    LogMessage("AppIdDbg %s URL is service %s (%d)\n",
+                        appidDebug->get_debug_session(),
                         app_name ? app_name : "unknown",
-                        payload_id);
+                        service_id);
                 }
-                asd.set_payload_appid_data((AppId)payload_id, version);
-                asd.set_referred_payload_app_id_data(referredPayloadAppId);
+                asd.set_service_appid_data(service_id, change_bits);
             }
 
-            asd.scan_flags &= ~SCAN_HTTP_HOST_URL_FLAG;
-            if ( version )
-                snort_free(version);
-            if ( my_host )
-                snort_free(my_host);
+            // DO overwrite a previously-set payload
+            set_payload(payload_id, change_bits, "URL");
+            set_referred_payload(referredPayloadAppId, change_bits);
         }
 
-        if (asd.client.get_id() == APP_ID_APPLE_CORE_MEDIA)
+        is_payload_processed = true; 
+        asd.scan_flags &= ~SCAN_HTTP_HOST_URL_FLAG;
+        if ( version )
+            snort_free(version);
+        if ( my_host )
+            snort_free(my_host);
+    }
+
+    if (client.get_id() == APP_ID_APPLE_CORE_MEDIA)
+    {
+        AppInfoTableEntry* entry;
+        AppId tp_payload_app_id = asd.get_tp_payload_app_id();
+        if (tp_payload_app_id > APP_ID_NONE)
         {
-            AppInfoTableEntry* entry;
-            AppId tp_payload_app_id = asd.get_tp_payload_app_id();
-            if (tp_payload_app_id > APP_ID_NONE)
+            entry = asd.get_odp_ctxt().get_app_info_mgr().get_app_info_entry(tp_payload_app_id);
+            // only move tpPayloadAppId to client if client app id is valid
+            if (entry && entry->clientId > APP_ID_NONE)
             {
-                entry = asd.app_info_mgr->get_app_info_entry(tp_payload_app_id);
-                // only move tpPayloadAppId to client if client app id is valid
-                if (entry && entry->clientId > APP_ID_NONE)
-                {
-                    asd.misc_app_id = asd.client.get_id();
-                    asd.client.set_id(tp_payload_app_id);
-                }
-            }
-            else if (asd.payload.get_id() > APP_ID_NONE)
-            {
-                entry =  asd.app_info_mgr->get_app_info_entry(asd.payload.get_id());
-                // only move payload_app_id to client if it has a ClientAppid
-                if (entry && entry->clientId > APP_ID_NONE)
-                {
-                    asd.misc_app_id = asd.client.get_id();
-                    asd.client.set_id(asd.payload.get_id());
-                }
+                misc_app_id = client.get_id();
+                client.set_id(tp_payload_app_id);
             }
         }
+        else if (payload.get_id() > APP_ID_NONE)
+        {
+            entry = asd.get_odp_ctxt().get_app_info_mgr().get_app_info_entry(payload.get_id());
+            // only move payload_app_id to client if it has a ClientAppid
+            if (entry && entry->clientId > APP_ID_NONE)
+            {
+                misc_app_id = client.get_id();
+                client.set_id(payload.get_id());
+            }
+        }
+    }
+    if (payload.get_id() <= APP_ID_NONE and is_payload_processed and
+        (asd.get_service_id() == APP_ID_HTTP2 or (asd.get_service_id() == APP_ID_HTTP and
+            asd.is_tp_appid_available())))
+        set_payload(APP_ID_UNKNOWN, change_bits);
 
-        asd.clear_http_flags();
-    }  // end DON'T skip_simple_detect
+    asd.clear_http_flags();
 
     return 0;
 }
 
-// FIXIT-H - Implement this function when (reconfigurable) XFF is supported.
-void AppIdHttpSession::update_http_xff_address(struct XffFieldValue* xff_fields,
-    uint32_t numXffFields)
-{
-    UNUSED(xff_fields);
-    UNUSED(numXffFields);
-#if 0
-    static const char* defaultXffPrecedence[] =
-    {
-        HTTP_XFF_FIELD_X_FORWARDED_FOR,
-        HTTP_XFF_FIELD_TRUE_CLIENT_IP
-    };
-
-    // XFF precedence configuration cannot change for a session. Do not get it again if we already
-    // got it.
-    char** xffPrecedence = _dpd.sessionAPI->get_http_xff_precedence(p->stream_session, p->flags,
-        &numXffFields);
-    if (!xffPrecedence)
-    {
-        xffPrecedence = defaultXffPrecedence;
-        numXffFields = sizeof(defaultXffPrecedence) / sizeof(defaultXffPrecedence[0]);
-    }
-
-    xffPrecedence = malloc(numXffFields * sizeof(char*));
-
-    for (unsigned j = 0; j < numXffFields; j++)
-        xffPrecedence[j] = strndup(xffPrecedence[j], UINT8_MAX);
-
-    if (appidDebug->is_active())
-    {
-        for (unsigned i = 0; i < numXffFields; i++)
-            LogMessage("AppIdDbg %s XFF %s : %s\n", appidDebug->get_debug_session(),
-                xff_fields[i].field.c_str(), xff_fields[i].value.empty() ? "(empty)" :
-                xff_fields[i].value);
-    }
-
-    // xffPrecedence array is sorted based on precedence
-    for (unsigned i = 0; (i < numXffFields) && xffPrecedence[i]; i++)
-    {
-        for (unsigned j = 0; j < numXffFields; j++)
-        {
-            if (xff_addr)
-            {
-                delete xff_addr;
-                xff_addr = nullptr;
-            }
-
-            if (strncasecmp(xff_fields[j].field.c_str(), xffPrecedence[i], UINT8_MAX) == 0)
-            {
-                if (xff_fields[j].value.empty())
-                    return;
-
-                // For a comma-separated list of addresses, pick the last address
-                // FIXIT-L: change to select last address port from 2.9.10-42..not tested
-
-                // FIXIT_H: - this code is wrong. We can't have
-                // tmp-xff_fields[j].value when tmp=0.
-
-                // xff_addr = new snort::SfIp();
-                // char* xff_addr_str = nullptr;
-                // char* tmp = strchr(xff_fields[j].value, ',');
-
-                // if (tmp)
-                // {
-                //     xff_addr_str = tmp + 1;
-                // }
-                // else
-                // {
-                //     xff_fields[j].value[tmp - xff_fields[j].value] = '\0';
-                //     xff_addr_str = xff_fields[j].value;
-                // }
-
-                // if (xff_addr->set(xff_addr_str) != SFIP_SUCCESS)
-                // {
-                //     delete xff_addr;
-                //     xff_addr = nullptr;
-                // }
-                break;
-            }
-        }
-
-        if (xff_addr)
-            break;
-    }
-#endif
-}
-
-void AppIdHttpSession::update_url()
+void AppIdHttpSession::update_url(AppidChangeBits& change_bits)
 {
     const std::string* host = meta_data[REQ_HOST_FID];
     const std::string* uri = meta_data[REQ_URI_FID];
@@ -768,6 +726,7 @@ void AppIdHttpSession::update_url()
         if (meta_data[MISC_URL_FID])
             delete meta_data[MISC_URL_FID];
         meta_data[MISC_URL_FID] = new std::string(std::string("http://") + *host + *uri);
+        change_bits.set(APPID_URL_BIT);
     }
 }
 
@@ -783,17 +742,111 @@ void AppIdHttpSession::clear_all_fields()
         delete meta_data[i];
         meta_data[i] = nullptr;
     }
-    if (xff_addr)
+}
+
+void AppIdHttpSession::set_field(HttpFieldIds id, const std::string* str,
+    AppidChangeBits& change_bits)
+{
+    delete meta_data[id];
+    meta_data[id] = str;
+    if (str)
     {
-        delete xff_addr;
-        xff_addr = nullptr;
-    }
-    if (xffPrecedence)
-    {
-        for (unsigned i = 0; i < numXffFields; i++)
-            delete xffPrecedence[i];
-        delete xffPrecedence;
-        xffPrecedence = NULL;
+        set_http_change_bits(change_bits, id);
+
+        if (appidDebug->is_active())
+            print_field(id, str);
     }
 }
 
+void AppIdHttpSession::set_field(HttpFieldIds id, const uint8_t* str, int32_t len,
+    AppidChangeBits& change_bits)
+{
+    delete meta_data[id];
+    if (str and len)
+    {
+        meta_data[id] = new std::string((const char*)str, len);
+        set_http_change_bits(change_bits, id);
+
+        if (appidDebug->is_active())
+            print_field(id, meta_data[id]);
+    }
+    else
+        meta_data[id] = nullptr;
+}
+
+void AppIdHttpSession::print_field(HttpFieldIds id, const std::string* field)
+{
+    string field_name;
+
+    if (asd.get_session_flags(APPID_SESSION_SPDY_SESSION))
+        field_name = "SPDY ";
+    else if (asd.get_session_flags(APPID_SESSION_HTTP_SESSION))
+      field_name = "HTTP ";
+    else
+        // This could be RTMP session; not printing RTMP fields for now
+        return;
+
+    switch (id)
+    {
+    case REQ_AGENT_FID:
+        field_name += "user agent";
+        break;
+
+    case REQ_HOST_FID:
+        field_name += "host";
+        break;
+
+    case REQ_REFERER_FID:
+        field_name += "referer";
+        break;
+
+    case REQ_URI_FID:
+        field_name += "URI";
+        break;
+
+    case REQ_COOKIE_FID:
+        field_name += "cookie";
+        break;
+
+    case REQ_BODY_FID:
+        field_name += "request body";
+        break;
+
+    case RSP_CONTENT_TYPE_FID:
+        field_name += "content type";
+        break;
+
+    case RSP_LOCATION_FID:
+        field_name += "location";
+        break;
+
+    case MISC_VIA_FID:
+        field_name += "via";
+        break;
+
+    case MISC_RESP_CODE_FID:
+        field_name += "response code";
+        break;
+
+    case MISC_SERVER_FID:
+        field_name += "server";
+        break;
+
+    case MISC_XWW_FID:
+        field_name += "x-working-with";
+        break;
+
+    // don't print these fields
+    case MISC_URL_FID:
+    case RSP_BODY_FID:
+    default:
+        return;
+    }
+
+    if (http2_stream_id > 0)
+        LogMessage("AppIdDbg %s stream %u: %s is %s\n", appidDebug->get_debug_session(),
+            http2_stream_id, field_name.c_str(), field->c_str());
+    else
+        LogMessage("AppIdDbg %s %s is %s\n", appidDebug->get_debug_session(),
+            field_name.c_str(), field->c_str());
+}

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,45 +25,53 @@
 #include <array>
 #include <string>
 
-#include "application_ids.h"
-#include "framework/decode_data.h"
-#include "main/snort_config.h"
-#include "protocols/ipv6.h"
-#include "sfip/sf_ip.h"
 #include "target_based/snort_protocols.h"
+
+#include "app_forecast.h"
+#include "app_info_table.h"
+#include "client_plugins/client_discovery.h"
+#include "detector_plugins/dns_patterns.h"
+#include "detector_plugins/http_url_patterns.h"
+#include "detector_plugins/sip_patterns.h"
+#include "detector_plugins/ssl_patterns.h"
+#include "host_port_app_cache.h"
+#include "length_app_cache.h"
+#include "lua_detector_flow_api.h"
+#include "lua_detector_module.h"
+#include "service_plugins/service_discovery.h"
+#include "tp_appid_module_api.h"
 #include "utils/sflsq.h"
 
-#define APP_ID_MAX_DIRS         16
 #define APP_ID_PORT_ARRAY_SIZE  65536
-#define MAX_ZONES               1024
 
-struct NetworkSet;
-class AppIdInspector;
-class AppInfoManager;
+#define MIN_MAX_BYTES_BEFORE_SERVICE_FAIL 4096
+#define MIN_MAX_PKTS_BEFORE_SERVICE_FAIL 5
+#define MIN_MAX_PKT_BEFORE_SERVICE_FAIL_IGNORE_BYTES 15
 
-extern unsigned appIdPolicyId;
-extern uint32_t app_id_netmasks[];
-
-extern SnortProtocolId snortId_for_unsynchronized;
-extern SnortProtocolId snortId_for_ftp_data;
-extern SnortProtocolId snortId_for_http2;
-
-struct PortExclusion
+enum SnortProtoIdIndex
 {
-    int family;
-    snort::ip::snort_in6_addr ip;
-    snort::ip::snort_in6_addr netmask;
+    PROTO_INDEX_UNSYNCHRONIZED = 0,
+    PROTO_INDEX_FTP_DATA,
+    PROTO_INDEX_HTTP2,
+    PROTO_INDEX_REXEC,
+    PROTO_INDEX_RSH_ERROR,
+    PROTO_INDEX_SNMP,
+    PROTO_INDEX_SUNRPC,
+    PROTO_INDEX_TFTP,
+    PROTO_INDEX_SIP,
+
+    PROTO_INDEX_MAX
 };
 
-class AppIdModuleConfig
+class PatternClientDetector;
+class PatternServiceDetector;
+
+class AppIdConfig
 {
 public:
-    AppIdModuleConfig() = default;
-    ~AppIdModuleConfig();
+    AppIdConfig() = default;
+    ~AppIdConfig();
 
-#ifdef USE_RNA_CONFIG
-    const char* conf_file = nullptr;
-#endif
     // FIXIT-L: DECRYPT_DEBUG - Move this to ssl-module
 #ifdef REG_TEST
     // To manually restart appid detection for an SSL-decrypted flow (single session only),
@@ -71,81 +79,226 @@ public:
     // after certificate-exchange). Such manual detection is disabled by default (0).
     uint32_t first_decrypted_packet_debug = 0;
 #endif
-    bool stats_logging_enabled = false;
-    unsigned long app_stats_period = 0;
-    unsigned long app_stats_rollover_size = 0;
-    unsigned long app_stats_rollover_time = 0;
+    bool log_stats = false;
+    uint32_t app_stats_period = 300;
+    uint32_t app_stats_rollover_size = 0;
     const char* app_detector_dir = nullptr;
     std::string tp_appid_path = "";
     std::string tp_appid_config = "";
-    uint32_t instance_id = 0;
-    uint32_t memcap = 0;
-    bool debug = false;
-    bool dump_ports = false;
+    bool tp_appid_stats_enable = false;
+    bool tp_appid_config_dump = false;
+    size_t memcap = 0;
+    bool list_odp_detectors = false;
     bool log_all_sessions = false;
+    SnortProtocolId snort_proto_ids[PROTO_INDEX_MAX];
+    void show() const;
+};
 
-    bool safe_search_enabled = true;
+class OdpContext
+{
+public:
     bool dns_host_reporting = true;
     bool referred_appId_disabled = false;
     bool mdns_user_reporting = true;
     bool chp_userid_disabled = false;
-    bool http2_detection_enabled = false;
-    uint32_t ftp_userid_disabled = 0;
-    uint32_t chp_body_collection_disabled = 0;
+    bool is_host_port_app_cache_runtime = false;
+    bool check_host_port_app_cache = false;
+    bool check_host_cache_unknown_ssl = false;
+    bool ftp_userid_disabled = false;
+    bool chp_body_collection_disabled = false;
     uint32_t chp_body_collection_max = 0;
     uint32_t rtmp_max_packets = 15;
     uint32_t max_tp_flow_depth = 5;
-    uint32_t tp_allow_probes = 0;
-    uint32_t http_response_version_enabled = 0;
-};
+    bool tp_allow_probes = false;
+    uint32_t host_port_app_cache_lookup_interval = 10;
+    uint32_t host_port_app_cache_lookup_range = 100000;
+    bool allow_port_wildcard_host_cache = false;
+    bool recheck_for_portservice_appid = false;
+    uint64_t max_bytes_before_service_fail = MIN_MAX_BYTES_BEFORE_SERVICE_FAIL;
+    uint16_t max_packet_before_service_fail = MIN_MAX_PKTS_BEFORE_SERVICE_FAIL;
+    uint16_t max_packet_service_fail_ignore_bytes = MIN_MAX_PKT_BEFORE_SERVICE_FAIL_IGNORE_BYTES;
 
-typedef std::array<SF_LIST*, APP_ID_PORT_ARRAY_SIZE> AppIdPortExclusions;
+    OdpContext(const AppIdConfig&, snort::SnortConfig*);
+    ~OdpContext();
+    void initialize();
+    void reload();
 
-class AppIdConfig
-{
-public:
-    AppIdConfig(AppIdModuleConfig*);
-    ~AppIdConfig();
+    uint32_t get_version() const
+    {
+        return version;
+    }
 
-    bool init_appid(snort::SnortConfig*, AppIdInspector*);
-    static void pterm();
-    void cleanup();
-    void show();
-    void set_safe_search_enforcement(bool enabled);
-    AppId get_port_service_id(IpProtocol, uint16_t port);
+    AppInfoManager& get_app_info_mgr()
+    {
+        return app_info_mgr;
+    }
 
-    unsigned max_service_info = 0;
-#ifdef USE_RNA_CONFIG
-    unsigned net_list_count = 0;
-    NetworkSet* net_list_list = nullptr;
-    NetworkSet* net_list = nullptr;
-    std::array<NetworkSet*, MAX_ZONES> net_list_by_zone;
-#endif
-    std::array<AppId, APP_ID_PORT_ARRAY_SIZE> tcp_port_only;     // port-only TCP services
-    std::array<AppId, APP_ID_PORT_ARRAY_SIZE> udp_port_only;     // port-only UDP services
-    std::array<AppId, 255> ip_protocol;         // non-TCP / UDP protocol services
-    SF_LIST client_app_args;                    // List of Client App arguments
-    // for each potential port, an sflist of PortExclusion structs
-    AppIdPortExclusions tcp_port_exclusions_src;
-    AppIdPortExclusions udp_port_exclusions_src;
-    AppIdPortExclusions tcp_port_exclusions_dst;
-    AppIdPortExclusions udp_port_exclusions_dst;
-    AppIdModuleConfig* mod_config = nullptr;
-    unsigned appIdPolicyId = 53;
+    ClientDiscovery& get_client_disco_mgr()
+    {
+        return client_disco_mgr;
+    }
+
+    ServiceDiscovery& get_service_disco_mgr()
+    {
+        return service_disco_mgr;
+    }
+
+    HostPortVal* host_port_cache_find(const snort::SfIp* ip, uint16_t port, IpProtocol proto)
+    {
+        return host_port_cache.find(ip, port, proto, *this);
+    }
+
+    bool host_port_cache_add(const snort::SfIp* ip, uint16_t port, IpProtocol proto, unsigned type,
+        AppId appid)
+    {
+        return host_port_cache.add(ip, port, proto, type, appid);
+    }
+
+    AppId length_cache_find(const LengthKey& key)
+    {
+        return length_cache.find(key);
+    }
+
+    bool length_cache_add(const LengthKey& key, AppId val)
+    {
+        return length_cache.add(key, val);
+    }
+
+    DnsPatternMatchers& get_dns_matchers()
+    {
+        return dns_matchers;
+    }
+
+    HttpPatternMatchers& get_http_matchers()
+    {
+        return http_matchers;
+    }
+
+    SipPatternMatchers& get_sip_matchers()
+    {
+        return sip_matchers;
+    }
+
+    SslPatternMatchers& get_ssl_matchers()
+    {
+        return ssl_matchers;
+    }
+
+    PatternClientDetector& get_client_pattern_detector()
+    {
+        return *client_pattern_detector;
+    }
+
+    PatternServiceDetector& get_service_pattern_detector()
+    {
+        return *service_pattern_detector;
+    }
+
+    const std::unordered_map<AppId, AFElement>& get_af_indicators() const
+    {
+        return AF_indicators;
+    }
+
+    void add_port_service_id(IpProtocol, uint16_t, AppId);
+    void add_protocol_service_id(IpProtocol, AppId);
+    AppId get_port_service_id(IpProtocol, uint16_t);
+    AppId get_protocol_service_id(IpProtocol);
+    void display_port_config();
+    void add_af_indicator(AppId, AppId, AppId);
 
 private:
-    void read_port_detectors(const char* files);
-    void configure_analysis_networks(char* toklist[], uint32_t flag);
-    int add_port_exclusion(AppIdPortExclusions&, const snort::ip::snort_in6_addr* ip,
-        const snort::ip::snort_in6_addr* netmask, int family, uint16_t port);
-    void process_port_exclusion(char* toklist[]);
-    void process_config_directive(char* toklist[], int /* reload */);
-    int load_analysis_config(const char* config_file, int reload, int instance_id);
-    void display_port_config();
-    //FIXIT-M: RELOAD - Remove static, once app_info_mgr cleanup is
-    //removed from AppIdConfig::pterm
-    static AppInfoManager& app_info_mgr;
+    AppInfoManager app_info_mgr;
+    ClientDiscovery client_disco_mgr;
+    HostPortCache host_port_cache;
+    LengthCache length_cache;
+    DnsPatternMatchers dns_matchers;
+    HttpPatternMatchers http_matchers;
+    ServiceDiscovery service_disco_mgr;
+    SipPatternMatchers sip_matchers;
+    SslPatternMatchers ssl_matchers;
+    PatternClientDetector* client_pattern_detector;
+    PatternServiceDetector* service_pattern_detector;
+    std::unordered_map<AppId, AFElement> AF_indicators;     // list of "indicator apps"
+
+    std::array<AppId, APP_ID_PORT_ARRAY_SIZE> tcp_port_only = {}; // port-only TCP services
+    std::array<AppId, APP_ID_PORT_ARRAY_SIZE> udp_port_only = {}; // port-only UDP services
+    std::array<AppId, 256> ip_protocol = {}; // non-TCP / UDP protocol services
+
+    uint32_t version;
+    static uint32_t next_version;
+};
+
+class OdpThreadContext
+{
+public:
+    OdpThreadContext(bool is_control=false);
+    ~OdpThreadContext();
+    void initialize(AppIdContext& ctxt, bool is_control=false, bool reload_odp=false);
+
+    void set_lua_detector_mgr(LuaDetectorManager& mgr)
+    {
+        lua_detector_mgr = &mgr;
+    }
+
+    LuaDetectorManager& get_lua_detector_mgr() const
+    {
+        assert(lua_detector_mgr);
+        return *lua_detector_mgr;
+    }
+
+    std::map<AFActKey, AFActVal>* get_af_actives() const
+    {
+        return AF_actives;
+    }
+
+    void add_af_actives(AFActKey key, AFActVal value)
+    {
+        assert(AF_actives);
+        AF_actives->emplace(key, value);
+    }
+
+    void erase_af_actives(AFActKey key)
+    {
+        assert(AF_actives);
+        AF_actives->erase(key);
+    }
+
+private:
+    LuaDetectorManager* lua_detector_mgr = nullptr;
+    std::map<AFActKey, AFActVal>* AF_actives = nullptr; // list of hosts to watch
+};
+
+class AppIdContext
+{
+public:
+    AppIdContext(AppIdConfig& config) : config(config)
+    { }
+
+    ~AppIdContext() { }
+
+    OdpContext& get_odp_ctxt() const
+    {
+        assert(odp_ctxt);
+        return *odp_ctxt;
+    }
+
+    ThirdPartyAppIdContext* get_tp_appid_ctxt() const
+    { return tp_appid_ctxt; }
+
+    static void delete_tp_appid_ctxt()
+    { delete tp_appid_ctxt; }
+
+    void create_odp_ctxt();
+    void create_tp_appid_ctxt();
+    bool init_appid(snort::SnortConfig*);
+    static void pterm();
+    void show() const;
+
+    AppIdConfig& config;
+
+private:
+    static OdpContext* odp_ctxt;
+    static ThirdPartyAppIdContext* tp_appid_ctxt;
 };
 
 #endif
-

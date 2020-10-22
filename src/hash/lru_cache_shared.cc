@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,13 +26,12 @@
 
 const PegInfo lru_cache_shared_peg_names[] =
 {
-    { CountType::SUM, "lru_cache_adds", "lru cache added new entry" },
-    { CountType::SUM, "lru_cache_replaces", "lru cache replaced existing entry" },
-    { CountType::SUM, "lru_cache_prunes", "lru cache pruned entry to make space for new entry" },
-    { CountType::SUM, "lru_cache_find_hits", "lru cache found entry in cache" },
-    { CountType::SUM, "lru_cache_find_misses", "lru cache did not find entry in cache" },
-    { CountType::SUM, "lru_cache_removes", "lru cache found entry and removed it" },
-    { CountType::SUM, "lru_cache_clears", "lru cache clear API calls" },
+    { CountType::SUM, "adds", "lru cache added new entry" },
+    { CountType::SUM, "alloc_prunes", "lru cache pruned entry to make space for new entry" },
+    { CountType::SUM, "find_hits", "lru cache found entry in cache" },
+    { CountType::SUM, "find_misses", "lru cache did not find entry in cache" },
+    { CountType::SUM, "reload_prunes", "lru cache pruned entry for lower memcap during reload" },
+    { CountType::SUM, "removes", "lru cache found entry and removed it" },
+    { CountType::SUM, "replaced", "lru cache found entry and replaced it" },
     { CountType::END, nullptr, nullptr },
 };
-

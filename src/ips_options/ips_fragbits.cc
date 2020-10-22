@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -52,7 +52,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -285,14 +285,11 @@ private:
 
 uint32_t FragBitsOption::hash() const
 {
-    uint32_t a,b,c;
-    const FragBitsData* data = &fragBitsData;
+    uint32_t a = fragBitsData.get_mode();
+    uint32_t b = fragBitsData.get_frag_bits();
+    uint32_t c = IpsOption::hash();
 
-    a = data->get_mode();
-    b = data->get_frag_bits();
-    c = 0;
-
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -300,7 +297,7 @@ uint32_t FragBitsOption::hash() const
 
 bool FragBitsOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const FragBitsOption& rhs = (const FragBitsOption&)ips;
@@ -318,7 +315,7 @@ bool FragBitsOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus FragBitsOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(fragBitsPerfStats);
+    RuleProfile profile(fragBitsPerfStats);
 
     if ( !p->has_ip() )
         return NO_MATCH;

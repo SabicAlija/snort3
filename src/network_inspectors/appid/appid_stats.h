@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@
 #include "utils/sflsq.h"
 
 class AppIdSession;
-class AppIdModuleConfig;
+class AppIdConfig;
 
 struct StatsBucket
 {
@@ -48,14 +48,14 @@ class AppIdStatistics
 public:
     ~AppIdStatistics();
 
-    static AppIdStatistics* initialize_manager(const AppIdModuleConfig&);
+    static AppIdStatistics* initialize_manager(const AppIdConfig&);
     static AppIdStatistics* get_stats_manager();
     static void cleanup();
-    void update(AppIdSession&);
+    void update(const AppIdSession&);
     void flush();
 
 private:
-    AppIdStatistics(const AppIdModuleConfig&);
+    AppIdStatistics(const AppIdConfig&);
 
     time_t get_time()
     {
@@ -82,7 +82,6 @@ private:
     time_t bucketInterval = 0;
     time_t bucketEnd = 0;
     size_t rollSize = 0;
-    time_t rollPeriod = 0;
 };
 
 #endif

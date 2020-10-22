@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,7 +26,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "protocols/packet.h"
 #include "profiler/profiler.h"
 
@@ -59,9 +59,9 @@ public:
 
 uint32_t GtpVersionOption::hash() const
 {
-    uint32_t a = version, b = 0, c = 0;
+    uint32_t a = version, b = IpsOption::hash(), c = 0;
 
-    mix_str(a, b, c, get_name());
+    mix(a, b, c);
     finalize(a,b,c);
 
     return c;
@@ -69,7 +69,7 @@ uint32_t GtpVersionOption::hash() const
 
 bool GtpVersionOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const GtpVersionOption& rhs = (const GtpVersionOption&)ips;
@@ -78,7 +78,7 @@ bool GtpVersionOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus GtpVersionOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(gtp_ver_prof);
+    RuleProfile profile(gtp_ver_prof);
 
     if ( !p->flow )
         return NO_MATCH;
@@ -128,7 +128,7 @@ bool GtpVersionModule::set(const char*, Value& v, SnortConfig*)
     if ( !v.is("~") )
         return false;
 
-    version = v.get_long();
+    version = v.get_uint8();
     return true;
 }
 

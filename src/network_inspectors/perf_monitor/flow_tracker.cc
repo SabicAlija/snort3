@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -39,13 +39,14 @@ using namespace snort;
 
 #define MAX_PKT_LEN  9000
 
-FlowTracker::FlowTracker(PerfConfig* perf) : PerfTracker(perf, TRACKER_NAME)
+FlowTracker::FlowTracker(PerfConfig* perf) : PerfTracker(perf, TRACKER_NAME),
+    flow_max_port_to_track(perf->flow_max_port_to_track)
 {
     pkt_len_cnt.resize( MAX_PKT_LEN + 1 );
-    tcp.src.resize( config->flow_max_port_to_track + 1, 0 );
-    tcp.dst.resize( config->flow_max_port_to_track + 1, 0 );
-    udp.src.resize( config->flow_max_port_to_track + 1, 0 );
-    udp.dst.resize( config->flow_max_port_to_track + 1, 0 );
+    tcp.src.resize( flow_max_port_to_track + 1, 0 );
+    tcp.dst.resize( flow_max_port_to_track + 1, 0 );
+    udp.src.resize( flow_max_port_to_track + 1, 0 );
+    udp.dst.resize( flow_max_port_to_track + 1, 0 );
     type_icmp.resize( UINT8_MAX + 1, 0 );
 
     formatter->register_section("flow");
@@ -73,7 +74,7 @@ void FlowTracker::update(Packet* p)
 {
     if (!p->is_rebuilt())
     {
-        auto len = p->pkth->caplen;
+        auto len = p->pktlen;
 
         if (p->ptrs.tcph)
             update_transport_flows(p->ptrs.sp, p->ptrs.dp, tcp, len);
@@ -120,20 +121,20 @@ void FlowTracker::clear()
 void FlowTracker::update_transport_flows(int sport, int dport,
     FlowProto& proto, int len)
 {
-    if (sport <= config->flow_max_port_to_track &&
-        dport > config->flow_max_port_to_track)
+    if (sport <= flow_max_port_to_track &&
+        dport > flow_max_port_to_track)
     {
         proto.src[sport] += len;
     }
 
-    else if (dport <= config->flow_max_port_to_track &&
-        sport > config->flow_max_port_to_track)
+    else if (dport <= flow_max_port_to_track &&
+        sport > flow_max_port_to_track)
     {
         proto.dst[dport] += len;
     }
 
-    else if (sport <= config->flow_max_port_to_track &&
-        dport <= config->flow_max_port_to_track)
+    else if (sport <= flow_max_port_to_track &&
+        dport <= flow_max_port_to_track)
     {
         proto.src[sport] += len;
         proto.dst[dport] += len;
@@ -162,7 +163,7 @@ public:
 TEST_CASE("no protocol", "[FlowTracker]")
 {
     Packet p;
-    uint32_t* len_ptr = &const_cast<DAQ_PktHdr_t*>(p.pkth)->caplen;
+    uint32_t* len_ptr = &p.pktlen;
 
     PerfConfig config;
     config.format = PerfFormat::MOCK;
@@ -207,7 +208,7 @@ TEST_CASE("icmp", "[FlowTracker]")
 {
     Packet p;
     icmp::ICMPHdr icmp;
-    uint32_t* len_ptr = &const_cast<DAQ_PktHdr_t*>(p.pkth)->caplen;
+    uint32_t* len_ptr = &p.pktlen;
     uint8_t* type_ptr = (uint8_t*) &icmp.type;
 
     PerfConfig config;
@@ -252,7 +253,7 @@ TEST_CASE("tcp", "[FlowTracker]")
 {
     Packet p;
     tcp::TCPHdr tcp;
-    uint32_t* len_ptr = &const_cast<DAQ_PktHdr_t*>(p.pkth)->caplen;
+    uint32_t* len_ptr = &p.pktlen;
 
     PerfConfig config;
     config.format = PerfFormat::MOCK;
@@ -306,7 +307,7 @@ TEST_CASE("udp", "[FlowTracker]")
 {
     Packet p;
     udp::UDPHdr udp;
-    uint32_t* len_ptr = &const_cast<DAQ_PktHdr_t*>(p.pkth)->caplen;
+    uint32_t* len_ptr = &p.pktlen;
 
     PerfConfig config;
     config.format = PerfFormat::MOCK;

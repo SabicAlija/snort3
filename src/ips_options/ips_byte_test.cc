@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -78,7 +78,7 @@
  *      msg: "got DEADBEEF!";)
  *
  * alert tcp any any -> any any \
- *      (byte_test:2, =, 568, 0, bitmask 0x3FF0;	  \
+ *      (byte_test:2, =, 568, 0, bitmask 0x3FF0;      \
  *      msg:"got 568 after applying bitmask 0x3FF0 on 2 bytes extracted";)
  *
  * Effect:
@@ -97,7 +97,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -210,30 +210,29 @@ private:
 
 uint32_t ByteTestOption::hash() const
 {
-    uint32_t a,b,c;
-    const ByteTestData* data = &config;
-
-    a = data->bytes_to_compare;
-    b = data->cmp_value;
-    c = data->opcode;
+    uint32_t a = config.bytes_to_compare;
+    uint32_t b = config.cmp_value;
+    uint32_t c = config.opcode;
 
     mix(a,b,c);
 
-    a += data->offset;
-    b += data->not_flag ? (1 << 24) : 0;
-    b += data->relative_flag ? (1 << 16) : 0;
-    b += data->data_string_convert_flag ? (1 << 8) : 0;
-    b += data->endianness;
-    c += data->base;
+    a += config.offset;
+    b += config.not_flag ? (1 << 24) : 0;
+    b += config.relative_flag ? (1 << 16) : 0;
+    b += config.data_string_convert_flag ? (1 << 8) : 0;
+    b += config.endianness;
+    c += config.base;
 
     mix(a,b,c);
 
-    a += data->cmp_value_var;
-    b += data->offset_var;
-    c += data->bitmask_val;
+    a += config.cmp_value_var;
+    b += config.offset_var;
+    c += config.bitmask_val;
 
     mix(a,b,c);
-    mix_str(a,b,c,get_name());
+    a += IpsOption::hash();
+
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -269,7 +268,7 @@ bool ByteTestOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ByteTestOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(byteTestPerfStats);
+    RuleProfile profile(byteTestPerfStats);
 
     ByteTestData* btd = (ByteTestData*)&config;
     uint32_t cmp_value = 0;
@@ -478,7 +477,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteTestData data;
+    ByteTestData data = {};
     string cmp_var;
     string off_var;
 };
@@ -532,7 +531,7 @@ bool ByteTestModule::end(const char*, int, SnortConfig*)
 bool ByteTestModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~count") )
-        data.bytes_to_compare = v.get_long();
+        data.bytes_to_compare = v.get_uint8();
 
     else if ( v.is("~operator") )
         parse_operator(v.get_string(), data);
@@ -580,7 +579,7 @@ bool ByteTestModule::set(const char*, Value& v, SnortConfig*)
         data.base = 8;
 
     else if ( v.is("bitmask") )
-        data.bitmask_val = v.get_long();
+        data.bitmask_val = v.get_uint32();
 
     else
         return false;

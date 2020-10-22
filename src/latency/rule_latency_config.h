@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,21 +25,22 @@
 
 struct RuleLatencyConfig
 {
-    enum Action
-    {
-        NONE = 0x00,
-        ALERT = 0x01,
-        LOG = 0x02,
-        ALERT_AND_LOG = ALERT | LOG
-    };
-
     hr_duration max_time = 0_ticks;
     bool suspend = false;
     unsigned suspend_threshold = 0;
     hr_duration max_suspend_time = 0_ticks;
-    Action action = NONE;
+#ifdef REG_TEST
+    bool test_timeout = false;
+#endif
 
-    bool enabled() const { return max_time > 0_ticks; }
+    bool enabled() const
+    {
+#ifdef REG_TEST
+        if ( test_timeout )
+            return true;
+#endif
+        return max_time > 0_ticks;
+    }
     bool allow_reenable() const { return max_suspend_time > 0_ticks; }
 };
 

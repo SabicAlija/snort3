@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,11 +30,9 @@
 
 #include <mutex>
 
-#include "main/snort_debug.h"
-
 #include "circular_buffer.h"
 
-#define FILE_MEM_SUCCESS    0  // FIXIT-L use bool
+#define FILE_MEM_SUCCESS    0  // FIXIT-RC use bool
 #define FILE_MEM_FAIL      (-1)
 
 class FileMemPool
@@ -73,15 +71,12 @@ private:
 
     void free_pools();
     int remove(CircularBuffer* cb, void* obj);
-#ifdef DEBUG_MSGS
-    void verify();
-#endif
 
-    void** datapool; /* memory buffer */
-    uint64_t total;
-    CircularBuffer* free_list;
-    CircularBuffer* released_list;
-    size_t obj_size;
+    void** datapool = nullptr; /* memory buffer */
+    uint64_t total = 0;
+    CircularBuffer* free_list = nullptr;
+    CircularBuffer* released_list = nullptr;
+    size_t obj_size = 0;
     std::mutex pool_mutex;
 };
 

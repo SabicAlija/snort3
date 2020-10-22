@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -39,16 +39,6 @@ StreamUdpConfig::StreamUdpConfig()
     session_timeout = 30;
 }
 
-static void udp_show(StreamUdpConfig* pc)
-{
-    LogMessage("Stream UDP config:\n");
-    LogMessage("    Timeout: %d seconds\n", pc->session_timeout);
-
-#ifdef REG_TEST
-    LogMessage("    UDP Session Size: %zu\n", sizeof(UdpSession));
-#endif
-}
-
 //-------------------------------------------------------------------------
 // inspector stuff
 //-------------------------------------------------------------------------
@@ -59,7 +49,7 @@ public:
     StreamUdp(StreamUdpConfig*);
     ~StreamUdp() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     NORETURN_ASSERT void eval(Packet*) override;
 
 public:
@@ -76,10 +66,12 @@ StreamUdp::~StreamUdp()
     delete config;
 }
 
-void StreamUdp::show(SnortConfig*)
+void StreamUdp::show(const SnortConfig*) const
 {
-    if ( config )
-        udp_show(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_value("session_timeout", config->session_timeout);
 }
 
 NORETURN_ASSERT void StreamUdp::eval(Packet*)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -60,7 +60,7 @@
 #include "main/thread.h"
 #include "utils/util.h"
 
-#define MEMASSERT(p,s) if (!(p)) { fprintf(stderr,"ACSM-No Memory: %s\n",s); exit(0); }
+using namespace snort;
 
 static int max_memory = 0;
 
@@ -113,7 +113,6 @@ static ACSM_PATTERN* CopyMatchListEntry(ACSM_PATTERN* px)
 {
     ACSM_PATTERN* p;
     p = (ACSM_PATTERN*)AC_MALLOC(sizeof(ACSM_PATTERN));
-    MEMASSERT(p, "CopyMatchListEntry");
     memcpy(p, px, sizeof (ACSM_PATTERN));
     px->udata->ref_count++;
     p->next = nullptr;
@@ -128,7 +127,6 @@ static void AddMatchListEntry(ACSM_STRUCT* acsm, int state, ACSM_PATTERN* px)
 {
     ACSM_PATTERN* p;
     p = (ACSM_PATTERN*)AC_MALLOC(sizeof(ACSM_PATTERN));
-    MEMASSERT(p, "AddMatchListEntry");
     memcpy(p, px, sizeof (ACSM_PATTERN));
     p->next = acsm->acsmStateTable[state].MatchList;
     acsm->acsmStateTable[state].MatchList = p;
@@ -184,7 +182,7 @@ static void Build_NFA(ACSM_STRUCT* acsm)
 
         if (s)
         {
-            queue.push_back(s);
+            queue.emplace_back(s);
             acsm->acsmStateTable[s].FailState = 0;
         }
     }
@@ -199,7 +197,7 @@ static void Build_NFA(ACSM_STRUCT* acsm)
 
             if ( s != ACSM_FAIL_STATE )
             {
-                queue.push_back(s);
+                queue.emplace_back(s);
                 int fs = acsm->acsmStateTable[r].FailState;
                 int next;
 
@@ -247,7 +245,7 @@ static void Convert_NFA_To_DFA(ACSM_STRUCT* acsm)
     for (int i = 0; i < ALPHABET_SIZE; i++)
     {
         if ( int s = acsm->acsmStateTable[0].NextState[i] )
-            queue.push_back(s);
+            queue.emplace_back(s);
     }
 
     /* Start building the next layer of transitions */
@@ -260,7 +258,7 @@ static void Convert_NFA_To_DFA(ACSM_STRUCT* acsm)
 
             if ( s != ACSM_FAIL_STATE )
             {
-                queue.push_back(s);
+                queue.emplace_back(s);
             }
             else
             {
@@ -277,7 +275,6 @@ static void Convert_NFA_To_DFA(ACSM_STRUCT* acsm)
 ACSM_STRUCT* acsmNew(const MpseAgent* agent)
 {
     ACSM_STRUCT* p = (ACSM_STRUCT*)AC_MALLOC (sizeof (ACSM_STRUCT));
-    MEMASSERT(p, "acsmNew");
 
     if (p)
     {
@@ -295,14 +292,12 @@ int acsmAddPattern(
 {
     ACSM_PATTERN* plist;
     plist = (ACSM_PATTERN*)AC_MALLOC (sizeof (ACSM_PATTERN));
-    MEMASSERT(plist, "acsmAddPattern");
     plist->patrn = (uint8_t*)AC_MALLOC (n);
     ConvertCaseEx (plist->patrn, pat, n);
     plist->casepatrn = (uint8_t*)AC_MALLOC (n);
     memcpy(plist->casepatrn, pat, n);
 
     plist->udata = (ACSM_USERDATA*)AC_MALLOC(sizeof(ACSM_USERDATA));
-    MEMASSERT(plist->udata, "acsmAddPattern");
     plist->udata->ref_count = 1;
     plist->udata->id = user;
 
@@ -315,7 +310,7 @@ int acsmAddPattern(
     return 0;
 }
 
-static void acsmBuildMatchStateTrees(snort::SnortConfig* sc, ACSM_STRUCT* acsm)
+static void acsmBuildMatchStateTrees(SnortConfig* sc, ACSM_STRUCT* acsm)
 {
     ACSM_PATTERN* mlist;
 
@@ -364,7 +359,6 @@ static inline int _acsmCompile(ACSM_STRUCT* acsm)
     }
     acsm->acsmStateTable =
         (ACSM_STATETABLE*)AC_MALLOC (sizeof (ACSM_STATETABLE) * acsm->acsmMaxStates);
-    MEMASSERT(acsm->acsmStateTable, "_acsmCompile");
 
     /* Initialize state zero as a branch */
     acsm->acsmNumStates = 0;
@@ -402,7 +396,7 @@ static inline int _acsmCompile(ACSM_STRUCT* acsm)
     return 0;
 }
 
-int acsmCompile(snort::SnortConfig* sc, ACSM_STRUCT* acsm)
+int acsmCompile(SnortConfig* sc, ACSM_STRUCT* acsm)
 {
     if ( int rval = _acsmCompile (acsm) )
         return rval;
@@ -559,54 +553,4 @@ int acsmPrintSummaryInfo()
 
     return 0;
 }
-
-#ifdef ACSMX_MAIN
-
-/*
-*  Text Data Buffer
-*/
-uint8_t text[512];
-
-/*
-*    A Match is found
-*/
-int MatchFound(unsigned id, int index, void* data)
-{
-    fprintf (stdout, "%s\n", (char*)id);
-    return 0;
-}
-
-/*
-*
-*/
-int main(int argc, char** argv)
-{
-    int i, nocase = 0;
-    ACSM_STRUCT* acsm;
-    if (argc < 3)
-    {
-        fprintf (stderr,
-            "Usage: acsmx pattern word-1 word-2 ... word-n  -nocase\n");
-        exit (0);
-    }
-    acsm = acsmNew ();
-    strncpy(text, argv[1], sizeof(text));
-    for (i = 1; i < argc; i++)
-        if (strcmp (argv[i], "-nocase") == 0)
-            nocase = 1;
-    for (i = 2; i < argc; i++)
-    {
-        if (argv[i][0] == '-')
-            continue;
-        acsmAddPattern (acsm, (uint8_t*)argv[i], strlen (argv[i]), nocase, 0, 0,
-            argv[i], i - 2);
-    }
-    acsmCompile (acsm);
-    acsmSearch (acsm, text, strlen (text), MatchFound, (void*)0);
-    acsmFree (acsm);
-    printf ("normal pgm end\n");
-    return (0);
-}
-
-#endif /*  */
 

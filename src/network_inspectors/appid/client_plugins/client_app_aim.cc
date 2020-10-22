@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -110,7 +110,6 @@ static inline bool check_username(
 {
     const uint8_t* const end = data + tlv->len;
     char* ptr = buf;
-    *buf_end = '\0';
 
     for ( const uint8_t* cur = data; cur < end; ++cur )
     {
@@ -122,6 +121,8 @@ static inline bool check_username(
         else
             return false;
     }
+
+    *ptr = '\0';
 
     return true;
 }
@@ -196,8 +197,8 @@ int AimClientDetector::validate(AppIdDiscoveryArgs& args)
                         constexpr auto USERNAME_LEN = 256;
                         char username[USERNAME_LEN];
 
-                        if ( check_username(cur, tlv, username, username + USERNAME_LEN) )
-                            add_user(args.asd, username, APP_ID_AOL_INSTANT_MESSENGER, true);
+                        if ( check_username(cur, tlv, username, username + USERNAME_LEN - 1) )
+                            add_user(args.asd, username, APP_ID_AOL_INSTANT_MESSENGER, true, args.change_bits);
                     }
                     break;
                 case 0x0003:
@@ -228,7 +229,7 @@ int AimClientDetector::validate(AppIdDiscoveryArgs& args)
 
                 snprintf(version, sizeof(version), "%d.%d.%d", major, minor, lesser);
                 add_app(args.asd, APP_ID_AOL_INSTANT_MESSENGER, APP_ID_AOL_INSTANT_MESSENGER,
-                    version);
+                    version, args.change_bits);
             }
         }
     }

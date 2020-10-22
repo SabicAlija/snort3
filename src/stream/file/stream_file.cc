@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,8 @@
 
 #include "stream_file.h"
 
+#include "log/messages.h"
+
 #include "file_module.h"
 #include "file_session.h"
 
@@ -39,6 +41,7 @@ public:
     { config.upload = b; }
 
     NORETURN_ASSERT void eval(Packet*) override;
+    void show(const SnortConfig*) const override;
 
     StreamFileConfig config;
 };
@@ -47,6 +50,11 @@ NORETURN_ASSERT void StreamFile::eval(Packet*)
 {
     // session::process() instead
     assert(false);
+}
+
+void StreamFile::show(const SnortConfig*) const
+{
+    ConfigLogger::log_flag("upload", config.upload);
 }
 
 StreamFileConfig* get_file_cfg(Inspector* ins)

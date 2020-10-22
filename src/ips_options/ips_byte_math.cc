@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,7 +27,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -100,30 +100,30 @@ private:
 
 uint32_t ByteMathOption::hash() const
 {
-    uint32_t a,b,c;
-    const ByteMathData* data = &config;
-
-    a = data->bytes_to_extract;
-    b = data->rvalue;
-    c = data->oper;
+    uint32_t a = config.bytes_to_extract;
+    uint32_t b = config.rvalue;
+    uint32_t c = config.oper;
 
     mix(a,b,c);
 
-    a += data->offset;
-    b += ((uint32_t) data->rvalue_var << 24 |
-        (uint32_t) data->offset_var << 16 |
-        (uint32_t) data->result_var << 8 |
-        data->endianess);
-    c += data->base;
+    a += config.offset;
+    b += ((uint32_t) config.rvalue_var << 24 |
+        (uint32_t) config.offset_var << 16 |
+        (uint32_t) config.result_var << 8 |
+        config.endianess);
+    c += config.base;
 
     mix(a,b,c);
 
-    a += data->bitmask_val;
-    b += data->relative_flag;
-    c += data->string_convert_flag;
-    mix_str(a,b,c,get_name());
+    a += config.bitmask_val;
+    b += config.relative_flag;
+    c += config.string_convert_flag;
+
+    mix(a,b,c);
+
+    a += IpsOption::hash();
+
     finalize(a,b,c);
-
     return c;
 }
 
@@ -161,7 +161,7 @@ bool ByteMathOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ByteMathOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(byteMathPerfStats);
+    RuleProfile profile(byteMathPerfStats);
 
     if (p == nullptr)
         return NO_MATCH;
@@ -249,23 +249,44 @@ IpsOption::EvalStatus ByteMathOption::eval(Cursor& c, Packet* p)
     // If the rule isn't written correctly, there is a risk for wrap around.
     switch (config.oper)
     {
-    case BM_PLUS: value += rvalue;
-        break;
-
-    case BM_MINUS: value -= rvalue;
-        break;
-
-    case BM_MULTIPLY: value *= rvalue;
-        break;
-
+    case BM_PLUS:
+        if( value + rvalue < value )
+        {
+            return NO_MATCH;
+        }
+        else
+        {
+            value += rvalue;
+            break;
+        }
+    case BM_MINUS:
+        if( value < rvalue )
+        {
+            return NO_MATCH;
+        }
+        else
+        {
+            value -= rvalue;
+            break;
+        }
+    case BM_MULTIPLY:
+        if ( value != 0 and rvalue != 0 and (((value * rvalue) / rvalue) != value) )
+        {
+            return NO_MATCH;
+        }
+        else
+        {
+            value *= rvalue;
+            break;
+        }
     case BM_DIVIDE: value /= rvalue;
-        break;
+            break;
 
     case BM_LEFT_SHIFT: value <<= rvalue;
-        break;
+            break;
 
     case BM_RIGHT_SHIFT: value >>= rvalue;
-        break;
+            break;
     }
 
     SetVarValueByIndex(value, config.result_var);
@@ -346,7 +367,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteMathData data;
+    ByteMathData data = {};
     string rvalue_var;
     string off_var;
 };
@@ -363,10 +384,10 @@ bool ByteMathModule::begin(const char*, int, SnortConfig*)
 bool ByteMathModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("bytes") )
-        data.bytes_to_extract = v.get_long();
+        data.bytes_to_extract = v.get_uint8();
 
     else if ( v.is("oper") )
-        data.oper = (BM_Oper)v.get_long();
+        data.oper = (BM_Oper)v.get_uint8();
 
     else if ( v.is("rvalue") )
     {
@@ -397,13 +418,13 @@ bool ByteMathModule::set(const char*, Value& v, SnortConfig*)
     else if ( v.is("string") )
     {
         data.string_convert_flag = true;
-        parse_base(v.get_long(), data);
+        parse_base(v.get_uint8(), data);
     }
     else if ( v.is("endian") )
-        parse_endian(v.get_long(), data);
+        parse_endian(v.get_uint8(), data);
 
     else if ( v.is("bitmask") )
-        data.bitmask_val = v.get_long();
+        data.bitmask_val = v.get_uint32();
 
     else if ( v.is("result") )
         data.result_name = snort_strdup(v.get_string());
@@ -518,8 +539,7 @@ static IpsOption* byte_math_ctor(Module* p, OptTreeNode*)
     data.result_var = AddVarNameToList(data.result_name);
     if (data.result_var == IPS_OPTIONS_NO_VAR)
     {
-        ParseError("Rule has more than %d variables.",
-            NUM_IPS_OPTIONS_VARS);
+        ParseError("Rule has more than %d variables.", NUM_IPS_OPTIONS_VARS);
         return nullptr;
     }
     return new ByteMathOption(m->data);

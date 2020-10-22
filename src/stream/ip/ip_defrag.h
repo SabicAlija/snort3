@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2004 Martin Roesch <roesch@sourcefire.com>
 //
@@ -40,7 +40,7 @@ public:
     Defrag(FragEngine&);
 
     bool configure(snort::SnortConfig*);
-    void show(snort::SnortConfig*);
+    void show() const;
 
     void process(snort::Packet*, FragTracker*);
     void cleanup(FragTracker*);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -39,10 +39,10 @@ static const RuleMap arp_rules[] =
     { 0, nullptr }
 };
 
-class ArpModule : public CodecModule
+class ArpModule : public BaseCodecModule
 {
 public:
-    ArpModule() : CodecModule(CD_ARP_NAME, CD_ARP_HELP) { }
+    ArpModule() : BaseCodecModule(CD_ARP_NAME, CD_ARP_HELP) { }
 
     const RuleMap* get_rules() const override
     { return arp_rules; }
@@ -60,8 +60,8 @@ public:
 
 void ArpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::ETHERTYPE_ARP);
-    v.push_back(ProtocolId::ETHERTYPE_REVARP);
+    v.emplace_back(ProtocolId::ETHERTYPE_ARP);
+    v.emplace_back(ProtocolId::ETHERTYPE_REVARP);
 }
 
 bool ArpCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)

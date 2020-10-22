@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,11 +23,14 @@
 #endif
 
 #include "catch/snort_catch.h"
+#include "main/snort_config.h"
 #include "parser/parse_ip.h"
 #include "sfip/sf_ip.h"
 
 #include "rate_filter.h"
 #include "sfrf.h"
+
+using namespace snort;
 
 //---------------------------------------------------------------
 
@@ -886,15 +889,17 @@ static void PrintTests()
 
 //---------------------------------------------------------------
 
-static void Init(unsigned cap)
+static void Init(const SnortConfig* sc, unsigned cap)
 {
     // FIXIT-L must set policies because they may have been invalidated
     // by prior tests with transient SnortConfigs.  better to fix sfrf
     // to use a SnortConfig parameter or make this a make check test
     // with a separate executable.
-    set_default_policy();
+    set_default_policy(sc);
     rfc = RateFilter_ConfigNew();
     rfc->memcap = cap;
+
+    SFRF_Alloc(rfc->memcap);
 
     for ( unsigned i = 0; i < NUM_NODES; i++ )
     {
@@ -906,7 +911,7 @@ static void Init(unsigned cap)
         cfg.tracking = p->track;
         cfg.count = p->count;
         cfg.seconds = p->seconds;
-        cfg.newAction = (snort::Actions::Type)RULE_NEW;
+        cfg.newAction = (Actions::Type)RULE_NEW;
         cfg.timeout = p->timeout;
         cfg.applyTo = p->ip ? sfip_var_from_string(p->ip, "sfrf_test") : nullptr;
 
@@ -940,15 +945,15 @@ static int EventTest(EventData* p)
     // this is the only acceptable public value for op
     SFRF_COUNT_OPERATION op = SFRF_COUNT_INCREMENT;
 
-    snort::SfIp sip, dip;
+    SfIp sip, dip;
     sip.set(p->sip);
     dip.set(p->dip);
 
     status = SFRF_TestThreshold(
         rfc, p->gid, p->sid, &sip, &dip, curtime, op);
 
-    if ( status >= snort::Actions::MAX )
-        status -= snort::Actions::MAX;
+    if ( status >= Actions::MAX )
+        status -= Actions::MAX;
 
     return status;
 }
@@ -983,7 +988,8 @@ static int CapCheck(int i)
 
 TEST_CASE("sfrf default memcap", "[sfrf]")
 {
-    Init(MEM_DEFAULT);
+    SnortConfig sc;
+    Init(&sc, MEM_DEFAULT);
 
     SECTION("setup")
     {
@@ -1000,7 +1006,8 @@ TEST_CASE("sfrf default memcap", "[sfrf]")
 
 TEST_CASE("sfrf minimum memcap", "[sfrf]")
 {
-    Init(MEM_MINIMUM);
+    SnortConfig sc;
+    Init(&sc, MEM_MINIMUM);
 
     SECTION("setup")
     {
@@ -1014,4 +1021,3 @@ TEST_CASE("sfrf minimum memcap", "[sfrf]")
     }
     Term();
 }
-

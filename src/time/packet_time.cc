@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,36 +33,53 @@
 #include "config.h"
 #endif
 
-#include "main/thread.h"
-
 #include "packet_time.h"
+
+#include "main/thread.h"
+#include "time/timersub.h"
 
 static THREAD_LOCAL struct timeval s_recent_packet = { 0, 0 };
 static THREAD_LOCAL uint32_t s_first_packet = 0;
 
 namespace snort
 {
+void packet_gettimeofday(struct timeval* tv)
+{
+    *tv = s_recent_packet;
+}
+
 time_t packet_time()
 {
     return s_recent_packet.tv_sec;
+}
+
+int64_t timersub_ms(const struct timeval* end, const struct timeval* start)
+{
+    if (!end)
+        end = &s_recent_packet; // use recent packet time instead when end is null
+
+    if (!start or !start->tv_sec or !end->tv_sec)
+        return 0;               // can't really compare when values are not set
+
+    struct timeval difftime;
+    TIMERSUB(end, start, &difftime);
+    return difftime.tv_sec*1000 + difftime.tv_usec/1000;
 }
 }
 
 void packet_time_update(const struct timeval* cur_tv)
 {
-    if ( !s_first_packet )
-        s_first_packet = cur_tv->tv_sec;
+    if (timercmp(&s_recent_packet, cur_tv, <))
+    {
+        if ( !s_first_packet )
+            s_first_packet = cur_tv->tv_sec;
 
-    s_recent_packet = *cur_tv;
+        s_recent_packet = *cur_tv;
+    }
 }
 
 uint32_t packet_first_time()
 {
     return s_first_packet;
-}
-
-void packet_gettimeofday(struct timeval* tv)
-{
-    *tv = s_recent_packet;
 }
 

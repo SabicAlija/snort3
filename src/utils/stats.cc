@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,8 @@
 
 #include "stats.h"
 
+#include <cassert>
+
 #include "detection/detection_engine.h"
 #include "file_api/file_stats.h"
 #include "filters/sfthreshold.h"
@@ -43,16 +45,12 @@
 #define STATS_SEPARATOR \
     "--------------------------------------------------"
 
-THREAD_LOCAL AuxCount aux_counts;
 ProcessCount proc_stats;
 
 namespace snort
 {
 
 THREAD_LOCAL PacketCount pc;
-
-PegCount get_packet_number()
-{ return pc.total_from_daq; }
 
 //-------------------------------------------------------------------------
 
@@ -139,7 +137,6 @@ static void timing_stats()
     struct timeval difftime;
     TIMERSUB(&endtime, &starttime, &difftime);
 
-
     uint32_t tmp = (uint32_t)difftime.tv_sec;
     uint32_t total_secs = tmp;
     if ( total_secs < 1 )
@@ -155,21 +152,27 @@ static void timing_stats()
 
     LogMessage("%25.25s: %02d:%02d:%02d\n", "runtime", hrs, mins, secs);
 
-    LogMessage("%25.25s: %lu.%lu\n", "seconds",
+    LogMessage("%25.25s: %lu.%06lu\n", "seconds",
         (unsigned long)difftime.tv_sec, (unsigned long)difftime.tv_usec);
 
-    PegCount num_pkts = ModuleManager::get_module("daq")->get_global_count("received");
-    LogMessage("%25.25s: " STDu64 "\n", "packets", num_pkts);
+    Module* daq = ModuleManager::get_module("daq");
+    assert(daq);
 
-    uint64_t pps = (num_pkts / total_secs);
-    LogMessage("%25.25s: " STDu64 "\n", "pkts/sec", pps);
+    uint64_t num_pkts = (uint64_t)daq->get_global_count("analyzed");
+    uint64_t num_byts = (uint64_t)daq->get_global_count("rx_bytes");
+
+    if ( uint64_t pps = (num_pkts / total_secs) )
+        LogMessage("%25.25s: " STDu64 "\n", "pkts/sec", pps);
+
+    if ( uint64_t mbps = 8 * num_byts / total_secs / 1024 / 1024 )
+        LogMessage("%25.25s: " STDu64 "\n", "Mbits/sec", mbps);
 }
 
 //-------------------------------------------------------------------------
 
 const PegInfo pc_names[] =
 {
-    { CountType::SUM, "analyzed", "packets sent to detection" },
+    { CountType::NOW, "analyzed", "total packets processed" },
     { CountType::SUM, "hard_evals", "non-fast pattern rule evaluations" },
     { CountType::SUM, "raw_searches", "fast pattern searches in raw packet data" },
     { CountType::SUM, "cooked_searches", "fast pattern searches in cooked packet data" },
@@ -179,6 +182,12 @@ const PegInfo pc_names[] =
     { CountType::SUM, "header_searches", "fast pattern searches in header buffer" },
     { CountType::SUM, "body_searches", "fast pattern searches in body buffer" },
     { CountType::SUM, "file_searches", "fast pattern searches in file buffer" },
+    { CountType::SUM, "raw_key_searches", "fast pattern searches in raw key buffer" },
+    { CountType::SUM, "raw_header_searches", "fast pattern searches in raw header buffer" },
+    { CountType::SUM, "method_searches", "fast pattern searches in method buffer" },
+    { CountType::SUM, "stat_code_searches", "fast pattern searches in status code buffer" },
+    { CountType::SUM, "stat_msg_searches", "fast pattern searches in status message buffer" },
+    { CountType::SUM, "cookie_searches", "fast pattern searches in cookie buffer" },
     { CountType::SUM, "offloads", "fast pattern searches that were offloaded" },
     { CountType::SUM, "alerts", "alerts not including IP reputation" },
     { CountType::SUM, "total_alerts", "alerts including IP reputation" },
@@ -189,6 +198,15 @@ const PegInfo pc_names[] =
     { CountType::SUM, "log_limit", "events queued but not logged" },
     { CountType::SUM, "event_limit", "events filtered" },
     { CountType::SUM, "alert_limit", "events previously triggered on same PDU" },
+    { CountType::SUM, "context_stalls", "times processing stalled to wait for an available context" },
+    { CountType::SUM, "offload_busy", "times offload was not available" },
+    { CountType::SUM, "onload_waits", "times processing waited for onload to complete" },
+    { CountType::SUM, "offload_fallback", "fast pattern offload search fallback attempts" },
+    { CountType::SUM, "offload_failures", "fast pattern offload search failures" },
+    { CountType::SUM, "offload_suspends", "fast pattern search suspends due to offload context chains" },
+    { CountType::SUM, "pcre_match_limit", "total number of times pcre hit the match limit" },
+    { CountType::SUM, "pcre_recursion_limit", "total number of times pcre hit the recursion limit" },
+    { CountType::SUM, "pcre_error", "total number of times pcre returns error" },
     { CountType::END, nullptr, nullptr }
 };
 
@@ -201,8 +219,9 @@ const PegInfo proc_names[] =
     { CountType::SUM, "policy_reloads", "number of times policies were reloaded" },
     { CountType::SUM, "inspector_deletions", "number of times inspectors were deleted" },
     { CountType::SUM, "daq_reloads", "number of times daq configuration was reloaded" },
-    { CountType::SUM, "attribute_table_reloads", "number of times hosts table was reloaded" },
-    { CountType::SUM, "attribute_table_hosts", "total number of hosts in table" },
+    { CountType::SUM, "attribute_table_reloads", "number of times hosts attribute table was reloaded" },
+    { CountType::SUM, "attribute_table_hosts", "number of hosts added to the attribute table" },
+    { CountType::SUM, "attribute_table_overflow", "number of host additions that failed due to attribute table full" },
     { CountType::END, nullptr, nullptr }
 };
 
@@ -212,19 +231,16 @@ void DropStats()
 {
     LogLabel("Packet Statistics");
     ModuleManager::get_module("daq")->show_stats();
-    
+
     PacketManager::dump_stats();
 
     LogLabel("Module Statistics");
     const char* exclude = "daq snort";
-    ModuleManager::dump_stats(SnortConfig::get_conf(), exclude, false);
-    ModuleManager::dump_stats(SnortConfig::get_conf(), exclude, true);
+    ModuleManager::dump_stats(exclude, false);
+    ModuleManager::dump_stats(exclude, true);
 
     LogLabel("Summary Statistics");
     show_stats((PegCount*)&proc_stats, proc_names, array_size(proc_names)-1, "process");
-
-    if ( SnortConfig::log_verbose() )
-        log_malloc_info();
 }
 
 //-------------------------------------------------------------------------
@@ -234,21 +250,17 @@ void PrintStatistics()
     DropStats();
     timing_stats();
 
-    // FIXIT-L below stats need to be made consistent with above
-    print_thresholding(SnortConfig::get_conf()->threshold_config, 1);
+    SnortConfig* sc = SnortConfig::get_main_conf();
 
-    {
-        // FIXIT-L can do flag saving with RAII (much cleaner)
-        int save_quiet_flag = SnortConfig::get_conf()->logging_flags & LOGGING_FLAG__QUIET;
+    // FIXIT-L can do flag saving with RAII (much cleaner)
+    int save_quiet_flag = sc->logging_flags & LOGGING_FLAG__QUIET;
+    sc->logging_flags &= ~LOGGING_FLAG__QUIET;
 
-        SnortConfig::get_conf()->logging_flags &= ~LOGGING_FLAG__QUIET;
+    // once more for the main thread
+    Profiler::consolidate_stats();
+    Profiler::show_stats();
 
-        // once more for the main thread
-        Profiler::consolidate_stats();
-        Profiler::show_stats();
-
-        SnortConfig::get_conf()->logging_flags |= save_quiet_flag;
-    }
+    sc->logging_flags |= save_quiet_flag;
 }
 
 //-------------------------------------------------------------------------
@@ -299,7 +311,7 @@ void show_stats(
 
 void show_stats(
     PegCount* pegs, const PegInfo* info,
-    IndexVec& peg_idxs, const char* module_name, FILE* fh)
+    const IndexVec& peg_idxs, const char* module_name, FILE* fh)
 {
     bool head = false;
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_stream_config.cc author davis mcpherson <davmcphe@@cisco.com>
+// tcp_stream_config.cc author davis mcpherson <davmcphe@cisco.com>
 // Created on: Oct 22, 2015
 
 #ifdef HAVE_CONFIG_H
@@ -29,48 +29,40 @@
 
 using namespace snort;
 
-static const char* const reassembly_policy_names[] =
-{ "no policy", "first", "last", "linux", "old_linux", "bsd", "macos", "solaris", "irix",
+static const char* const policy_names[] =
+{ "first", "last", "linux", "old_linux", "bsd", "macos", "solaris", "irix",
   "hpux11", "hpux10", "windows", "win_2003", "vista", "proxy" };
 
 TcpStreamConfig::TcpStreamConfig() = default;
 
-void TcpStreamConfig::show_config()
+void TcpStreamConfig::show() const
 {
-    TcpStreamConfig::show_config(this);
-}
+    ConfigLogger::log_value("flush_factor", flush_factor);
+    ConfigLogger::log_value("max_pdu", paf_max);
+    ConfigLogger::log_value("max_window", max_window);
+    ConfigLogger::log_flag("no_ack", no_ack);
+    ConfigLogger::log_value("overlap_limit", overlap_limit);
+    ConfigLogger::log_value("policy", policy_names[static_cast<int>(policy)]);
 
-void TcpStreamConfig::show_config(TcpStreamConfig* config)
-{
-    LogMessage("Stream TCP Policy config:\n");
-    LogMessage("    Reassembly Policy: %s\n",
-        reassembly_policy_names[ static_cast<int>( config->reassembly_policy ) ]);
-    LogMessage("    Timeout: %d seconds\n", config->session_timeout);
+    std::string str;
+    str += "{ max_bytes = ";
+    str += std::to_string(max_queued_bytes);
+    str += ", max_segments = ";
+    str += std::to_string(max_queued_segs);
+    str += " }";
+    ConfigLogger::log_value("queue_limit", str.c_str());
 
-    if ( config->max_window != 0 )
-        LogMessage("    Max TCP Window: %u\n", config->max_window);
+    ConfigLogger::log_flag("reassemble_async", !(flags & STREAM_CONFIG_NO_ASYNC_REASSEMBLY));
+    ConfigLogger::log_limit("require_3whs", hs_timeout, -1, hs_timeout < 0 ? hs_timeout : -1);
+    ConfigLogger::log_value("session_timeout", session_timeout);
 
-    if ( config->overlap_limit )
-        LogMessage("    Limit on TCP Overlaps: %d\n", config->overlap_limit);
+    str = "{ count = ";
+    str += std::to_string(max_consec_small_segs);
+    str += ", maximum_size = ";
+    str += std::to_string(max_consec_small_seg_size);
+    str += " }";
+    ConfigLogger::log_value("small_segments", str.c_str());
 
-    if ( config->max_queued_bytes != 0 )
-        LogMessage("    Maximum number of bytes to queue per session: %d\n",
-            config->max_queued_bytes);
-
-    if ( config->max_queued_segs != 0 )
-        LogMessage("    Maximum number of segs to queue per session: %d\n",
-            config->max_queued_segs);
-
-    if ( config->flags )
-    {
-        LogMessage("    Options:\n");
-        if (config->flags & STREAM_CONFIG_NO_ASYNC_REASSEMBLY)
-            LogMessage("        Don't queue packets on one-sided sessions: YES\n");
-    }
-
-    if ( config->hs_timeout < 0 )
-        LogMessage("    Require 3-Way Handshake: NO\n");
-    else
-        LogMessage("    Require 3-Way Handshake: after %d seconds\n", config->hs_timeout);
+    ConfigLogger::log_flag("track_only", (flags & STREAM_CONFIG_NO_REASSEMBLY));
 }
 

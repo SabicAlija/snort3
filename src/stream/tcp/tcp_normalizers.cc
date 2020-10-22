@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_normalizers.cc author davis mcpherson <davmcphe@@cisco.com>
+// tcp_normalizers.cc author davis mcpherson <davmcphe@cisco.com>
 // Created on: Sep 22, 2015
 
 #ifdef HAVE_CONFIG_H
@@ -26,9 +26,9 @@
 #include "tcp_normalizers.h"
 
 #include "tcp_module.h"
-#include "stream/libtcp/tcp_segment_descriptor.h"
-#include "stream/libtcp/tcp_stream_session.h"
-#include "stream/libtcp/tcp_stream_tracker.h"
+#include "tcp_segment_descriptor.h"
+#include "tcp_stream_session.h"
+#include "tcp_stream_tracker.h"
 
 using namespace snort;
 
@@ -62,8 +62,6 @@ public:
     bool validate_rst(TcpNormalizerState&, TcpSegmentDescriptor&) override;
     bool is_paws_ts_checked_required(TcpNormalizerState&, TcpSegmentDescriptor&) override;
     int handle_repeated_syn(TcpNormalizerState&, TcpSegmentDescriptor&) override;
-    uint16_t set_urg_offset(
-        TcpNormalizerState&, const tcp::TCPHdr* tcph, uint16_t dsize) override;
 };
 
 class TcpNormalizerOldLinux : public TcpNormalizer
@@ -77,8 +75,6 @@ public:
     bool validate_rst(TcpNormalizerState&, TcpSegmentDescriptor&) override;
     bool is_paws_ts_checked_required(TcpNormalizerState&, TcpSegmentDescriptor&) override;
     int handle_repeated_syn(TcpNormalizerState&, TcpSegmentDescriptor&) override;
-    uint16_t set_urg_offset(
-        TcpNormalizerState&, const tcp::TCPHdr* tcph, uint16_t dsize) override;
 };
 
 class TcpNormalizerBSD : public TcpNormalizer
@@ -185,39 +181,33 @@ public:
 
 static inline int handle_repeated_syn_mswin(
     TcpStreamTracker* talker, TcpStreamTracker* listener,
-    TcpSegmentDescriptor& tsd, TcpStreamSession* session)
+    const TcpSegmentDescriptor& tsd, TcpStreamSession* session)
 {
     /* Windows has some strange behavior here.  If the sequence of the reset is the
      * next expected sequence, it Resets.  Otherwise it ignores the 2nd SYN.
      */
-    if (SEQ_EQ(tsd.get_seg_seq(), listener->rcv_nxt))
+    if ( SEQ_EQ(tsd.get_seq(), listener->rcv_nxt) )
     {
         session->flow->set_session_flags(SSNFLAG_RESET);
         talker->set_tcp_state(TcpStreamTracker::TCP_CLOSED);
         return ACTION_RST;
     }
     else
-    {
-        inc_tcp_discards();
         return ACTION_NOTHING;
-    }
 }
 
 static inline int handle_repeated_syn_bsd(
-    TcpStreamTracker* talker, TcpSegmentDescriptor& tsd, TcpStreamSession* session)
+    TcpStreamTracker* talker, const TcpSegmentDescriptor& tsd, TcpStreamSession* session)
 {
     /* If its not a retransmission of the actual SYN... RESET */
-    if (!SEQ_EQ(tsd.get_seg_seq(), talker->get_iss()))
+    if ( !SEQ_EQ(tsd.get_seq(), talker->get_iss()) )
     {
         session->flow->set_session_flags(SSNFLAG_RESET);
         talker->set_tcp_state(TcpStreamTracker::TCP_CLOSED);
         return ACTION_RST;
     }
     else
-    {
-        inc_tcp_discards();
         return ACTION_NOTHING;
-    }
 }
 
 // Linux, Win2k3 et al.  do not support timestamps if the 3whs used a 0 timestamp.
@@ -226,7 +216,7 @@ static inline bool paws_3whs_zero_ts_not_supported(
 {
     bool check_ts = true;
 
-    if (talker->get_tf_flags() & TF_TSTAMP_ZERO)
+    if ( talker->get_tf_flags() & TF_TSTAMP_ZERO )
     {
         talker->clear_tf_flags(TF_TSTAMP);
         listener->clear_tf_flags(TF_TSTAMP);
@@ -238,17 +228,17 @@ static inline bool paws_3whs_zero_ts_not_supported(
 
 // Older Linux ( <= 2.2 kernel ), Win32 (non 2K3) allow the 3whs to use a 0 timestamp.
 static inline bool paws_3whs_zero_ts_supported(
-    TcpStreamTracker* talker, TcpStreamTracker* listener, TcpSegmentDescriptor& tsd)
+    TcpStreamTracker* talker, TcpStreamTracker* listener, const TcpSegmentDescriptor& tsd)
 {
     bool check_ts = true;
 
     if ( talker->get_tf_flags() & TF_TSTAMP_ZERO )
     {
         talker->clear_tf_flags(TF_TSTAMP_ZERO);
-        if ( SEQ_EQ(listener->rcv_nxt, tsd.get_seg_seq() ) )
+        if ( SEQ_EQ(listener->rcv_nxt, tsd.get_seq() ) )
         {
             // Ignore timestamp for this first packet, save to check on next
-            talker->set_ts_last(tsd.get_ts() );
+            talker->set_ts_last(tsd.get_timestamp());
             check_ts = false;
         }
     }
@@ -256,11 +246,13 @@ static inline bool paws_3whs_zero_ts_supported(
     return check_ts;
 }
 
+#if 0
+// FIXIT-L urgent pointer schizzle - outdated
 static inline uint16_t set_urg_offset_linux(const tcp::TCPHdr* tcph, uint16_t dsize)
 {
     uint16_t urg_offset = 0;
 
-    if (tcph->are_flags_set(TH_URG) )
+    if ( tcph->are_flags_set(TH_URG) )
     {
         urg_offset = tcph->urp();
 
@@ -273,6 +265,7 @@ static inline uint16_t set_urg_offset_linux(const tcp::TCPHdr* tcph, uint16_t ds
 
     return urg_offset;
 }
+#endif
 
 int TcpNormalizerFirst::handle_repeated_syn(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
@@ -304,12 +297,6 @@ int TcpNormalizerLinux::handle_repeated_syn(
     return handle_repeated_syn_bsd(tns.peer_tracker, tsd, tns.session);
 }
 
-uint16_t TcpNormalizerLinux::set_urg_offset(
-    TcpNormalizerState&, const tcp::TCPHdr* tcph, uint16_t dsize)
-{
-    return set_urg_offset_linux(tcph, dsize);
-}
-
 bool TcpNormalizerOldLinux::validate_rst(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
@@ -328,12 +315,6 @@ int TcpNormalizerOldLinux::handle_repeated_syn(
     return handle_repeated_syn_bsd(tns.peer_tracker, tsd, tns.session);
 }
 
-uint16_t TcpNormalizerOldLinux::set_urg_offset(
-    TcpNormalizerState&, const tcp::TCPHdr* tcph, uint16_t dsize)
-{
-    return set_urg_offset_linux(tcph, dsize);
-}
-
 bool TcpNormalizerBSD::validate_rst(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
@@ -350,7 +331,6 @@ int TcpNormalizerMacOS::handle_repeated_syn(
     TcpNormalizerState&, TcpSegmentDescriptor&)
 {
     /* MACOS ignores a 2nd SYN, regardless of the sequence number. */
-    inc_tcp_discards();
     return ACTION_NOTHING;
 }
 
@@ -382,8 +362,8 @@ bool TcpNormalizerHpux11::is_paws_ts_checked_required(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
     /* HPUX 11 ignores timestamps for out of order segments */
-    if ((tns.tracker->get_tf_flags() & TF_MISSING_PKT) || !SEQ_EQ(tns.tracker->rcv_nxt,
-        tsd.get_seg_seq()))
+    if ( (tns.tracker->get_tf_flags() & TF_MISSING_PKT) || !SEQ_EQ(tns.tracker->rcv_nxt,
+        tsd.get_seq()) )
         return false;
     else
         return true;
@@ -476,48 +456,39 @@ void TcpNormalizerPolicy::init(StreamPolicy os, TcpStreamSession* ssn, TcpStream
     tns.tcp_block = Normalize_GetMode(NORM_TCP_BLOCK);
     tns.opt_block = Normalize_GetMode(NORM_TCP_OPT);
 
-    norm = TcpNormalizerFactory::create(os);
+    norm = TcpNormalizerFactory::get_instance(os);
     norm->init(tns);
 }
 
-TcpNormalizer* TcpNormalizerFactory::create(StreamPolicy os_policy)
+TcpNormalizer* TcpNormalizerFactory::normalizers[StreamPolicy::OS_END_OF_LIST];
+
+void TcpNormalizerFactory::initialize()
 {
-    static TcpNormalizerFirst first;
-    static TcpNormalizerLast last;
-    static TcpNormalizerLinux new_linux;
-    static TcpNormalizerOldLinux old_linux;
-    static TcpNormalizerBSD bsd;
-    static TcpNormalizerMacOS mac_os;
-    static TcpNormalizerSolaris solaris;
-    static TcpNormalizerIrix irix;
-    static TcpNormalizerHpux11 hpux11;
-    static TcpNormalizerHpux10 hpux10;
-    static TcpNormalizerWindows windows;
-    static TcpNormalizerWindows2K3 windows_2K3;
-    static TcpNormalizerVista vista;
-    static TcpNormalizerProxy proxy;
+    normalizers[StreamPolicy::OS_FIRST] = new TcpNormalizerFirst;
+    normalizers[StreamPolicy::OS_LAST] = new TcpNormalizerLast;
+    normalizers[StreamPolicy::OS_LINUX] = new TcpNormalizerLinux;
+    normalizers[StreamPolicy::OS_OLD_LINUX] = new TcpNormalizerOldLinux;
+    normalizers[StreamPolicy::OS_BSD] = new TcpNormalizerBSD;
+    normalizers[StreamPolicy::OS_MACOS] = new TcpNormalizerMacOS;
+    normalizers[StreamPolicy::OS_SOLARIS] = new TcpNormalizerSolaris;
+    normalizers[StreamPolicy::OS_IRIX] = new TcpNormalizerIrix;
+    normalizers[StreamPolicy::OS_HPUX11] = new TcpNormalizerHpux11;
+    normalizers[StreamPolicy::OS_HPUX10] = new TcpNormalizerHpux10;
+    normalizers[StreamPolicy::OS_WINDOWS] = new TcpNormalizerWindows;
+    normalizers[StreamPolicy::OS_WINDOWS2K3] = new TcpNormalizerWindows2K3;
+    normalizers[StreamPolicy::OS_VISTA] = new TcpNormalizerVista;
+    normalizers[StreamPolicy::OS_PROXY] = new TcpNormalizerProxy;
+}
 
-    TcpNormalizer* normalizer;
+void TcpNormalizerFactory::term()
+{
+    for ( auto sp = StreamPolicy::OS_FIRST; sp <= StreamPolicy::OS_PROXY; sp++ )
+        delete normalizers[sp];
+}
 
-    switch (os_policy)
-    {
-    case StreamPolicy::OS_FIRST: normalizer = &first; break;
-    case StreamPolicy::OS_LAST: normalizer = &last; break;
-    case StreamPolicy::OS_LINUX: normalizer = &new_linux; break;
-    case StreamPolicy::OS_OLD_LINUX: normalizer = &old_linux; break;
-    case StreamPolicy::OS_BSD: normalizer = &bsd; break;
-    case StreamPolicy::OS_MACOS: normalizer = &mac_os; break;
-    case StreamPolicy::OS_SOLARIS: normalizer = &solaris; break;
-    case StreamPolicy::OS_IRIX: normalizer = &irix; break;
-    case StreamPolicy::OS_HPUX11: normalizer = &hpux11; break;
-    case StreamPolicy::OS_HPUX10: normalizer = &hpux10; break;
-    case StreamPolicy::OS_WINDOWS: normalizer = &windows; break;
-    case StreamPolicy::OS_WINDOWS2K3: normalizer = &windows_2K3; break;
-    case StreamPolicy::OS_VISTA: normalizer = &vista; break;
-    case StreamPolicy::OS_PROXY: normalizer = &proxy; break;
-    default: normalizer = &bsd; break;
-    }
-
-    return normalizer;
+TcpNormalizer* TcpNormalizerFactory::get_instance(StreamPolicy sp)
+{
+    assert( sp <= StreamPolicy::OS_PROXY );
+    return normalizers[sp];
 }
 

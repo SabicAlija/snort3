@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,9 +21,9 @@
 #include "config.h"
 #endif
 
-#include "host_tracker/host_cache.h"
 #include "flow/flow.h"
 #include "log/messages.h"
+#include "main/snort_debug.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "stream/stream_splitter.h"
@@ -41,20 +41,26 @@ struct WizStats
 {
     PegCount tcp_scans;
     PegCount tcp_hits;
+    PegCount tcp_misses;
     PegCount udp_scans;
     PegCount udp_hits;
+    PegCount udp_misses;
     PegCount user_scans;
     PegCount user_hits;
+    PegCount user_misses;
 };
 
 const PegInfo wiz_pegs[] =
 {
     { CountType::SUM, "tcp_scans", "tcp payload scans" },
     { CountType::SUM, "tcp_hits", "tcp identifications" },
+    { CountType::SUM, "tcp_misses", "tcp searches abandoned" },
     { CountType::SUM, "udp_scans", "udp payload scans" },
     { CountType::SUM, "udp_hits", "udp identifications" },
+    { CountType::SUM, "udp_misses", "udp searches abandoned" },
     { CountType::SUM, "user_scans", "user payload scans" },
     { CountType::SUM, "user_hits", "user identifications" },
+    { CountType::SUM, "user_misses", "user searches abandoned" },
     { CountType::END, nullptr, nullptr }
 };
 
@@ -85,7 +91,7 @@ public:
     MagicSplitter(bool, class Wizard*);
     ~MagicSplitter() override;
 
-    Status scan(Flow*, const uint8_t* data, uint32_t len,
+    Status scan(Packet*, const uint8_t* data, uint32_t len,
         uint32_t flags, uint32_t* fp) override;
 
     bool is_paf() override { return true; }
@@ -107,9 +113,18 @@ private:
             ++tstats.user_hits;
     }
 
+    void count_miss(const Flow* f)
+    {
+        if ( f->pkt_type == PktType::TCP )
+            ++tstats.tcp_misses;
+        else
+            ++tstats.user_misses;
+    }
+
 private:
     Wizard* wizard;
     Wand wand;
+    unsigned bytes_scanned = 0;
 };
 
 class Wizard : public Inspector
@@ -117,9 +132,6 @@ class Wizard : public Inspector
 public:
     Wizard(WizardModule*);
     ~Wizard() override;
-
-    void show(SnortConfig*) override
-    { LogMessage("Wizard\n"); }
 
     void eval(Packet*) override;
 
@@ -129,7 +141,7 @@ public:
     bool finished(Wand&);
     bool cast_spell(Wand&, Flow*, const uint8_t*, unsigned);
     bool spellbind(const MagicPage*&, Flow*, const uint8_t*, unsigned);
-    bool cursebind(vector<CurseServiceTracker>&, Flow*, const uint8_t*, unsigned);
+    bool cursebind(const vector<CurseServiceTracker>&, Flow*, const uint8_t*, unsigned);
 
 public:
     MagicBook* c2s_hexes;
@@ -166,17 +178,26 @@ MagicSplitter::~MagicSplitter()
 
 // FIXIT-M stop search on hit and failure (no possible match)
 StreamSplitter::Status MagicSplitter::scan(
-    Flow* f, const uint8_t* data, uint32_t len,
+    Packet* pkt, const uint8_t* data, uint32_t len,
     uint32_t, uint32_t*)
 {
     Profile profile(wizPerfStats);
-    count_scan(f);
+    count_scan(pkt->flow);
 
-    if ( wizard->cast_spell(wand, f, data, len) )
-        count_hit(f);
+    bytes_scanned += len;
+    if ( wizard->cast_spell(wand, pkt->flow, data, len) )
+    {
+        trace_logf(wizard_trace, pkt, "%s streaming search found service %s\n",
+            to_server() ? "c2s" : "s2c", pkt->flow->service);
+        count_hit(pkt->flow);
+    }
 
-    else if ( wizard->finished(wand) )
+    else if ( wizard->finished(wand) || bytes_scanned >= max(pkt->flow) )
+    {
+        count_miss(pkt->flow);
+        trace_logf(wizard_trace, pkt, "%s streaming search abandoned\n", to_server() ? "c2s" : "s2c");
         return ABORT;
+    }
 
     // ostensibly continue but splitter will be swapped out upon hit
     return SEARCH;
@@ -227,9 +248,9 @@ void Wizard::reset(Wand& w, bool tcp, bool c2s)
         for ( const CurseDetails* curse : pages )
         {
             if (tcp)
-                w.curse_tracker.push_back({ curse, new CurseTracker });
+                w.curse_tracker.emplace_back( CurseServiceTracker{ curse, new CurseTracker } );
             else
-                w.curse_tracker.push_back({ curse, nullptr });
+                w.curse_tracker.emplace_back( CurseServiceTracker{ curse, nullptr } );
         }
     }
 }
@@ -244,13 +265,23 @@ void Wizard::eval(Packet* p)
     if ( !p->data || !p->dsize )
         return;
 
+    bool c2s = p->is_from_client();
     Wand wand;
-    reset(wand, false, p->is_from_client());
-
-    if ( cast_spell(wand, p->flow, p->data, p->dsize) )
-        ++tstats.udp_hits;
+    reset(wand, false, c2s);
 
     ++tstats.udp_scans;
+    if ( cast_spell(wand, p->flow, p->data, p->dsize) )
+    {
+        trace_logf(wizard_trace, p, "%s datagram search found service %s\n",
+            c2s ? "c2s" : "s2c", p->flow->service);
+        ++tstats.udp_hits;
+    }
+    else
+    {
+        p->flow->clear_clouseau();
+        trace_logf(wizard_trace, p, "%s datagram search abandoned\n", c2s ? "c2s" : "s2c");
+        ++tstats.udp_misses;
+    }
 }
 
 StreamSplitter* Wizard::get_splitter(bool c2s)
@@ -262,19 +293,10 @@ bool Wizard::spellbind(
     const MagicPage*& m, Flow* f, const uint8_t* data, unsigned len)
 {
     f->service = m->book.find_spell(data, len, m);
-
-    if (f->service != nullptr)
-    {
-        // FIXIT-H need to make sure Flow's ipproto and service
-        // correspond to HostApplicationEntry's ipproto and service
-        host_cache_add_service(f->server_ip, f->ip_proto, f->server_port, f->service);
-        return true;
-    }
-
-    return false;
+    return ( f->service != nullptr );
 }
 
-bool Wizard::cursebind(vector<CurseServiceTracker>& curse_tracker, Flow* f,
+bool Wizard::cursebind(const vector<CurseServiceTracker>& curse_tracker, Flow* f,
         const uint8_t* data, unsigned len)
 {
     for (const CurseServiceTracker& cst : curse_tracker)
@@ -282,10 +304,8 @@ bool Wizard::cursebind(vector<CurseServiceTracker>& curse_tracker, Flow* f,
         if (cst.curse->alg(data, len, cst.tracker))
         {
             f->service = cst.curse->service.c_str();
-            // FIXIT-H need to make sure Flow's ipproto and service
-            // correspond to HostApplicationEntry's ipproto and service
-            host_cache_add_service(f->server_ip, f->ip_proto, f->server_port, f->service);
-            return true;
+            if ( f->service != nullptr )
+                return true;
         }
     }
 

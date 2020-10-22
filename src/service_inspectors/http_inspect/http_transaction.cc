@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,15 +23,28 @@
 
 #include "http_transaction.h"
 
-#include "http_event_gen.h"
-#include "http_infractions.h"
+#include "http_common.h"
+#include "http_enum.h"
+#include "http_event.h"
 #include "http_msg_body.h"
 #include "http_msg_header.h"
 #include "http_msg_request.h"
 #include "http_msg_status.h"
 #include "http_msg_trailer.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
+
+static void delete_section_list(HttpMsgSection* section_list)
+{
+    while (section_list != nullptr)
+    {
+        HttpMsgSection* tmp = section_list;
+        section_list = section_list->next;
+        delete tmp;
+    }
+}
 
 HttpTransaction::~HttpTransaction()
 {
@@ -42,9 +55,9 @@ HttpTransaction::~HttpTransaction()
         delete header[k];
         delete trailer[k];
         delete infractions[k];
-        delete events[k];
     }
-    delete latest_body;
+    delete_section_list(body_list);
+    delete_section_list(discard_list);
 }
 
 HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_data, SourceId
@@ -76,33 +89,29 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
                 // needed it. Instead the two sides have been sharing the transaction. This is a
                 // soft delete that eliminates our interest in this transaction without disturbing
                 // the possibly ongoing response processing.
-                delete_transaction(session_data->transaction[SRC_CLIENT]);
+                delete_transaction(session_data->transaction[SRC_CLIENT], session_data);
             }
             else if ((session_data->pipeline_overflow) || (session_data->pipeline_underflow))
             {
                 // Pipelining previously broke down and both sides are processed separately from
                 // now on. We just throw things away when we are done with them.
-                delete_transaction(session_data->transaction[SRC_CLIENT]);
+                delete_transaction(session_data->transaction[SRC_CLIENT], session_data);
             }
             else if (!session_data->add_to_pipeline(session_data->transaction[SRC_CLIENT]))
             {
                 // The pipeline is full and just overflowed.
                 *session_data->infractions[source_id] += INF_PIPELINE_OVERFLOW;
                 session_data->events[source_id]->create_event(EVENT_PIPELINE_MAX);
-                delete_transaction(session_data->transaction[SRC_CLIENT]);
+                delete_transaction(session_data->transaction[SRC_CLIENT], session_data);
             }
         }
-        session_data->transaction[SRC_CLIENT] = new HttpTransaction;
+        session_data->transaction[SRC_CLIENT] = new HttpTransaction(session_data);
 
-        // The StreamSplitter generates infractions and events related to this transaction while
-        // splitting the request line and keep them in temporary storage in the FlowData. Now we
-        // move them here.
+        // The StreamSplitter generates infractions related to this transaction while splitting the
+        // request line and keeps them in temporary storage in the FlowData. Now we move them here.
         session_data->transaction[SRC_CLIENT]->infractions[SRC_CLIENT] =
             session_data->infractions[SRC_CLIENT];
         session_data->infractions[SRC_CLIENT] = nullptr;
-        session_data->transaction[SRC_CLIENT]->events[SRC_CLIENT] =
-            session_data->events[SRC_CLIENT];
-        session_data->events[SRC_CLIENT] = nullptr;
     }
     // This transaction has more than one response. This is a new response which is replacing the
     // interim response. The two responses cannot coexist so we must clean up the interim response.
@@ -111,12 +120,12 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
               session_data->transaction[SRC_SERVER]->second_response_expected)
     {
         session_data->transaction[SRC_SERVER]->second_response_expected = false;
-        delete session_data->transaction[SRC_SERVER]->status;
+        session_data->transaction[SRC_SERVER]->discard_section(
+            session_data->transaction[SRC_SERVER]->status);
         session_data->transaction[SRC_SERVER]->status = nullptr;
-        delete session_data->transaction[SRC_SERVER]->header[SRC_SERVER];
+        session_data->transaction[SRC_SERVER]->discard_section(
+            session_data->transaction[SRC_SERVER]->header[SRC_SERVER]);
         session_data->transaction[SRC_SERVER]->header[SRC_SERVER] = nullptr;
-        delete session_data->transaction[SRC_SERVER]->trailer[SRC_SERVER];
-        session_data->transaction[SRC_SERVER]->trailer[SRC_SERVER] = nullptr;
     }
     // Status section: delete the current transaction and get a new one from the pipeline. If the
     // pipeline is empty check for a request transaction and take it. If there is no transaction
@@ -124,11 +133,11 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
     // response side.
     else if (session_data->section_type[source_id] == SEC_STATUS)
     {
-        delete_transaction(session_data->transaction[SRC_SERVER]);
+        delete_transaction(session_data->transaction[SRC_SERVER], session_data);
         if (session_data->pipeline_underflow)
         {
             // A previous underflow separated the two sides forever
-            session_data->transaction[SRC_SERVER] = new HttpTransaction;
+            session_data->transaction[SRC_SERVER] = new HttpTransaction(session_data);
         }
         else if ((session_data->transaction[SRC_SERVER] = session_data->take_from_pipeline()) ==
             nullptr)
@@ -139,7 +148,7 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
                 // Either there is no request at all or there is a request but a previous response
                 // already took it. Either way we have more responses than requests.
                 session_data->pipeline_underflow = true;
-                session_data->transaction[SRC_SERVER] = new HttpTransaction;
+                session_data->transaction[SRC_SERVER] = new HttpTransaction(session_data);
             }
 
             else if (session_data->type_expected[SRC_CLIENT] == SEC_REQUEST)
@@ -160,44 +169,76 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
         }
         session_data->transaction[SRC_SERVER]->response_seen = true;
 
-        // Move in server infractions and events now that the response is attached here
+        // Move in server infractions now that the response is attached here
         session_data->transaction[SRC_SERVER]->infractions[SRC_SERVER] =
             session_data->infractions[SRC_SERVER];
         session_data->infractions[SRC_SERVER] = nullptr;
-        session_data->transaction[SRC_SERVER]->events[SRC_SERVER] =
-            session_data->events[SRC_SERVER];
-        session_data->events[SRC_SERVER] = nullptr;
     }
 
     assert(session_data->transaction[source_id] != nullptr);
+    session_data->transaction[source_id]->active_sections++;
     return session_data->transaction[source_id];
 }
 
-void HttpTransaction::delete_transaction(HttpTransaction* transaction)
+void HttpTransaction::discard_section(HttpMsgSection* section)
+{
+    if (section != nullptr)
+    {
+        section->next = discard_list;
+        discard_list = section;
+    }
+}
+
+void HttpTransaction::clear_section()
+{
+    assert(active_sections > 0);
+    active_sections--;
+}
+
+void HttpTransaction::garbage_collect()
+{
+    HttpMsgSection** current = (HttpMsgSection**)&body_list;
+    while (*current != nullptr)
+    {
+        if ((*current)->is_clear())
+        {
+            HttpMsgSection* tmp = *current;
+            *current = (*current)->next;
+            delete tmp;
+        }
+        else
+            current = &(*current)->next;
+    }
+}
+
+void HttpTransaction::delete_transaction(HttpTransaction* transaction, HttpFlowData* session_data)
 {
     if (transaction != nullptr)
     {
         if (!transaction->shared_ownership)
-            delete transaction;
+        {
+            if ((transaction->active_sections > 0) && (session_data != nullptr))
+            {
+                transaction->next = session_data->discard_list;
+                session_data->discard_list = transaction;
+            }
+            else
+                delete transaction;
+        }
         else
             transaction->shared_ownership = false;
     }
 }
 
-void HttpTransaction::set_body(HttpMsgBody* latest_body_)
+void HttpTransaction::set_body(HttpMsgBody* latest_body)
 {
-    delete latest_body;
-    latest_body = latest_body_;
+    latest_body->next = body_list;
+    body_list = latest_body;
 }
 
-HttpInfractions* HttpTransaction::get_infractions(HttpEnums::SourceId source_id)
+HttpInfractions* HttpTransaction::get_infractions(SourceId source_id)
 {
     return infractions[source_id];
-}
-
-HttpEventGen* HttpTransaction::get_events(HttpEnums::SourceId source_id)
-{
-    return events[source_id];
 }
 
 void HttpTransaction::set_one_hundred_response()
@@ -206,9 +247,8 @@ void HttpTransaction::set_one_hundred_response()
     if (one_hundred_response)
     {
         *infractions[SRC_SERVER] += INF_MULTIPLE_100_RESPONSES;
-        events[SRC_SERVER]->create_event(EVENT_MULTIPLE_100_RESPONSES);
+        session_data->events[SRC_SERVER]->create_event(EVENT_MULTIPLE_100_RESPONSES);
     }
     one_hundred_response = true;
     second_response_expected = true;
 }
-

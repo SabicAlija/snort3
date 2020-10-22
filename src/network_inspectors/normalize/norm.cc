@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 
 #include "norm.h"
 
+#include "detection/ips_context.h"
 #include "main/snort_config.h"
 #include "packet_io/sfdaq.h"
 #include "protocols/icmp4.h"
@@ -164,7 +165,7 @@ static inline NormMode get_norm_mode(const Packet * const p)
 {
     NormMode mode = NORM_MODE_ON;
 
-    if ( snort::get_inspection_policy()->policy_mode != POLICY_MODE__INLINE )
+    if ( get_inspection_policy()->policy_mode != POLICY_MODE__INLINE )
         mode = NORM_MODE_TEST;
 
     if ( !SFDAQ::forwarding_packet(p->pkth) )
@@ -247,11 +248,11 @@ static int Norm_IP4(
     }
     if ( Norm_IsEnabled(c, NORM_IP4_TTL) )
     {
-        if ( h->ip_ttl < SnortConfig::min_ttl() )
+        if ( h->ip_ttl < p->context->conf->min_ttl() )
         {
             if ( mode == NORM_MODE_ON )
             {
-                h->ip_ttl = SnortConfig::new_ttl();
+                h->ip_ttl = p->context->conf->new_ttl();
                 p->ptrs.decode_flags &= ~DECODE_ERR_BAD_TTL;
                 changes++;
             }
@@ -304,13 +305,13 @@ static int Norm_IP6(
         ip::IP6Hdr* h =
             reinterpret_cast<ip::IP6Hdr*>(const_cast<uint8_t*>(p->layers[layer].start));
 
-        if ( h->ip6_hoplim < SnortConfig::min_ttl() )
+        if ( h->ip6_hoplim < p->context->conf->min_ttl() )
         {
             const NormMode mode = get_norm_mode(p);
 
             if ( mode == NORM_MODE_ON )
             {
-                h->ip6_hoplim = SnortConfig::new_ttl();
+                h->ip6_hoplim = p->context->conf->new_ttl();
                 p->ptrs.decode_flags &= ~DECODE_ERR_BAD_TTL;
                 changes++;
             }

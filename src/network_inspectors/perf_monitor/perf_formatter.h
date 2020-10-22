@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -40,7 +40,7 @@
 // 5. Call write to output the current values in each field.
 //
 // init_output should be implemented where metadata needs to be written on
-// ouput open.
+// output open.
 //
 
 #include <ctime>
@@ -115,9 +115,7 @@ public:
     {
         for( unsigned i = 0; i < values.size(); i++ )
             for( unsigned j = 0; j < values[i].size(); j++ )
-                public_values.insert(std::pair<std::string, FormatterValue>(
-                    section_names[i] + "." + field_names[i][j],
-                    values[i][j]));
+                public_values.emplace(section_names[i] + "." + field_names[i][j], values[i][j]);
    }
 };
 #endif

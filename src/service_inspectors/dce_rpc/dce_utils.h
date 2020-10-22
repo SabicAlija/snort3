@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2008-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -136,7 +136,7 @@ void DCE2_BufferDestroy(DCE2_Buffer* buf);
 
 #define DCE2_UUID_BUF_SIZE 50
 const char* DCE2_UuidToStr(
-    const Uuid*, DceRpcBoFlag, char (& buf)[DCE2_UUID_BUF_SIZE]);
+    const Uuid*, DceRpcBoFlag, char (&buf)[DCE2_UUID_BUF_SIZE]);
 
 /********************************************************************
  * Function: DCE2_IsSpaceChar()
@@ -344,6 +344,36 @@ inline uint32_t DceRpcHtonl(const uint32_t* ptr, const DceRpcBoFlag bo_flag)
     return DceRpcNtohl(ptr, bo_flag);
 }
 
+inline uint64_t DceRpcNtohl64(const uint64_t* ptr, const DceRpcBoFlag bo_flag)
+{
+    uint64_t value;
+
+    if (ptr == nullptr)
+        return 0;
+
+    value = *ptr;
+
+    if (bo_flag == DCERPC_BO_FLAG__NONE)
+        return value;
+
+#ifdef WORDS_BIGENDIAN
+    if (bo_flag == DCERPC_BO_FLAG__BIG_ENDIAN)
+#else
+    if (bo_flag == DCERPC_BO_FLAG__LITTLE_ENDIAN)
+#endif  /* WORDS_BIGENDIAN */
+        return value;
+
+    return ((value & 0xff00000000000000) >> 56) | ((value & 0x00ff000000000000) >> 40) |
+           ((value & 0x0000ff0000000000) >> 24) | ((value & 0x000000ff00000000) >> 8) |
+           ((value & 0x00000000000000ff) << 56) | ((value & 0x000000000000ff00) << 40) |
+           ((value & 0x0000000000ff0000) << 24) | ((value & 0x00000000ff000000) << 8);
+}
+
+inline uint64_t DceRpcHtonl64(const uint64_t* ptr, const DceRpcBoFlag bo_flag)
+{
+    return DceRpcNtohl64(ptr, bo_flag);
+}
+
 inline void DCE2_CopyUuid(Uuid* dst_uuid, const Uuid* pkt_uuid, const DceRpcBoFlag byte_order)
 {
     dst_uuid->time_low = DceRpcNtohl(&pkt_uuid->time_low, byte_order);
@@ -391,8 +421,22 @@ inline void DCE2_BufferEmpty(DCE2_Buffer* buf)
     buf->len = 0;
 }
 
-#define DCE2_MOVE(data_ptr, data_len, amount) \
-    { (data_len) -= (amount); (data_ptr) = (const uint8_t*)(data_ptr) + (amount); }
+inline void dce2_move(const uint8_t*& data_ptr, uint16_t& data_len, int amount)
+{
+    data_len -= amount;
+    data_ptr += amount;
+}
+
+inline void dce2_move(const uint8_t*& data_ptr, uint32_t& data_len, int amount)
+{
+    data_len -= amount;
+    data_ptr += amount;
+}
+
+inline void dce2_move(const uint8_t*& data_ptr, int64_t& data_len, int amount)
+{
+    data_len -= amount;
+    data_ptr += amount;
+}
 
 #endif
-

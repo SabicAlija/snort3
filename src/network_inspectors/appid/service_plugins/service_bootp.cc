@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -76,7 +76,6 @@ struct ServiceDHCPOption
 #pragma pack()
 
 static const uint8_t zeromac[6] = { 0, 0, 0, 0, 0, 0 };
-static THREAD_LOCAL DHCPInfo* dhcp_info_free_list = nullptr;
 
 BootpServiceDetector::BootpServiceDetector(ServiceDiscovery* sd)
 {
@@ -97,22 +96,6 @@ BootpServiceDetector::BootpServiceDetector(ServiceDiscovery* sd)
     };
 
     handler->register_detector(name, this, proto);
-}
-
-BootpServiceDetector::~BootpServiceDetector()
-{
-    release_thread_resources();
-}
-
-void BootpServiceDetector::release_thread_resources()
-{
-    DHCPInfo* info;
-
-    while ((info = dhcp_info_free_list))
-    {
-        dhcp_info_free_list = info->next;
-        snort_free(info);
-    }
 }
 
 int BootpServiceDetector::validate(AppIdDiscoveryArgs& args)
@@ -296,7 +279,7 @@ success:
     if (!args.asd.is_service_detected())
     {
         args.asd.set_session_flags(APPID_SESSION_CONTINUE);
-        add_service(args.asd, args.pkt, args.dir, APP_ID_DHCP);
+        add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_DHCP);
     }
     return APPID_SUCCESS;
 
@@ -330,11 +313,7 @@ void BootpServiceDetector::AppIdFreeDhcpData(DHCPData* dd)
 
 void BootpServiceDetector::AppIdFreeDhcpInfo(DHCPInfo* dd)
 {
-    if (dd)
-    {
-        dd->next = dhcp_info_free_list;
-        dhcp_info_free_list = dd;
-    }
+    snort_free(dd);
 }
 
 int BootpServiceDetector::add_dhcp_info(AppIdSession& asd, unsigned op55_len, const uint8_t* op55,
@@ -362,30 +341,11 @@ int BootpServiceDetector::add_dhcp_info(AppIdSession& asd, unsigned op55_len, co
     return 0;
 }
 
-#ifdef USE_RNA_CONFIG
-static unsigned isIPv4HostMonitored(uint32_t ip4, int32_t zone)
-{
-    NetworkSet* net_list;
-    unsigned flags;
-    AppIdConfig* config = AppIdInspector::get_inspector()->get_appid_config();
-
-    if (zone >= 0 && zone < MAX_ZONES && config->net_list_by_zone[zone])
-        net_list = config->net_list_by_zone[zone];
-    else
-        net_list = config->net_list;
-
-    NetworkSetManager::contains_ex(net_list, ip4, &flags);
-    return flags;
-}
-
-#else
 static unsigned isIPv4HostMonitored(uint32_t, int32_t)
 {
     // FIXIT-M Defaulting to checking everything everywhere until RNA config is reimplemented
     return IPFUNCS_HOSTS_IP | IPFUNCS_USER_IP | IPFUNCS_APPLICATION;
 }
-
-#endif
 
 void BootpServiceDetector::add_new_dhcp_lease(AppIdSession& asd, const uint8_t* mac, uint32_t ip,
     int32_t zone,
@@ -404,13 +364,7 @@ void BootpServiceDetector::add_new_dhcp_lease(AppIdSession& asd, const uint8_t* 
     if (!(flags & IPFUNCS_HOSTS_IP))
         return;
 
-    if (dhcp_info_free_list)
-    {
-        info = dhcp_info_free_list;
-        dhcp_info_free_list = info->next;
-    }
-    else
-        info = (DHCPInfo*)snort_calloc(sizeof(DHCPInfo));
+    info = (DHCPInfo*)snort_calloc(sizeof(DHCPInfo));
 
     if (asd.add_flow_data(info, APPID_SESSION_DATA_DHCP_INFO,
         (AppIdFreeFCN)BootpServiceDetector::AppIdFreeDhcpInfo))

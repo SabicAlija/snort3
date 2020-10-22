@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -168,7 +168,7 @@ inprocess:
     return APPID_INPROCESS;
 
 success:
-    return add_service(args.asd, args.pkt, args.dir, APP_ID_RADIUS);
+    return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_RADIUS);
 
 not_compatible:
     incompatible_data(args.asd, args.pkt, args.dir);
@@ -283,7 +283,7 @@ inprocess:
     return APPID_INPROCESS;
 
 success:
-    return add_service(args.asd, args.pkt, args.dir, APP_ID_RADIUS_ACCT);
+    return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_RADIUS_ACCT);
 
 not_compatible:
     incompatible_data(args.asd, args.pkt, args.dir);

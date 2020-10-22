@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,10 +27,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-
-#ifdef UNIT_TEST
-#include "catch/snort_catch.h"
-#endif
 
 using namespace snort;
 using namespace std;
@@ -316,7 +312,10 @@ bool RangeCheck::validate(const char* s, const char* r)
 // unit tests: EQ, NOT, LT, LE, GT, GE, LG, LEG
 //--------------------------------------------------------------------------
 
-#ifdef UNIT_TEST
+#ifdef CATCH_TEST_BUILD
+
+#include "catch/catch.hpp"
+
 TEST_CASE("dflt op", "[RangeCheck]")
 {
     RangeCheck rc;
@@ -612,7 +611,7 @@ TEST_CASE("validate", "[RangeCheck]")
     CHECK(rc.validate("2<>4", ":8"));
     // in hex
     CHECK(rc.validate("2<>4", "0x1:0x0A"));
-    
+
     // invalid low
     CHECK(!rc.validate("2<>4", "3:"));
     // invalid hi
@@ -620,5 +619,6 @@ TEST_CASE("validate", "[RangeCheck]")
     // invalid low and hi
     CHECK(!rc.validate("200<>400", "3:10"));
 }
+
 #endif
 

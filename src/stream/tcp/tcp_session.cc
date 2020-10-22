@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -51,41 +51,71 @@
 #include "detection/detection_engine.h"
 #include "detection/rules.h"
 #include "log/log.h"
+#include "memory/memory_cap.h"
 #include "profiler/profiler.h"
 #include "protocols/eth.h"
 
 #include "stream_tcp.h"
-#include "tcp_debug_trace.h"
 #include "tcp_ha.h"
 #include "tcp_module.h"
 #include "tcp_normalizers.h"
 #include "tcp_reassemblers.h"
-#include "tcp_stream_state_machine.h"
+#include "tcp_segment_node.h"
+#include "tcp_state_machine.h"
+#include "tcp_trace.h"
 
 using namespace snort;
 
-TcpSession::TcpSession(Flow* flow)
-    : TcpStreamSession(flow)
+void TcpSession::sinit()
 {
-    tsm = TcpStreamStateMachine::get_instance();
+    TcpSegmentDescriptor::setup();
+    TcpSegmentNode::setup();
+}
+
+void TcpSession::sterm()
+{
+    TcpSegmentDescriptor::clear();
+    TcpSegmentNode::clear();
+}
+
+TcpSession::TcpSession(Flow* f) : TcpStreamSession(f)
+{
+    tsm = TcpStateMachine::get_instance();
     splitter_init = false;
 
     client.session = this;
     server.session = this;
     tcpStats.instantiated++;
+
+    memory::MemoryCap::update_allocations(sizeof(*this));
 }
 
 TcpSession::~TcpSession()
 {
     clear_session(true, false, false);
+    memory::MemoryCap::update_deallocations(sizeof(*this));
 }
 
-bool TcpSession::setup(Packet* p)
+bool TcpSession::setup(Packet*)
 {
-    TcpStreamSession::setup(p);
+    client.init_tcp_state();
+    server.init_tcp_state();
+    lws_init = tcp_init = false;
+    generate_3whs_alert = true;
+    cleaning = false;
     splitter_init = false;
 
-    SESSION_STATS_ADD(tcpStats);
+    pkt_action_mask = ACTION_NOTHING;
+    ecn = 0;
+    ingress_index = egress_index = 0;
+    ingress_group = egress_group = 0;
+    daq_flags = address_space_id = 0;
+
+    tcp_config = get_tcp_cfg(flow->ssn_server);
+    flow->set_default_session_timeout(tcp_config->session_timeout, false);
+    set_os_policy();
+
+    SESSION_STATS_ADD(tcpStats)
     tcpStats.setups++;
     return true;
 }
@@ -99,7 +129,8 @@ void TcpSession::restart(Packet* p)
     assert(p->flow == flow);
 
     DetectionEngine::onload(flow);
-    TcpStreamTracker* talker, * listener;
+    TcpStreamTracker* talker;
+    TcpStreamTracker* listener;
 
     if (p->is_from_server())
     {
@@ -112,7 +143,6 @@ void TcpSession::restart(Packet* p)
         listener = &server;
     }
 
-    // FIXIT-H on data / on ack must be based on flush policy
     if (p->dsize > 0)
         listener->reassembler.flush_on_data_policy(p);
 
@@ -149,13 +179,23 @@ void TcpSession::clear_session(bool free_flow_data, bool flush_segments, bool re
     tcp_init = false;
     tcpStats.released++;
 
-    DetectionEngine::onload(flow);
-
     if ( flush_segments )
     {
         client.reassembler.flush_queued_segments(flow, true, p);
         server.reassembler.flush_queued_segments(flow, true, p);
     }
+
+    if ( p )
+    {
+        client.finalize_held_packet(p);
+        server.finalize_held_packet(p);
+    }
+    else
+    {
+        client.finalize_held_packet(flow);
+        server.finalize_held_packet(flow);
+    }
+
     client.reassembler.purge_segment_list();
     server.reassembler.purge_segment_list();
 
@@ -164,15 +204,14 @@ void TcpSession::clear_session(bool free_flow_data, bool flush_segments, bool re
     if ( restart )
     {
         flow->restart(free_flow_data);
-        paf_reset(&client.paf_state);
-        paf_reset(&server.paf_state);
-
+        client.reassembler.reset_paf();
+        server.reassembler.reset_paf();
     }
     else
     {
         flow->clear(free_flow_data);
-        paf_clear(&client.paf_state);
-        paf_clear(&server.paf_state);
+        client.reassembler.clear_paf();
+        server.reassembler.clear_paf();
     }
 
     set_splitter(true, nullptr);
@@ -266,47 +305,41 @@ void TcpSession::update_perf_base_state(char newState)
         DataBus::publish(FLOW_STATE_EVENT, nullptr, flow);
 }
 
-bool TcpSession::flow_exceeds_config_thresholds(TcpSegmentDescriptor& tsd)
+bool TcpSession::flow_exceeds_config_thresholds(const TcpSegmentDescriptor& tsd)
 {
-    if ( listener->flush_policy == STREAM_FLPOLICY_IGNORE )
-    {
-        return true;
-    }
+    TcpStreamTracker* listener = tsd.get_listener();
 
-    // FIXIT-H any discards must be counted and in many cases alerted as well
+    if ( listener->get_flush_policy() == STREAM_FLPOLICY_IGNORE )
+        return true;
+
+    // FIXIT-M any discards must be counted and in many cases alerted as well
     // (count all but alert at most once per flow)
     // three cases in this function; look for others
-    if ( ( config->flags & STREAM_CONFIG_NO_ASYNC_REASSEMBLY ) && !flow->two_way_traffic() )
+    if ( ( tcp_config->flags & STREAM_CONFIG_NO_ASYNC_REASSEMBLY ) && !flow->two_way_traffic() )
         return true;
 
-    if ( config->max_consec_small_segs
-            && ( tsd.get_seg_len() < config->max_consec_small_seg_size ) )
+    if ( tcp_config->max_consec_small_segs )
     {
-        listener->small_seg_count++;
-
-        if ( listener->small_seg_count > config->max_consec_small_segs )
-        {
-            /* Above threshold, log it...  in this TCP policy,
-             * action controlled by preprocessor rule. */
-            tel.set_tcp_event(EVENT_MAX_SMALL_SEGS_EXCEEDED);
-            /* Reset counter, so we're not too noisy */
+        if ( tsd.get_len() >= tcp_config->max_consec_small_seg_size )
             listener->small_seg_count = 0;
-        }
+
+        else if ( ++listener->small_seg_count == tcp_config->max_consec_small_segs )
+            tel.set_tcp_event(EVENT_MAX_SMALL_SEGS_EXCEEDED);
     }
 
-    if ( config->max_queued_bytes
-        && ( listener->reassembler.get_seg_bytes_total() > config->max_queued_bytes ) )
+    if ( tcp_config->max_queued_bytes
+        && ( listener->reassembler.get_seg_bytes_total() > tcp_config->max_queued_bytes ) )
     {
         tcpStats.exceeded_max_bytes++;
-        // FIXIT-H add one alert per flow per above
+        // FIXIT-M add one alert per flow per above
         return true;
     }
 
-    if ( config->max_queued_segs
-        && ( listener->reassembler.get_seg_count() + 1 > config->max_queued_segs ) )
+    if ( tcp_config->max_queued_segs
+        && ( listener->reassembler.get_seg_count() + 1 > tcp_config->max_queued_segs ) )
     {
         tcpStats.exceeded_max_segs++;
-        // FIXIT-H add one alert per flow per above
+        // FIXIT-M add one alert per flow per above
         return true;
     }
 
@@ -315,31 +348,66 @@ bool TcpSession::flow_exceeds_config_thresholds(TcpSegmentDescriptor& tsd)
 
 void TcpSession::process_tcp_stream(TcpSegmentDescriptor& tsd)
 {
-    if (tsd.get_pkt()->packet_flags & PKT_IGNORE)
+    if ( tsd.are_packet_flags_set(PKT_IGNORE) )
         return;
 
-    SetPacketHeaderFoo(tsd.get_pkt() );
+    set_packet_header_foo(tsd);
 
     if ( flow_exceeds_config_thresholds(tsd) )
         return;
 
+    TcpStreamTracker* listener = tsd.get_listener();
+
     listener->reassembler.queue_packet_for_reassembly(tsd);
 
     // Alert if overlap limit exceeded
-    if ( ( config->overlap_limit )
-        && ( listener->reassembler.get_overlap_count() > config->overlap_limit ) )
+    if ( (tcp_config->overlap_limit)
+        && (listener->reassembler.get_overlap_count() > tcp_config->overlap_limit) )
     {
         tel.set_tcp_event(EVENT_EXCESSIVE_OVERLAP);
         listener->reassembler.set_overlap_count(0);
     }
 }
 
+void TcpSession::update_stream_order(const TcpSegmentDescriptor& tsd, bool aligned)
+{
+    TcpStreamTracker* listener = tsd.get_listener();
+
+    switch ( listener->order )
+    {
+    case 0:
+        if ( aligned )
+            tsd.set_packet_flags(PKT_STREAM_ORDER_OK);
+        else
+            listener->order = 1;
+        break;
+
+    case 1:
+        if ( aligned )
+        {
+            tsd.set_packet_flags(PKT_STREAM_ORDER_OK);
+            listener->order = 2;
+        }
+        break;
+
+    default:
+        if ( aligned )
+            tsd.set_packet_flags(PKT_STREAM_ORDER_OK);
+
+        else
+        {
+            if ( !(flow->get_session_flags() & SSNFLAG_STREAM_ORDER_BAD) )
+                flow->set_session_flags(SSNFLAG_STREAM_ORDER_BAD);
+            tsd.set_packet_flags(PKT_STREAM_ORDER_BAD);
+         }
+    }
+}
+
 int TcpSession::process_tcp_data(TcpSegmentDescriptor& tsd)
 {
-    DeepProfile profile(s5TcpDataPerfStats);
-
+    TcpStreamTracker* listener = tsd.get_listener();
     const tcp::TCPHdr* tcph = tsd.get_tcph();
-    uint32_t seq = tsd.get_seg_seq();
+    uint32_t seq = tsd.get_seq();
 
     if ( tcph->is_syn() )
     {
@@ -356,8 +424,8 @@ int TcpSession::process_tcp_data(TcpSegmentDescriptor& tsd)
     if (seq == listener->rcv_nxt)
     {
         /* check if we're in the window */
-        if (config->policy != StreamPolicy::OS_PROXY
-            and listener->normalizer.get_stream_window(tsd) == 0)
+        if ( tcp_config->policy != StreamPolicy::OS_PROXY
+            and listener->normalizer.get_stream_window(tsd) == 0 )
         {
             listener->normalizer.trim_win_payload(tsd);
             return STREAM_UNALIGNED;
@@ -367,14 +435,10 @@ int TcpSession::process_tcp_data(TcpSegmentDescriptor& tsd)
         // FIXIT-L for ips, must move all the way to first hole or right end
         listener->rcv_nxt = tsd.get_end_seq();
 
-        if (tsd.get_seg_len() != 0)
+        if ( tsd.is_data_segment() )
         {
-            if (!( flow->get_session_flags() & SSNFLAG_STREAM_ORDER_BAD))
-                tsd.get_pkt()->packet_flags |= PKT_STREAM_ORDER_OK;
-
+            update_stream_order(tsd, true);
             process_tcp_stream(tsd);
-            /* set flags to session flags */
-
             return STREAM_ALIGNED;
         }
     }
@@ -387,31 +451,15 @@ int TcpSession::process_tcp_data(TcpSegmentDescriptor& tsd)
         // some cases.
 
         /* check if we're in the window */
-        if (config->policy != StreamPolicy::OS_PROXY
-            and listener->normalizer.get_stream_window(tsd) == 0)
+        if ( tcp_config->policy != StreamPolicy::OS_PROXY
+            and listener->normalizer.get_stream_window(tsd) == 0 )
         {
             listener->normalizer.trim_win_payload(tsd);
             return STREAM_UNALIGNED;
         }
-
-        if ((listener->get_tcp_state() == TcpStreamTracker::TCP_ESTABLISHED)
-            && (listener->flush_policy == STREAM_FLPOLICY_IGNORE))
+        if ( tsd.is_data_segment() )
         {
-            if (SEQ_GT(tsd.get_end_seq(), listener->rcv_nxt))
-            {
-                // set next ack so we are within the window going forward on this side.
-                // FIXIT-L for ips, must move all the way to first hole or right end
-                listener->rcv_nxt = tsd.get_end_seq();
-            }
-        }
-
-        if (tsd.get_seg_len() != 0)
-        {
-            if (!( flow->get_session_flags() & SSNFLAG_STREAM_ORDER_BAD))
-            {
-                if (!SEQ_LEQ((tsd.get_seg_seq() + tsd.get_seg_len()), listener->rcv_nxt))
-                    flow->set_session_flags(SSNFLAG_STREAM_ORDER_BAD);
-            }
+            update_stream_order(tsd, false);
             process_tcp_stream(tsd);
         }
     }
@@ -422,10 +470,10 @@ int TcpSession::process_tcp_data(TcpSegmentDescriptor& tsd)
 void TcpSession::set_os_policy()
 {
     StreamPolicy client_os_policy = flow->ssn_policy ?
-        static_cast<StreamPolicy>( flow->ssn_policy ) : config->policy;
+        static_cast<StreamPolicy>( flow->ssn_policy ) : tcp_config->policy;
 
     StreamPolicy server_os_policy = flow->ssn_policy ?
-        static_cast<StreamPolicy>( flow->ssn_policy ) : config->policy;
+        static_cast<StreamPolicy>( flow->ssn_policy ) : tcp_config->policy;
 
     client.normalizer.init(client_os_policy, this, &client, &server);
     server.normalizer.init(server_os_policy, this, &server, &client);
@@ -434,7 +482,8 @@ void TcpSession::set_os_policy()
     server.reassembler.init(this, &server, server_os_policy, true);
 }
 
-// FIXIT-H this is no longer called (but should be)
+// FIXIT-M this is no longer called (but should be)
+#if 0
 void TcpSession::swap_trackers()
 {
     uint32_t session_flags = flow->get_session_flags( );
@@ -470,8 +519,9 @@ void TcpSession::swap_trackers()
         flow->update_session_flags(session_flags);
     }
 }
+#endif
 
-void TcpSession::NewTcpSessionOnSyn(TcpSegmentDescriptor& tsd)
+void TcpSession::init_session_on_syn(TcpSegmentDescriptor& tsd)
 {
     server.init_on_syn_recv(tsd);
     client.init_on_syn_sent(tsd);
@@ -479,7 +529,7 @@ void TcpSession::NewTcpSessionOnSyn(TcpSegmentDescriptor& tsd)
     tcpStats.sessions_on_syn++;
 }
 
-void TcpSession::NewTcpSessionOnSynAck(TcpSegmentDescriptor& tsd)
+void TcpSession::init_session_on_synack(TcpSegmentDescriptor& tsd)
 {
     server.init_on_synack_sent(tsd);
     client.init_on_synack_recv(tsd);
@@ -489,20 +539,26 @@ void TcpSession::NewTcpSessionOnSynAck(TcpSegmentDescriptor& tsd)
 
 void TcpSession::update_timestamp_tracking(TcpSegmentDescriptor& tsd)
 {
+    TcpStreamTracker* listener = tsd.get_listener();
+    TcpStreamTracker* talker = tsd.get_talker();
+
     talker->set_tf_flags(listener->normalizer.get_timestamp_flags());
     if (listener->normalizer.handling_timestamps()
-        && SEQ_EQ(listener->rcv_nxt, tsd.get_seg_seq()))
+        && SEQ_EQ(listener->rcv_nxt, tsd.get_seq()))
     {
-        talker->set_ts_last_packet(tsd.get_pkt()->pkth->ts.tv_sec);
-        talker->set_ts_last(tsd.get_ts());
+        talker->set_ts_last_packet(tsd.get_packet_timestamp());
+        talker->set_ts_last(tsd.get_timestamp());
     }
 }
 
 bool TcpSession::handle_syn_on_reset_session(TcpSegmentDescriptor& tsd)
 {
+    TcpStreamTracker* listener = tsd.get_listener();
+    TcpStreamTracker* talker = tsd.get_talker();
     const tcp::TCPHdr* tcph = tsd.get_tcph();
-    if ( ( listener->get_tcp_state() == TcpStreamTracker::TCP_CLOSED )
-        || ( talker->get_tcp_state() == TcpStreamTracker::TCP_CLOSED ) )
+
+    if ( (listener->get_tcp_state() == TcpStreamTracker::TCP_CLOSED)
+         || (talker->get_tcp_state() == TcpStreamTracker::TCP_CLOSED) )
     {
         // Listener previously issued a reset Talker is re-SYN-ing
 
@@ -522,35 +578,31 @@ bool TcpSession::handle_syn_on_reset_session(TcpSegmentDescriptor& tsd)
             /* Got SYN/RST.  We're done. */
             listener->normalizer.trim_syn_payload(tsd);
             listener->normalizer.trim_rst_payload(tsd);
-            pkt_action_mask |= ACTION_RST;
+            set_pkt_action_flag(ACTION_RST);
             return false;
         }
-        else if (tcph->is_syn_only())
+        else if ( tcph->is_syn_only() )
         {
             flow->ssn_state.direction = FROM_CLIENT;
             flow->session_state = STREAM_STATE_SYN;
             flow->set_ttl(tsd.get_pkt(), true);
-            NewTcpSessionOnSyn(tsd);
+            init_session_on_syn(tsd);
             tcpStats.resyns++;
-            listener = &server;
-            talker = &client;
-            listener->normalizer.ecn_tracker(tcph, config->require_3whs());
+            listener->normalizer.ecn_tracker(tcph, tcp_config->require_3whs());
             flow->update_session_flags(SSNFLAG_SEEN_CLIENT);
         }
-        else if (tcph->is_syn_ack())
+        else if ( tcph->is_syn_ack() )
         {
-            if (config->midstream_allowed(tsd.get_pkt()))
+            if ( tcp_config->midstream_allowed(tsd.get_pkt()) )
             {
                 flow->ssn_state.direction = FROM_SERVER;
                 flow->session_state = STREAM_STATE_SYN_ACK;
                 flow->set_ttl(tsd.get_pkt(), false);
-                NewTcpSessionOnSynAck(tsd);
+                init_session_on_synack(tsd);
                 tcpStats.resyns++;
             }
 
-            listener = &client;
-            talker = &server;
-            listener->normalizer.ecn_tracker(tcph, config->require_3whs());
+            listener->normalizer.ecn_tracker(tcph, tcp_config->require_3whs());
             flow->update_session_flags(SSNFLAG_SEEN_SERVER);
         }
     }
@@ -560,92 +612,100 @@ bool TcpSession::handle_syn_on_reset_session(TcpSegmentDescriptor& tsd)
 
 void TcpSession::update_ignored_session(TcpSegmentDescriptor& tsd)
 {
+    if ( tsd.is_meta_ack_packet() )
+        return;
+
+    Packet* p = tsd.get_pkt();
     // FIXIT-L why flush here instead of just purge?
     // s5_ignored_session() may be disabling detection too soon if we really want to flush
-    if (Stream::ignored_flow(flow, tsd.get_pkt()))
+    if ( Stream::ignored_flow(flow, p) )
     {
+        TcpStreamTracker* listener = tsd.get_listener();
+        TcpStreamTracker* talker = tsd.get_talker();
+
         if ( talker && ( talker->get_tf_flags() & TF_FORCE_FLUSH ) )
         {
-            flush_talker(tsd.get_pkt() );
+            flush_talker(p);
             talker->clear_tf_flags(TF_FORCE_FLUSH);
         }
 
         if ( listener && ( listener->get_tf_flags() & TF_FORCE_FLUSH ) )
         {
-            flush_listener(tsd.get_pkt());
+            flush_listener(p);
             listener->clear_tf_flags(TF_FORCE_FLUSH);
         }
 
-        tsd.get_pkt()->packet_flags |= PKT_IGNORE;
-        pkt_action_mask |= ACTION_DISABLE_INSPECTION;
+        tsd.set_packet_flags(PKT_IGNORE);
+        set_pkt_action_flag(ACTION_DISABLE_INSPECTION);
+        tcpStats.ignored++;
     }
 }
 
 void TcpSession::handle_data_on_syn(TcpSegmentDescriptor& tsd)
 {
+    TcpStreamTracker* listener = tsd.get_listener();
+    TcpStreamTracker* talker = tsd.get_talker();
+
     /* MacOS accepts data on SYN, so don't alert if policy is MACOS */
-    if (talker->normalizer.get_os_policy() == StreamPolicy::OS_MACOS)
-    {
+    if ( talker->normalizer.get_os_policy() == StreamPolicy::OS_MACOS )
         handle_data_segment(tsd);
-    }
     else
     {
         listener->normalizer.trim_syn_payload(tsd);
         tel.set_tcp_event(EVENT_DATA_ON_SYN);
-        pkt_action_mask |= ACTION_BAD_PKT;
+        set_pkt_action_flag(ACTION_BAD_PKT);
     }
 }
 
 void TcpSession::update_session_on_rst(TcpSegmentDescriptor& tsd, bool flush)
 {
+    Packet* p = tsd.get_pkt();
+
     if ( flush )
     {
-        DetectionEngine::onload(flow);
-        flush_listener(tsd.get_pkt(), true);
-        flush_talker(tsd.get_pkt(), true);
-        DetectionEngine::onload(flow);  // FIXIT-H don't allow offload above
+        flush_listener(p, true);
+        flush_talker(p, true);
         set_splitter(true, nullptr);
         set_splitter(false, nullptr);
-        flow->free_flow_data();
     }
 
-    talker->update_on_rst_sent( );
+    tsd.get_talker()->update_on_rst_sent();
 }
 
 void TcpSession::update_paws_timestamps(TcpSegmentDescriptor& tsd)
 {
-    // update PAWS timestamps
+    TcpStreamTracker* listener = tsd.get_listener();
+    TcpStreamTracker* talker = tsd.get_talker();
 
     if ( listener->normalizer.handling_timestamps()
-        && SEQ_EQ(listener->r_win_base, tsd.get_seg_seq() ) )
+        && SEQ_EQ(listener->r_win_base, tsd.get_seq()) )
     {
-        if ( ( (int32_t)(tsd.get_ts() - talker->get_ts_last() ) >= 0 )
-            ||
-            ( ( uint32_t )tsd.get_pkt()->pkth->ts.tv_sec
-            >= talker->get_ts_last_packet() + PAWS_24DAYS ) )
+        if ( ((int32_t)(tsd.get_timestamp() - talker->get_ts_last()) >= 0  )
+            || (tsd.get_packet_timestamp() >= talker->get_ts_last_packet() + PAWS_24DAYS) )
         {
-            talker->set_ts_last(tsd.get_ts());
-            talker->set_ts_last_packet(tsd.get_pkt()->pkth->ts.tv_sec);
+            talker->set_ts_last(tsd.get_timestamp());
+            talker->set_ts_last_packet(tsd.get_packet_timestamp());
         }
     }
 }
 
 void TcpSession::check_for_session_hijack(TcpSegmentDescriptor& tsd)
 {
-    if (!(tsd.get_pkt()->pkth->flags & DAQ_PKT_FLAG_PRE_ROUTING))
+    TcpStreamTracker* listener = tsd.get_listener();
+    TcpStreamTracker* talker = tsd.get_talker();
+
+    Packet* p = tsd.get_pkt();
+    if ( !(p->pkth->flags & DAQ_PKT_FLAG_PRE_ROUTING) )
     {
-        if ( tsd.get_pkt()->is_eth() )
+        if ( p->is_eth() )
         {
-            // if flag is set, guaranteed to have an eth layer
-            Packet* p = tsd.get_pkt();
             const eth::EtherHdr* eh = layer::get_eth_layer(p);
             bool t_hijack = !talker->compare_mac_addresses(eh->ether_src);
             bool l_hijack = !listener->compare_mac_addresses(eh->ether_dst);
 
             // if both seem hijacked then swap src/dst check, it that matches probably a tap
-            if ( ( t_hijack & l_hijack ) &&
-                ( talker->compare_mac_addresses(eh->ether_dst) &&
-                listener->compare_mac_addresses(eh->ether_src) ) )
+            if ( (t_hijack & l_hijack) && (talker->compare_mac_addresses(eh->ether_dst) &&
+                 listener->compare_mac_addresses(eh->ether_src)) )
                 return;
 
             uint32_t event_code = 0;
@@ -666,7 +726,7 @@ void TcpSession::check_for_session_hijack(TcpSegmentDescriptor& tsd)
                     event_code |= EVENT_SESSION_HIJACK_CLIENT;
             }
 
-            if (event_code)
+            if ( event_code )
                 tel.set_tcp_event(event_code);
         }
     }
@@ -674,30 +734,26 @@ void TcpSession::check_for_session_hijack(TcpSegmentDescriptor& tsd)
 
 bool TcpSession::check_for_window_slam(TcpSegmentDescriptor& tsd)
 {
-    if ( config->max_window && (tsd.get_seg_wnd() > config->max_window ) )
+    TcpStreamTracker* listener = tsd.get_listener();
+
+    if ( tcp_config->max_window && (tsd.get_wnd() > tcp_config->max_window) )
     {
         /* got a window too large, alert! */
         tel.set_tcp_event(EVENT_WINDOW_TOO_LARGE);
-        inc_tcp_discards();
         listener->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
-        pkt_action_mask |= ACTION_BAD_PKT;
+        set_pkt_action_flag(ACTION_BAD_PKT);
         return true;
     }
-    else if ((tsd.get_pkt()->is_from_client())
-        && (tsd.get_seg_wnd() <= SLAM_MAX)
-        && (tsd.get_seg_ack() == listener->get_iss() + 1)
-        && !( tsd.get_tcph()->is_fin() | tsd.get_tcph()->is_rst() )
+    else if ( tsd.is_packet_from_client() && (tsd.get_wnd() <= SLAM_MAX)
+        && (tsd.get_ack() == listener->get_iss() + 1)
+        && !(tsd.get_tcph()->is_fin() | tsd.get_tcph()->is_rst())
         && !(flow->get_session_flags() & SSNFLAG_MIDSTREAM))
     {
         /* got a window slam alert! */
         tel.set_tcp_event(EVENT_WINDOW_SLAM);
-        inc_tcp_discards();
-
-        if (listener->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK))
-        {
-            pkt_action_mask |= ACTION_BAD_PKT;
-            return true;
-        }
+        listener->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
+        set_pkt_action_flag(ACTION_BAD_PKT);
+        return true;
     }
 
     return false;
@@ -705,90 +761,85 @@ bool TcpSession::check_for_window_slam(TcpSegmentDescriptor& tsd)
 
 void TcpSession::mark_packet_for_drop(TcpSegmentDescriptor& tsd)
 {
-    listener->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
+
+    tsd.get_listener()->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
     set_pkt_action_flag(ACTION_BAD_PKT);
 }
 
 void TcpSession::handle_data_segment(TcpSegmentDescriptor& tsd)
 {
+    TcpStreamTracker* listener = tsd.get_listener();
+    TcpStreamTracker* talker = tsd.get_talker();
+
     if ( TcpStreamTracker::TCP_CLOSED != talker->get_tcp_state() )
     {
         uint8_t tcp_options_len = tsd.get_tcph()->options_len();
-        if (tsd.is_packet_from_server())
-            server.set_tcp_options_len(tcp_options_len);
-        else
+        if ( tsd.is_packet_from_client() )
             client.set_tcp_options_len(tcp_options_len);
+        else
+            server.set_tcp_options_len(tcp_options_len);
 
         // FIXIT-M move this to normalizer base class, handle OS_PROXY in derived class
-        if (config->policy != StreamPolicy::OS_PROXY)
+        if ( tcp_config->policy != StreamPolicy::OS_PROXY )
         {
-            /* check for valid sequence/retrans */
-            if (!listener->is_segment_seq_valid(tsd) )
+            // drop packet if sequence num is invalid
+            if ( !listener->is_segment_seq_valid(tsd) )
+            {
+                tcpStats.invalid_seq_num++;
+                listener->normalizer.trim_win_payload(tsd);
                 return;
+            }
 
             // these normalizations can't be done if we missed setup. and
             // window is zero in one direction until we've seen both sides.
-            if (!(flow->get_session_flags() & SSNFLAG_MIDSTREAM) && flow->two_way_traffic())
+            if ( !(flow->get_session_flags() & SSNFLAG_MIDSTREAM) && flow->two_way_traffic() )
             {
-                // sender of syn w/mss limits payloads from peer since we store mss on
-                // sender side, use listener mss same reasoning for window size
-                TcpStreamTracker* st = listener;
+                // trim to fit in listener's window and mss
+                listener->normalizer.trim_win_payload
+                    (tsd, (listener->r_win_base + listener->get_snd_wnd() - listener->rcv_nxt));
 
-                // trim to fit in window and mss as needed
-                st->normalizer.trim_win_payload(
-                    tsd, (st->r_win_base + st->get_snd_wnd() - st->rcv_nxt));
+                if ( listener->get_mss() )
+                    listener->normalizer.trim_mss_payload(tsd, listener->get_mss());
 
-                if (st->get_mss())
-                    st->normalizer.trim_mss_payload(tsd, st->get_mss());
-
-                st->normalizer.ecn_stripper(tsd.get_pkt());
+                listener->normalizer.ecn_stripper(tsd);
             }
         }
 
-        // dunno if this is RFC but fragroute testing expects it  for the record,
-        // I've seen FTP data sessions that send data packets with no tcp flags set
-        if ((tsd.get_tcph()->th_flags != 0) or (config->policy == StreamPolicy::OS_LINUX)
-                or (config->policy == StreamPolicy::OS_PROXY))
-        {
-            process_tcp_data(tsd);
-        }
-        else
-        {
-            tel.set_tcp_event(EVENT_DATA_WITHOUT_FLAGS);
-            listener->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
-        }
+        process_tcp_data(tsd);
     }
 
     listener->reassembler.flush_on_data_policy(tsd.get_pkt());
 }
 
-TcpStreamTracker::TcpState TcpSession::get_talker_state()
+TcpStreamTracker::TcpState TcpSession::get_talker_state(TcpSegmentDescriptor& tsd)
 {
-    return talker->get_tcp_state();
+    return tsd.get_talker()->get_tcp_state();
 }
 
-TcpStreamTracker::TcpState TcpSession::get_listener_state()
+TcpStreamTracker::TcpState TcpSession::get_listener_state(TcpSegmentDescriptor& tsd)
 {
-    return listener->get_tcp_state();
+    return tsd.get_listener()->get_tcp_state();
 }
 
 void TcpSession::check_for_repeated_syn(TcpSegmentDescriptor& tsd)
 {
+    TcpStreamTracker* listener = tsd.get_listener();
+    TcpStreamTracker* talker = tsd.get_talker();
     uint32_t action = ACTION_NOTHING;
 
-    if ( !SEQ_EQ(tsd.get_seg_seq(), talker->get_iss()) and
+    if ( !SEQ_EQ(tsd.get_seq(), talker->get_iss()) and
         listener->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK) )
     {
-        action = ACTION_BAD_PKT;
+        set_pkt_action_flag(ACTION_BAD_PKT);
     }
     else if ( talker->get_tcp_state() >= TcpStreamTracker::TCP_ESTABLISHED and
         talker->get_tcp_state() < TcpStreamTracker::TCP_CLOSED )
     {
         action = listener->normalizer.handle_repeated_syn(tsd);
     }
+
     if (action != ACTION_NOTHING)
     {
-        /* got a bad SYN on the session, alert! */
         tel.set_tcp_event(EVENT_SYN_ON_EST);
         pkt_action_mask |= action;
     }
@@ -801,12 +852,9 @@ void TcpSession::flush_server(Packet* p)
 
     server.set_tf_flags(TF_FORCE_FLUSH);
 
-    // If rebuilt packet, don't flush now because we'll overwrite the packet being processed.
+    // don't flush if rebuilt packet, that would overwrite the packet being processed.
     if ( p->packet_flags & PKT_REBUILT_STREAM )
-    {
-        // We'll check & clear the TF_FORCE_FLUSH next time through
-        return;
-    }
+        return; // We'll check & clear the TF_FORCE_FLUSH next time through
 
     // Need to convert the addresses to network order
     if ( server.reassembler.flush_stream(p, PKT_FROM_SERVER) )
@@ -824,10 +872,7 @@ void TcpSession::flush_client(Packet* p)
 
     // If rebuilt packet, don't flush now because we'll overwrite the packet being processed.
     if ( p->packet_flags & PKT_REBUILT_STREAM )
-    {
-        // We'll check & clear the TF_FORCE_FLUSH next time through
-        return;
-    }
+        return;         // TF_FORCE_FLUSH checked & cleared next time through
 
     if ( client.reassembler.flush_stream(p, PKT_FROM_CLIENT) )
         client.reassembler.purge_flushed_ackd();
@@ -838,11 +883,11 @@ void TcpSession::flush_client(Packet* p)
 void TcpSession::flush_tracker(
     TcpStreamTracker& tracker, Packet* p, uint32_t dir, bool final_flush)
 {
-    if ( final_flush && ( !tracker.splitter || !tracker.splitter->finish(flow) ) )
+    if ( final_flush && (!tracker.get_splitter() || !tracker.get_splitter()->finish(flow)) )
          return;
 
      tracker.set_tf_flags(TF_FORCE_FLUSH);
-     if ( tracker.reassembler.flush_stream(p, dir) )
+     if ( tracker.reassembler.flush_stream(p, dir, final_flush) )
          tracker.reassembler.purge_flushed_ackd();
 
      tracker.clear_tf_flags(TF_FORCE_FLUSH);
@@ -872,78 +917,75 @@ void TcpSession::set_extra_data(Packet* p, uint32_t xid)
     st.reassembler.set_xtradata_mask(st.reassembler.get_xtradata_mask() | BIT(xid));
 }
 
-static inline void set_window_scale(TcpStreamTracker& talker, TcpStreamTracker& listener,
-    TcpSegmentDescriptor& tsd)
+static inline void set_window_scale(TcpSegmentDescriptor& tsd)
 {
     // scale the window.  Only if BOTH client and server specified wscale option as part
     // of 3-way handshake.  This is per RFC 1323.
-    if ( ( talker.get_tf_flags() & TF_WSCALE ) && ( listener.get_tf_flags() & TF_WSCALE ) )
-        tsd.scale_seg_wnd(talker.get_wscale() );
+    if ( (tsd.get_talker()->get_tf_flags() & TF_WSCALE)
+         && (tsd.get_listener()->get_tf_flags() & TF_WSCALE) )
+    {
+        tsd.scale_wnd(tsd.get_talker()->get_wscale());
+    }
 }
 
-void TcpSession::do_packet_analysis_post_checks(Packet* p)
+void TcpSession::check_events_and_actions(const TcpSegmentDescriptor& tsd)
 {
     tel.log_tcp_events();
 
-    if (!(pkt_action_mask & ACTION_LWSSN_CLOSED))
+    if ( tsd.is_meta_ack_packet() )
+        return;
+
+    Packet* p = tsd.get_pkt();
+    if ( !(pkt_action_mask & ACTION_LWSSN_CLOSED) )
     {
         flow->markup_packet_flags(p);
-        flow->set_expire(p, config->session_timeout);
+        flow->set_expire(p, flow->default_session_timeout);
     }
     else
-        TcpHAManager::process_deletion(p->flow);
+        TcpHAManager::process_deletion(*flow);
 
-    if (pkt_action_mask & ACTION_DISABLE_INSPECTION)
-    {
+    if ( pkt_action_mask & ACTION_DISABLE_INSPECTION )
         DetectionEngine::disable_all(p);
-    }
 }
 
-// FIXIT-M can flow do these checks before calling stream tcp?
-bool TcpSession::is_flow_handling_packets(Packet* p)
+bool TcpSession::ignore_this_packet(Packet* p)
 {
-    bool flow_ready = true;
-
-    // FIXIT-L can't get here without protocol being set to TCP, is this really needed??
-    if (flow->pkt_type != PktType::TCP)
+    if ( no_ack_mode_enabled() and p->is_retry() )
     {
-        return false;
+        // Don't need to process a retry packet through stream again,
+        // just make sure the retransmit handler is called so that
+        // we do things like update file inspection.
+        flow->call_handlers(p, false);
+        return true;
     }
 
-    if(flow->session_state & STREAM_STATE_IGNORE)
-    {
-        tcpStats.ignored++;
-        flow_ready = false;
-    }
-    else
-        flow_ready = !Stream::blocked_flow(flow, p);
+    if ( Stream::blocked_flow(p) )
+        return true;
 
-    // FIXIT-L expected flow should be checked by Stream before we get here
-    // harmonize this with that and the checks above
-    if ( Stream::expected_flow(flow, p) )
+    if ( flow->ssn_state.ignore_direction != SSN_DIR_NONE )
     {
-        server.flush_policy = STREAM_FLPOLICY_IGNORE;
-        client.flush_policy = STREAM_FLPOLICY_IGNORE;
-        flow_ready = false;
+        server.set_flush_policy(STREAM_FLPOLICY_IGNORE);
+        client.set_flush_policy(STREAM_FLPOLICY_IGNORE);
+        return true;
     }
 
-    return flow_ready;
+    return false;
 }
 
 void TcpSession::cleanup_session_if_expired(Packet* p)
 {
     // Check if the session is expired. Should be done before we do something with
     // the packet...Insert a packet, or handle state change SYN, FIN, RST, etc.
-    if (Stream::expired_flow(flow, p))
+    if ( Stream::expired_flow(flow, p) )
     {
         /* Session is timed out, if also reset then restart, otherwise clear */
-        if (flow->get_session_flags() & SSNFLAG_RESET)
+        if ( flow->get_session_flags() & SSNFLAG_RESET )
             clear_session(true, true, true, p);
         else
             clear_session(true, true, false, p);
 
         tcpStats.timeouts++;
-        TcpHAManager::process_deletion(flow);
+        TcpHAManager::process_deletion(*flow);
     }
 }
 
@@ -954,18 +996,20 @@ void TcpSession::precheck(Packet* p)
     cleanup_session_if_expired(p);
 }
 
-bool TcpSession::do_packet_analysis_pre_checks(Packet* p, TcpSegmentDescriptor& tsd)
+void TcpSession::init_tcp_packet_analysis(TcpSegmentDescriptor& tsd)
 {
-    if ( !is_flow_handling_packets(p) )
-        return false;
-
-    if ( !splitter_init and tsd.get_seg_len() > 0 )
+    if ( !splitter_init and tsd.is_data_segment() )
     {
-        client.set_splitter(tsd.get_flow());
-        server.set_splitter(tsd.get_flow());
+        if ( !(tcp_config->flags & STREAM_CONFIG_NO_REASSEMBLY) )
+        {
+            client.set_splitter(tsd.get_flow());
+            server.set_splitter(tsd.get_flow());
 
-        client.init_flush_policy();
-        server.init_flush_policy();
+            client.init_flush_policy();
+            server.init_flush_policy();
+
+            set_no_ack(tcp_config->no_ack);
+        }
 
         splitter_init = true;
     }
@@ -973,81 +1017,87 @@ bool TcpSession::do_packet_analysis_pre_checks(Packet* p, TcpSegmentDescriptor& 
     pkt_action_mask = ACTION_NOTHING;
     tel.clear_tcp_events();
     // process thru state machine...talker first
-    if (p->is_from_client())
+    // When in no-ack mode, don't trust ACK numbers. Set the ACK value
+    // as if the last packet in the other direction was ACK'd.
+    // FIXIT-M: The snd_nxt and snd_una checks are only needed because
+    // the snd_nxt value isn't valid for SYN/ACK packet. Can remove those
+    // checks if that is fixed.
+    if ( tsd.is_packet_from_client() )
     {
         update_session_on_client_packet(tsd);
+
+        if ( no_ack_mode_enabled() and (server.get_snd_nxt() or server.get_snd_una()) )
+            tsd.set_ack(server.get_snd_nxt());
     }
     else
     {
         update_session_on_server_packet(tsd);
+
+        if ( no_ack_mode_enabled() and (client.get_snd_nxt() or client.get_snd_una()) )
+            tsd.set_ack(client.get_snd_nxt());
     }
 
     update_ignored_session(tsd);
-    set_window_scale(*talker, *listener, tsd);
-    if ( SnortConfig::is_address_anomaly_check_enabled() )
-        check_for_session_hijack(tsd);
-
-    return true;
+    set_window_scale(tsd);
 }
 
 bool TcpSession::validate_packet_established_session(TcpSegmentDescriptor& tsd)
 {
-    pkt_action_mask |= listener->normalizer.handle_paws(tsd);
+    TcpStreamTracker* listener = tsd.get_listener();
 
-    if ( pkt_action_mask & ACTION_BAD_PKT )
-        return false;
+    if ( tsd.is_policy_inline() )
+       if ( tsd.get_tcph()->is_ack() && !listener->is_ack_valid(tsd.get_ack()) )
+       {
+           listener->normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
+           set_pkt_action_flag(ACTION_BAD_PKT);
+       }
 
-    return true;
+    if ( !tsd.is_meta_ack_packet() )
+        set_pkt_action_flag(listener->normalizer.handle_paws(tsd));
+
+    return ( pkt_action_mask & ACTION_BAD_PKT ) ? false : true;
 }
 
-/*
- * Main entry point for TCP
- */
+int TcpSession::process_tcp_packet(TcpSegmentDescriptor& tsd, const Packet* p)
+{
+    tsm->eval(tsd);
+    check_events_and_actions(tsd);
+
+    S5TraceTCP(tsd, p);
+
+    return ACTION_NOTHING;
+}
+
 int TcpSession::process(Packet* p)
 {
     Profile profile(s5TcpPerfStats);
+    assert(flow->ssn_server && flow->pkt_type == PktType::TCP);
 
-    assert(flow->ssn_server);
-
-    // FIXIT-H need to do something here to handle check for need to swap trackers??
-    if ( !config )
-        config = get_tcp_cfg(flow->ssn_server);
-
-    if( !tcp_init )
-        set_os_policy( );
+    if ( ignore_this_packet(p) )
+        return ACTION_NOTHING;
 
     TcpSegmentDescriptor tsd(flow, p, tel);
+    init_tcp_packet_analysis(tsd);
 
-    if ( !do_packet_analysis_pre_checks(p, tsd) )
-        return ACTION_NOTHING;
-
-    if ( ( flow->get_session_flags() & SSNFLAG_RESET ) && tsd.get_tcph()->is_syn()
-        && !handle_syn_on_reset_session(tsd) )
-        return ACTION_NOTHING;
-    else
+    // check for and process meta-ack info first if present, the current listener is the
+    // talker for the meta-ack...
+    DAQ_PktTcpAckData_t* tcp_mack = (DAQ_PktTcpAckData_t*)p->daq_msg->meta[DAQ_PKT_META_TCP_ACK_DATA];
+    if ( tcp_mack )
     {
-        DeepProfile profile(s5TcpStatePerfStats);
-
-        if ( tsm->eval(tsd, *talker, *listener) )
-        {
-            do_packet_analysis_post_checks(p);
-            S5TraceTCP(p, flow, &tsd, 0);
-        }
-        else
-        {
-            if ( pkt_action_mask & ACTION_BAD_PKT )
-            {
-                inc_tcp_discards();
-
-                do_packet_analysis_post_checks(p);
-            }
-
-            tel.log_tcp_events();
-            S5TraceTCP(p, flow, &tsd, 0);
-        }
+        TcpSegmentDescriptor ma_tsd(flow, p, tcp_mack->tcp_ack_seq_num, tcp_mack->tcp_window_size);
+        init_tcp_packet_analysis(ma_tsd);
+        process_tcp_packet(ma_tsd, p);
+        tcpStats.meta_acks++;
     }
 
-    return ACTION_NOTHING;
+    if ( p->context->conf->is_address_anomaly_check_enabled() )
+        check_for_session_hijack(tsd);
+
+    if ( ( flow->get_session_flags() & SSNFLAG_RESET ) && tsd.get_tcph()->is_syn()
+            && !handle_syn_on_reset_session(tsd) )
+        return ACTION_NOTHING;
+
+    return process_tcp_packet(tsd, p);
 }
 
 void TcpSession::flush()

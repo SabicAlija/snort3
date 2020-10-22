@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -17,7 +17,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// client_detector.cc author davis mcpherson
+// appid_detector.cc author davis mcpherson
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -25,11 +25,13 @@
 
 #include "appid_detector.h"
 
+#include "managers/inspector_manager.h"
 #include "protocols/packet.h"
 
 #include "app_info_table.h"
 #include "appid_config.h"
 #include "appid_http_session.h"
+#include "appid_inspector.h"
 #include "lua_detector_api.h"
 
 using namespace snort;
@@ -45,8 +47,13 @@ int AppIdDetector::initialize()
             handler->register_udp_pattern(this, pat.pattern, pat.length, pat.index, pat.nocase);
 
     if (!appid_registry.empty())
+    {
+        AppIdInspector* inspector = (AppIdInspector*) InspectorManager::get_inspector(MOD_NAME);
+        assert(inspector);
+        AppIdContext& ctxt = inspector->get_ctxt();
         for (auto& id : appid_registry)
-            register_appid(id.appId, id.additionalInfo);
+            register_appid(id.appId, id.additionalInfo, ctxt.get_odp_ctxt());
+      }
 
     if (!service_ports.empty())
         for (auto& port: service_ports)
@@ -54,6 +61,11 @@ int AppIdDetector::initialize()
 
     do_custom_init();
     return APPID_SUCCESS;
+}
+
+void AppIdDetector::reload()
+{
+    do_custom_reload();
 }
 
 void* AppIdDetector::data_get(AppIdSession& asd)
@@ -66,37 +78,30 @@ int AppIdDetector::data_add(AppIdSession& asd, void* data, AppIdFreeFCN fcn)
     return asd.add_flow_data(data, flow_data_index, fcn);
 }
 
-void AppIdDetector::add_info(AppIdSession& asd, const char* info)
+void AppIdDetector::add_user(AppIdSession& asd, const char* username, AppId appId, bool success,
+    AppidChangeBits& change_bits)
 {
-    AppIdHttpSession* hsession = asd.get_http_session();
-
-    if ( !hsession->get_field(MISC_URL_FID) )
-        hsession->set_field(MISC_URL_FID, new std::string(info));
-}
-
-void AppIdDetector::add_user(AppIdSession& asd, const char* username, AppId appId, bool success)
-{
-    asd.client.update_user(appId, username);
+    asd.set_client_user(appId, username, change_bits);
     if ( success )
-        asd.set_session_flags(APPID_SESSION_LOGIN_SUCCEEDED);
+        change_bits.set(APPID_CLIENT_LOGIN_SUCCEEDED_BIT);
     else
-        asd.clear_session_flags(APPID_SESSION_LOGIN_SUCCEEDED);
+        change_bits.reset(APPID_CLIENT_LOGIN_SUCCEEDED_BIT);
 }
 
 void AppIdDetector::add_payload(AppIdSession& asd, AppId payload_id)
 {
-    asd.payload.set_id(payload_id);
+    asd.set_payload_id(payload_id);
 }
 
-void AppIdDetector::add_app(AppIdSession& asd, AppId service_id, AppId client_id,
-    const char* version)
+void AppIdDetector::add_app(const Packet& p, AppIdSession& asd, AppidSessionDirection dir, AppId service_id,
+    AppId client_id, const char* version, AppidChangeBits& change_bits)
 {
     if ( version )
-        asd.client.set_version(version);
+        asd.set_client_version(version, change_bits);
 
     asd.set_client_detected();
     asd.client_inferred_service_id = service_id;
-    asd.client.set_id(client_id);
+    asd.set_client_id(p, dir, client_id, change_bits);
 }
 
 const char* AppIdDetector::get_code_string(APPID_STATUS_CODE code) const

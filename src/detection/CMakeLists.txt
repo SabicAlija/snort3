@@ -6,6 +6,8 @@ set (DETECTION_INCLUDES
     detection_util.h
     detect_trace.h
     ips_context.h
+    ips_context_chain.h
+    ips_context_data.h
     regex_offload.h
     rule_option_types.h
     rules.h
@@ -19,6 +21,8 @@ add_library (detection OBJECT
     context_switcher.h
     detect.cc
     detection_engine.cc
+    detection_module.cc
+    detection_module.h
     detection_options.cc
     detection_options.h
     detection_util.cc
@@ -32,12 +36,15 @@ add_library (detection OBJECT
     fp_utils.cc
     fp_utils.h
     ips_context.cc
+    ips_context_chain.cc
+    ips_context_data.cc
     pattern_match_data.h
     pcrm.cc
     pcrm.h
     regex_offload.cc
     rtn_checks.cc
     rtn_checks.h
+    rules.cc
     service_map.cc
     service_map.h
     sfrim.cc

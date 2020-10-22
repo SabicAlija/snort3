@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,11 +31,13 @@
 #include "piglet_output.h"
 #include "piglet_runner.h"
 
+using namespace snort;
+
 namespace Piglet
 {
 int main()
 {
-    // FIXIT-M allow user selection of output/result functions
+    // FIXIT-L allow user selection of output/result functions
     if ( Runner::run_all(verbose_output) )
         return 0;
 
@@ -43,5 +45,5 @@ int main()
 }
 
 bool piglet_mode()
-{ return snort::SnortConfig::get_conf()->run_flags & RUN_FLAG__PIGLET; }
+{ return SnortConfig::get_conf()->run_flags & RUN_FLAG__PIGLET; }
 } // namespace Piglet

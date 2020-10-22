@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,15 +24,27 @@
 #include "http_msg_request.h"
 
 #include "http_api.h"
+#include "http_common.h"
+#include "http_enum.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 HttpMsgRequest::HttpMsgRequest(const uint8_t* buffer, const uint16_t buf_size,
-    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, Flow* flow_,
     const HttpParaList* params_) :
     HttpMsgStart(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_)
 {
     transaction->set_request(this);
+    get_related_sections();
+}
+
+HttpMsgRequest::~HttpMsgRequest()
+{
+    delete uri;
+    delete query_params;
+    delete body_params;
 }
 
 void HttpMsgRequest::parse_start_line()
@@ -57,7 +69,7 @@ void HttpMsgRequest::parse_start_line()
         else
         {
             add_infraction(INF_BAD_REQ_LINE);
-            transaction->get_events(source_id)->generate_misformatted_http(start_line.start(),
+            session_data->events[source_id]->generate_misformatted_http(start_line.start(),
                 start_line.length());
             return;
         }
@@ -103,7 +115,7 @@ void HttpMsgRequest::parse_start_line()
     {
         uri = new HttpUri(start_line.start() + first_end + 1, last_begin - first_end - 1,
             method_id, params->uri_param, transaction->get_infractions(source_id),
-            transaction->get_events(source_id));
+            session_data->events[source_id]);
     }
     else
     {
@@ -123,6 +135,8 @@ bool HttpMsgRequest::http_name_nocase_ok(const uint8_t* start)
 
 bool HttpMsgRequest::handle_zero_nine()
 {
+    // FIXIT-M The following test seems too permissive about what constitutes HTTP/0.9. Consider
+    // not accepting "URIs" with internal whitespace or nonprinting characters.
     // 0.9 request line is supposed to be "GET <URI>\r\n"
     if ((start_line.length() >= 3) &&
         !memcmp(start_line.start(), "GET", 3) &&
@@ -146,7 +160,7 @@ bool HttpMsgRequest::handle_zero_nine()
                 uri_end--);
             uri = new HttpUri(start_line.start() + uri_begin, uri_end - uri_begin + 1, method_id,
                 params->uri_param, transaction->get_infractions(source_id),
-                transaction->get_events(source_id));
+                session_data->events[source_id]);
         }
         else
         {
@@ -174,6 +188,22 @@ const Field& HttpMsgRequest::get_uri_norm_classic()
         return uri->get_norm_classic();
     }
     return Field::FIELD_NULL;
+}
+
+ParameterMap& HttpMsgRequest::get_query_params()
+{
+    if (query_params == nullptr)
+        query_params = new ParameterMap;
+
+    return *query_params;
+}
+
+ParameterMap& HttpMsgRequest::get_body_params()
+{
+    if (body_params == nullptr)
+        body_params = new ParameterMap;
+
+    return *body_params;
 }
 
 void HttpMsgRequest::gen_events()
@@ -245,8 +275,10 @@ void HttpMsgRequest::update_flow()
     {
         session_data->half_reset(source_id);
         session_data->type_expected[source_id] = SEC_ABORT;
+        return;
     }
-    else if (*transaction->get_infractions(source_id) & INF_ZERO_NINE_REQ)
+
+    if (*transaction->get_infractions(source_id) & INF_ZERO_NINE_REQ)
     {
         session_data->half_reset(source_id);
         // There can only be one 0.9 response per connection because it ends the S2C connection. Do
@@ -258,14 +290,27 @@ void HttpMsgRequest::update_flow()
             // line and headers.
             session_data->zero_nine_expected = trans_num;
         }
+        return;
     }
-    else
+
+    if (method_id == METH_CONNECT)
     {
-        session_data->type_expected[source_id] = SEC_HEADER;
-        session_data->version_id[source_id] = version_id;
-        session_data->method_id = method_id;
+        session_data->last_request_was_connect = true;
     }
-    session_data->section_type[source_id] = SEC__NOT_COMPUTE;
+
+    session_data->type_expected[source_id] = SEC_HEADER;
+    session_data->version_id[source_id] = version_id;
+    session_data->method_id = method_id;
+}
+
+void HttpMsgRequest::publish()
+{
+    if (!session_data->ssl_search_abandoned && trans_num > 1 &&
+        !flow->flags.data_decrypted && get_method_id() != METH_CONNECT)
+    {
+        session_data->ssl_search_abandoned = true;
+        DataBus::publish(SSL_SEARCH_ABANDONED, DetectionEngine::get_current_packet());
+    }
 }
 
 #ifdef REG_TEST

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,8 +29,10 @@
 
 #include "file_service.h"
 
+#include "log/messages.h"
 #include "main/snort_config.h"
 #include "mime/file_mime_process.h"
+#include "search_engines/search_tool.h"
 
 #include "file_cache.h"
 #include "file_capture.h"
@@ -45,25 +47,62 @@ bool FileService::file_capture_enabled = false;
 bool FileService::file_processing_initiated = false;
 
 FileCache* FileService::file_cache = nullptr;
+DecodeConfig FileService::decode_conf;
+
+// FIXIT-L make these params reloadable
+static int64_t max_files_cached = 0;
+static int64_t capture_memcap = 0;
+static int64_t capture_block_size = 0;
 
 void FileService::init()
 {
     FileFlows::init();
 }
 
-void FileService::post_init()
+void FileService::post_init(const SnortConfig* sc)
 {
+    SearchTool::set_conf(sc);
     MimeSession::init();
-    FileConfig* conf = get_file_config();
+    SearchTool::set_conf(nullptr);
+
+    const FileConfig* const conf = get_file_config();
 
     if (!conf)
         return;
 
     if (!file_cache)
+    {
         file_cache = new FileCache(conf->max_files_cached);
+        max_files_cached = conf->max_files_cached;
+        file_cache->set_block_timeout(conf->file_block_timeout);
+        file_cache->set_lookup_timeout(conf->file_lookup_timeout);
+    }
 
     if (file_capture_enabled)
+    {
         FileCapture::init(conf->capture_memcap, conf->capture_block_size);
+        capture_memcap = conf->capture_memcap;
+        capture_block_size = conf->capture_block_size;
+    }
+}
+
+void FileService::verify_reload(const SnortConfig* sc)
+{
+    const FileConfig* const conf = get_file_config(sc);
+
+    if (!conf)
+        return;
+
+    if (max_files_cached != conf->max_files_cached)
+        ReloadError("Changing file_id.max_files_cached requires a restart.\n");
+
+    if (file_capture_enabled)
+    {
+        if (capture_memcap != conf->capture_memcap)
+            ReloadError("Changing file_id.capture_memcap requires a restart.\n");
+        if (capture_block_size != conf->capture_block_size)
+            ReloadError("Changing file_id.capture_block_size requires a restart.\n");
+    }
 }
 
 void FileService::close()
@@ -139,6 +178,16 @@ int64_t FileService::get_max_file_depth()
     {
         return -1;
     }
+}
+
+void FileService::reset_depths()
+{
+    FileConfig* file_config = get_file_config();
+    
+    if (file_config)
+        file_config->file_depth = 0;
+
+    decode_conf.sync_all_depths();
 }
 
 namespace snort

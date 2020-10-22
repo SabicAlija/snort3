@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -56,7 +56,8 @@
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
+#include "main/snort_config.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -85,7 +86,7 @@ static THREAD_LOCAL ProfileStats asn1PerfStats;
 class Asn1Option : public IpsOption
 {
 public:
-    Asn1Option(ASN1_CTXT& c) : IpsOption(s_name, RULE_OPTION_TYPE_BUFFER_USE)
+    Asn1Option(const ASN1_CTXT& c) : IpsOption(s_name, RULE_OPTION_TYPE_BUFFER_USE)
     { config = c; }
 
     uint32_t hash() const override;
@@ -106,26 +107,22 @@ private:
 
 uint32_t Asn1Option::hash() const
 {
-    uint32_t a,b,c;
-    const ASN1_CTXT* data = &config;
-
-    a = data->bs_overflow;
-    b = data->double_overflow;
-    c = data->print;
+    uint32_t a = config.bs_overflow;
+    uint32_t b = config.double_overflow;
+    uint32_t c = config.print;
 
     mix(a,b,c);
 
-    a += data->length;
-    b += data->max_length;
-    c += data->offset;
+    a += config.length;
+    b += config.max_length;
+    c += config.offset;
 
     mix(a,b,c);
-    mix_str(a,b,c,get_name());
 
-    a += data->offset_type;
+    a += config.offset_type;
+    b += IpsOption::hash();
 
     finalize(a,b,c);
-
     return c;
 }
 
@@ -155,7 +152,7 @@ bool Asn1Option::operator==(const IpsOption& rhs) const
 
 IpsOption::EvalStatus Asn1Option::eval(Cursor& c, Packet* p)
 {
-    Profile profile(asn1PerfStats);
+    RuleProfile profile(asn1PerfStats);
 
     //  Failed if there is no data to decode.
     if (!p->data)
@@ -182,13 +179,13 @@ static const Parameter s_params[] =
     { PRINT_OPT, Parameter::PT_IMPLIED, nullptr, nullptr,
       "dump decode data to console; always true" },
 
-    { LENGTH_OPT, Parameter::PT_INT, "0:", nullptr,
+    { LENGTH_OPT, Parameter::PT_INT, "0:max32", nullptr,
       "compares ASN.1 type lengths with the supplied argument" },
 
-    { ABS_OFFSET_OPT, Parameter::PT_INT, "0:", nullptr,
+    { ABS_OFFSET_OPT, Parameter::PT_INT, "0:65535", nullptr,
       "absolute offset from the beginning of the packet" },
 
-    { REL_OFFSET_OPT, Parameter::PT_INT, nullptr, nullptr,
+    { REL_OFFSET_OPT, Parameter::PT_INT, "-65535:65535", nullptr,
       "relative offset from the cursor" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -209,7 +206,7 @@ public:
     { return DETECT; }
 
 public:
-    ASN1_CTXT data;
+    ASN1_CTXT data = {};
 };
 
 bool Asn1Module::begin(const char*, int, SnortConfig*)
@@ -232,17 +229,17 @@ bool Asn1Module::set(const char*, Value& v, SnortConfig*)
     else if ( v.is(LENGTH_OPT) )
     {
         data.length = 1;
-        data.max_length = v.get_long();
+        data.max_length = v.get_uint32();
     }
     else if ( v.is(ABS_OFFSET_OPT) )
     {
         data.offset_type = ABS_OFFSET;
-        data.offset = v.get_long();
+        data.offset = v.get_uint16();
     }
     else if ( v.is(REL_OFFSET_OPT) )
     {
         data.offset_type = REL_OFFSET;
-        data.offset = v.get_long();
+        data.offset = v.get_int32();
     }
     else
         return false;
@@ -263,6 +260,12 @@ static void mod_dtor(Module* m)
 {
     delete m;
 }
+
+static void asn1_init(const SnortConfig* sc)
+{ asn1_init_mem(sc->asn1_mem); }
+
+static void asn1_term(const SnortConfig*)
+{ asn1_free_mem(); }
 
 static IpsOption* asn1_ctor(Module* p, OptTreeNode*)
 {
@@ -291,8 +294,8 @@ static const IpsApi asn1_api =
     },
     OPT_TYPE_DETECTION,
     0, 0,
-    asn1_init_mem,
-    asn1_free_mem,
+    asn1_init,
+    asn1_term,
     nullptr,
     nullptr,
     asn1_ctor,

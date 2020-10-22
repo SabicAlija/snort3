@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,11 +23,6 @@
 #include "stream/flush_bucket.h"
 #include "stream/stream_splitter.h"
 
-namespace snort
-{
-class Flow;
-}
-
 //---------------------------------------------------------------------------------
 // FtpDataSplitter - flush when current seg size is different from previous segment
 //---------------------------------------------------------------------------------
@@ -41,9 +36,11 @@ public:
         expected_seg_size = 0;
     }
 
-
-    Status scan(snort::Flow*, const uint8_t*, uint32_t len, uint32_t flags, uint32_t* fp ) override;
+    Status scan(snort::Packet*, const uint8_t*, uint32_t len, uint32_t flags, uint32_t* fp ) override;
     bool finish(snort::Flow*) override;
+
+    bool is_paf() override
+    { return true; }
 
 private:
     uint16_t min;

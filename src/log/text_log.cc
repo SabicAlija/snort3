@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2007-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -94,11 +94,6 @@ static size_t TextLog_Size(FILE* file)
     int fd = fileno(file);
     int err = fstat(fd, &sbuf);
     return err ? 0 : sbuf.st_size;
-}
-
-int TextLog_Tell(TextLog* const txt)
-{
-    return txt->pos;
 }
 
 namespace snort

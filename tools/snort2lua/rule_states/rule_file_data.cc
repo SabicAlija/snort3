@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,8 +22,8 @@
 
 #include "conversion_state.h"
 #include "helpers/converter.h"
-#include "rule_states/rule_api.h"
 #include "helpers/s2l_util.h"
+#include "rule_api.h"
 
 namespace rules
 {
@@ -44,6 +44,7 @@ bool FileData::convert(std::istringstream& data_stream)
     std::streamoff pos = data_stream.tellg();
 
     rule_api.add_option("file_data");
+    rule_api.reset_sticky();
     args = util::get_rule_option_args(data_stream);
 
     // if there are no arguments, the option had a colon before a semicolon.

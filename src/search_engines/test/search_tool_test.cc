@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,10 +29,12 @@
 
 #include <string.h>
 
+#include "detection/fp_config.h"
 #include "framework/base_api.h"
 #include "framework/mpse.h"
-#include "managers/mpse_manager.h"
+#include "framework/mpse_batch.h"
 #include "main/snort_config.h"
+#include "managers/mpse_manager.h"
 
 // must appear after snort_config.h to avoid broken c++ map include
 #include <CppUTest/CommandLineTestRunner.h>
@@ -61,14 +63,14 @@ SnortConfig::SnortConfig(const SnortConfig* const)
 
 SnortConfig::~SnortConfig() = default;
 
-SnortConfig* SnortConfig::get_conf()
+const SnortConfig* SnortConfig::get_conf()
 { return snort_conf; }
 
 unsigned get_instance_id()
 { return 0; }
 
 void LogValue(const char*, const char*, FILE*) { }
-SO_PUBLIC void LogMessage(const char*, ...) { }
+void LogMessage(const char*, ...) { }
 [[noreturn]] void FatalError(const char*,...) { exit(1); }
 void LogCount(char const*, uint64_t, FILE*) { }
 void LogStat(const char*, double, FILE*) { }
@@ -110,100 +112,310 @@ int Mpse::search_all(
 {
     return _search(T, n, match, context, current_state);
 }
+
+void Mpse::search(MpseBatch& batch, MpseType mpse_type)
+{
+    _search(batch, mpse_type);
 }
+
+void Mpse::_search(MpseBatch& batch, MpseType mpse_type)
+{
+    int start_state;
+
+    for ( auto& item : batch.items )
+    {
+        if (item.second.done)
+            continue;
+
+        item.second.error = false;
+        item.second.matches = 0;
+
+        for ( auto& so : item.second.so )
+        {
+            start_state = 0;
+            switch (mpse_type)
+            {
+                case MPSE_TYPE_NORMAL:
+                    item.second.matches += so->normal_mpse->search(item.first.buf, item.first.len,
+                            batch.mf, batch.context, &start_state);
+                    break;
+                case MPSE_TYPE_OFFLOAD:
+                    item.second.matches += so->offload_mpse->search(item.first.buf, item.first.len,
+                            batch.mf, batch.context, &start_state);
+                    break;
+            }
+        }
+        item.second.done = true;
+    }
+}
+
+}
+
+const char* FastPatternConfig::get_search_method()
+{ return "ac_bnfa"; }
 
 extern const BaseApi* se_ac_bnfa;
+extern const BaseApi* se_ac_full;
 Mpse* mpse = nullptr;
 
-Mpse* MpseManager::get_search_engine(const char *type)
+void MpseManager::delete_search_engine(Mpse* eng)
 {
-    assert(!strcmp(type, "ac_bnfa"));
+    const MpseApi* api = eng->get_api();
+    api->dtor(eng);
+}
 
-    const MpseApi* mpse_api = (MpseApi*)se_ac_bnfa;
-    mpse_api->init();
-    mpse = mpse_api->ctor(snort_conf, nullptr, &s_agent);
+MpseGroup::~MpseGroup()
+{
+    if (normal_mpse)
+    {
+        MpseManager::delete_search_engine(normal_mpse);
+        normal_mpse = nullptr;
+    }
+    if (offload_mpse)
+    {
+        MpseManager::delete_search_engine(offload_mpse);
+        offload_mpse = nullptr;
+    }
+}
+
+bool MpseGroup::create_normal_mpse(const SnortConfig*, const char* type)
+{
+    const MpseApi* api;
+
+    if ( !strcmp(type, "ac_bnfa") )
+        api = (const MpseApi*) se_ac_bnfa;
+
+    else if ( !strcmp(type, "ac_full") )
+        api = (const MpseApi*) se_ac_full;
+
+    else
+        return false;
+
+    api->init();
+    mpse = api->ctor(snort_conf, nullptr, &s_agent);
+
     CHECK(mpse);
 
-    return mpse;
+    mpse->set_api(api);
+    normal_mpse = mpse;
+
+    return true;
 }
 
-void MpseManager::delete_search_engine(Mpse*)
+bool MpseGroup::create_offload_mpse(const SnortConfig*)
 {
-    const MpseApi* mpse_api = (MpseApi*)se_ac_bnfa;
-    mpse_api->dtor(mpse);
+    offload_mpse = nullptr;
+    return false;
 }
 
-
-static int pattern_id = 0;
-static int Test_SearchStrFound(
-    void* /*id*/, void* /*tree*/, int /*index*/, void* /*context*/, void* /*neg_list*/)
+struct ExpectedMatch
 {
-    //printf("found str with id=%ld, index=%d\n", (long)id, index);
-    return 0;
-}
-
-TEST_GROUP(search_tool_tests)
-{
-    void setup() override
-    { CHECK(se_ac_bnfa); }
+    int id;
+    int offset;
 };
 
-TEST(search_tool_tests, ac_bnfa)
+static const ExpectedMatch* s_expect = nullptr;
+static int s_found = 0;
+
+static int Test_SearchStrFound(
+    void* pid, void* /*tree*/, int index, void* /*context*/, void* /*neg_list*/)
 {
-    SearchTool *stool = new SearchTool("ac_bnfa");
-    CHECK(stool->mpse);
+    auto id = reinterpret_cast<std::uintptr_t>(pid);
 
-    pattern_id = 1;
-    stool->add("the", 3, pattern_id);
-    CHECK(stool->max_len == 3);
+    if ( s_expect and s_found >= 0 and
+        s_expect[s_found].id == (int)id and
+        s_expect[s_found].offset == index )
+    {
+        ++s_found;
+    }
+    else s_found = -1;
 
-    pattern_id = 77;
-    stool->add("uba", 3, pattern_id);
-    CHECK(stool->max_len == 3);
-
-    pattern_id = 2112;
-    stool->add("away", 4, pattern_id);
-    CHECK(stool->max_len == 4);
-
-    pattern_id = 1000;
-    stool->add("nothere", 7, pattern_id);
-    CHECK(stool->max_len == 7);
-
-    stool->prep();
-
-    const char *datastr = "the tuba ran away";
-    int result = stool->find(datastr, strlen(datastr), Test_SearchStrFound);
-    CHECK(result == 3);
-    delete stool;
+    return s_found == -1;
 }
 
-TEST(search_tool_tests, search_all_ac_bnfa)
+//-------------------------------------------------------------------------
+// ac_bnfa tests
+//-------------------------------------------------------------------------
+
+TEST_GROUP(search_tool_bnfa)
 {
-    SearchTool *stool = new SearchTool("ac_bnfa");
-    CHECK(stool->mpse);
+    SearchTool* stool;
 
-    pattern_id = 1;
-    stool->add("the", 3, pattern_id);
-    CHECK(stool->max_len == 3);
+    void setup() override
+    {
+        CHECK(se_ac_bnfa);
+        SearchTool::set_conf(snort_conf);
+        stool = new SearchTool("ac_bnfa");
+        SearchTool::set_conf(nullptr);
 
-    pattern_id = 77;
-    stool->add("uba", 3, pattern_id);
-    CHECK(stool->max_len == 3);
+        CHECK(stool->mpsegrp->normal_mpse);
 
-    pattern_id = 2112;
-    stool->add("away", 4, pattern_id);
-    CHECK(stool->max_len == 4);
+        int pattern_id = 1;
+        stool->add("the", 3, pattern_id);
+        CHECK(stool->max_len == 3);
 
-    pattern_id = 1000;
-    stool->add("nothere", 7, pattern_id);
-    CHECK(stool->max_len == 7);
+        pattern_id = 77;
+        stool->add("tuba", 4, pattern_id);
+        CHECK(stool->max_len == 4);
 
-    stool->prep();
+        pattern_id = 78;
+        stool->add("uba", 3, pattern_id);
+        CHECK(stool->max_len == 4);
 
-    const char *datastr = "the tuba ran away";
+        pattern_id = 2112;
+        stool->add("away", 4, pattern_id);
+        CHECK(stool->max_len == 4);
+
+        pattern_id = 1000;
+        stool->add("nothere", 7, pattern_id);
+        CHECK(stool->max_len == 7);
+
+        stool->prep();
+
+    }
+    void teardown() override
+    {
+        delete stool;
+    }
+};
+
+TEST(search_tool_bnfa, search)
+{
+    //                     0         1         2         3
+    //                     0123456789012345678901234567890
+    const char* datastr = "the tuba ran away with the tuna";
+    const ExpectedMatch xm[] =
+    {
+        { 1, 3 },
+        { 78, 8 },
+        { 2112, 17 },
+        { 1, 26 },
+        { 0, 0 }
+    };
+
+    s_expect = xm;
+    s_found = 0;
+
+    int result = stool->find(datastr, strlen(datastr), Test_SearchStrFound);
+
+    CHECK(result == 4);
+    CHECK(s_found == 4);
+}
+
+TEST(search_tool_bnfa, search_all)
+{
+    //                     0         1         2         3
+    //                     0123456789012345678901234567890
+    const char* datastr = "the tuba ran away with the tuna";
+    const ExpectedMatch xm[] =
+    {
+        { 1, 3 },
+        { 78, 8 },
+        { 2112, 17 },
+        { 1, 26 },
+        { 0, 0 }
+    };
+
+    s_expect = xm;
+    s_found = 0;
+
     int result = stool->find_all(datastr, strlen(datastr), Test_SearchStrFound);
-    CHECK(result == 3);
-    delete stool;
+
+    CHECK(result == 4);
+    CHECK(s_found == 4);
+}
+
+//-------------------------------------------------------------------------
+// ac_full tests
+//-------------------------------------------------------------------------
+
+TEST_GROUP(search_tool_full)
+{
+    SearchTool* stool;
+
+    void setup() override
+    {
+        CHECK(se_ac_full);
+        SearchTool::set_conf(snort_conf);
+        stool = new SearchTool("ac_full", true);
+        SearchTool::set_conf(nullptr);
+
+        CHECK(stool->mpsegrp->normal_mpse);
+
+        int pattern_id = 1;
+        stool->add("the", 3, pattern_id);
+        CHECK(stool->max_len == 3);
+
+        pattern_id = 77;
+        stool->add("tuba", 4, pattern_id);
+        CHECK(stool->max_len == 4);
+
+        pattern_id = 78;
+        stool->add("uba", 3, pattern_id);
+        CHECK(stool->max_len == 4);
+
+        pattern_id = 2112;
+        stool->add("away", 4, pattern_id);
+        CHECK(stool->max_len == 4);
+
+        pattern_id = 1000;
+        stool->add("nothere", 7, pattern_id);
+        CHECK(stool->max_len == 7);
+
+        stool->prep();
+
+    }
+    void teardown() override
+    {
+        delete stool;
+    }
+};
+
+TEST(search_tool_full, search)
+{
+    //                     0         1         2         3
+    //                     0123456789012345678901234567890
+    const char* datastr = "the tuba ran away with the tuna";
+    const ExpectedMatch xm[] =
+    {
+        { 1, 3 },
+        { 78, 8 },
+        { 2112, 17 },
+        { 1, 26 },
+        { 0, 0 }
+    };
+
+    s_expect = xm;
+    s_found = 0;
+
+    int result = stool->find(datastr, strlen(datastr), Test_SearchStrFound);
+
+    CHECK(result == 4);
+    CHECK(s_found == 4);
+}
+
+TEST(search_tool_full, search_all)
+{
+    //                     0         1         2         3
+    //                     0123456789012345678901234567890
+    const char* datastr = "the tuba ran away with the tuna";
+    const ExpectedMatch xm[] =
+    {
+        { 1, 3 },
+        { 78, 8 },
+        { 77, 8 },
+        { 2112, 17 },
+        { 1, 26 },
+        { 0, 0 }
+    };
+
+    s_expect = xm;
+    s_found = 0;
+
+    int result = stool->find_all(datastr, strlen(datastr), Test_SearchStrFound);
+
+    CHECK(result == 5);
+    CHECK(s_found == 5);
 }
 
 //-------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -57,12 +57,10 @@ SO_PUBLIC const SnortEvent* get_event()
     lua_event.event_id = event->event_id;
     lua_event.event_ref = event->event_reference;
 
-    if ( event->sig_info->message )
-        lua_event.msg = event->sig_info->message;
+    if ( !event->sig_info->message.empty() )
+        lua_event.msg = event->sig_info->message.c_str();
     else
         lua_event.msg = "";
-
-    lua_event.svc = event->sig_info->num_services ? event->sig_info->services[1].service : "n/a";
 
     return &lua_event;
 }
@@ -124,7 +122,7 @@ public:
     { return &luaLogPerfStats; }
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
     std::string args;
@@ -202,7 +200,7 @@ static void mod_dtor(Module* m)
     delete m;
 }
 
-static Logger* log_ctor(SnortConfig*, Module* m)
+static Logger* log_ctor(Module* m)
 {
     const char* key = m->get_name();
     std::string* chunk = ScriptManager::get_chunk(key);

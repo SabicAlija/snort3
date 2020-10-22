@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,8 @@
 
 #include "base_tracker.h"  // FIXIT-W Returning null reference (from <vector>)
 
+#include "managers/module_manager.h"
+
 #ifdef UNIT_TEST
 #include "catch/snort_catch.h"
 #include "utils/util.h"
@@ -32,9 +34,10 @@
 using namespace snort;
 using namespace std;
 
-BaseTracker::BaseTracker(PerfConfig* perf) : PerfTracker(perf, PERF_NAME "_base")
+BaseTracker::BaseTracker(PerfConfig* perf) : PerfTracker(perf, PERF_NAME "_base"),
+    modules(perf->modules), mods_to_prep(perf->mods_to_prep)
 {
-    for ( ModuleConfig& mod : config->modules )
+    for ( ModuleConfig& mod : modules )
     {
         formatter->register_section(mod.ptr->get_name());
 
@@ -46,14 +49,19 @@ BaseTracker::BaseTracker(PerfConfig* perf) : PerfTracker(perf, PERF_NAME "_base"
 
 void BaseTracker::process(bool summary)
 {
-    for ( Module* mod : config->mods_to_prep )
+    for ( Module* mod : mods_to_prep )
         mod->prep_counts();
 
     write();
 
-    for ( const ModuleConfig& mod : config->modules )
-        if ( !summary )
+    if ( !summary )
+    {
+        for ( const ModuleConfig& mod : modules )
+        {
+            lock_guard<mutex> lock(ModuleManager::stats_mutex);
             mod.ptr->sum_stats(false);
+        }
+    }
 }
 
 #ifdef UNIT_TEST
@@ -119,7 +127,7 @@ TEST_CASE("module stats", "[BaseTracker]")
     ModuleConfig mod_cfg;
     mod_cfg.ptr = &mod;
     mod_cfg.pegs = {0, 2, 4};
-    config.modules.push_back(mod_cfg);
+    config.modules.emplace_back(mod_cfg);
 
     MockBaseTracker tracker(&config);
     MockFormatter *formatter = (MockFormatter*)tracker.output;

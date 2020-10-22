@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,9 +32,7 @@ class ClientDetector : public AppIdDetector
 public:
     ClientDetector();
 
-    void do_custom_init() override { }
-    void release_thread_resources() override { }
-    void register_appid(AppId, unsigned extractsInfo) override;
+    void register_appid(AppId, unsigned extractsInfo, OdpContext& odp_ctxt) override;
 };
 #endif
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,8 @@
 
 #include "utils/stats.h"
 
+using namespace snort;
+
 std::unordered_map<AppId, uint32_t> AppIdPegCounts::appid_detector_pegs_idx;
 std::vector<std::string> AppIdPegCounts::appid_detectors_info;
 THREAD_LOCAL std::vector<AppIdPegCounts::AppIdDynamicPeg>* AppIdPegCounts::appid_peg_counts;
@@ -58,7 +60,7 @@ void AppIdPegCounts::add_app_peg_info(std::string app_name, AppId app_id)
     std::replace(app_name.begin(), app_name.end(), ' ', '_');
 
     appid_detector_pegs_idx[app_id] = appid_detectors_info.size();
-    appid_detectors_info.push_back({ app_name });
+    appid_detectors_info.emplace_back(app_name);
 }
 
 void AppIdPegCounts::sum_stats()
@@ -80,24 +82,33 @@ void AppIdPegCounts::sum_stats()
         appid_dynamic_sum[SF_APPID_MAX].stats[j] += ptr[peg_num].stats[j];
 }
 
-void AppIdPegCounts::inc_service_count(AppId id)
+void AppIdPegCounts::update_service_count(AppId id, bool increment)
 {
-    (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::SERVICE_DETECTS]++;
+    if (increment)
+        (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::SERVICE_DETECTS]++;
+    else
+        (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::SERVICE_DETECTS]--;
 }
 
-void AppIdPegCounts::inc_client_count(AppId id)
+void AppIdPegCounts::update_client_count(AppId id, bool increment)
 {
-    (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::CLIENT_DETECTS]++;
+    if (increment)
+        (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::CLIENT_DETECTS]++;
+    else
+        (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::CLIENT_DETECTS]--;
+}
+
+void AppIdPegCounts::update_payload_count(AppId id, bool increment)
+{
+    if (increment)
+        (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::PAYLOAD_DETECTS]++;
+    else
+        (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::PAYLOAD_DETECTS]--;
 }
 
 void AppIdPegCounts::inc_user_count(AppId id)
 {
     (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::USER_DETECTS]++;
-}
-
-void AppIdPegCounts::inc_payload_count(AppId id)
-{
-    (*appid_peg_counts)[get_stats_index(id)].stats[DetectorPegs::PAYLOAD_DETECTS]++;
 }
 
 void AppIdPegCounts::inc_misc_count(AppId id)
@@ -133,7 +144,11 @@ void AppIdPegCounts::print()
     if (!print && unknown_pegs->all_zeros())
         return;
 
-    snort::LogLabel("Appid dynamic stats:");
+    LogLabel("Appid Statistics");
+    LogLabel("detected apps and services");
+
+    LogMessage("%25.25s: %-10s %-10s %-10s %-10s %-10s %-10s %-10s\n",
+        "Application", "Flows", "Clients", "Users", "Payloads", "Misc", "Incompat.", "Failed");
 
     for (unsigned i = 0; i < app_num; i++)
     {
@@ -142,17 +157,14 @@ void AppIdPegCounts::print()
             continue;
 
         std::string app_name = AppIdPegCounts::appid_detectors_info[i];
-        snort::LogMessage("%s: ", app_name.c_str());
+        LogMessage("%25.25s:", app_name.c_str());
         pegs->print();
     }
 
-    // Print unknown app stats
     if (!unknown_pegs->all_zeros())
     {
-        snort::LogMessage("unknown_app: flows: %" PRIu64 ", clients: %" PRIu64 ", users: %" PRIu64 ", payloads %"
-            PRIu64 ", misc: %" PRIu64 "\n",
-            unknown_pegs->stats[0], unknown_pegs->stats[1], unknown_pegs->stats[2],
-            unknown_pegs->stats[3], unknown_pegs->stats[4]);
+        LogMessage("%25.25s:", "unknown");
+        unknown_pegs->print();
     }
 }
 

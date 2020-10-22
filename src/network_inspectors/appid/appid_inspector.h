@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,11 +42,11 @@ public:
     ~AppIdInspector() override;
 
     bool configure(snort::SnortConfig*) override;
-    void show(snort::SnortConfig*) override;
+    void show(const snort::SnortConfig*) const override;
     void tinit() override;
     void tterm() override;
     void eval(snort::Packet*) override;
-    AppIdConfig* get_appid_config();
+    AppIdContext& get_ctxt() const;
 
     SipEventHandler& get_sip_event_handler()
     {
@@ -54,13 +54,15 @@ public:
     }
 
 private:
-    const AppIdModuleConfig* config = nullptr;
-    AppIdConfig* active_config = nullptr;
+    const AppIdConfig* config = nullptr;
+    AppIdContext* ctxt = nullptr;
     SipEventHandler* my_seh = nullptr;
 
 };
 
-int sslAppGroupIdLookup(void*, const char*, const char*, AppId*, AppId*, AppId*);
+extern THREAD_LOCAL OdpThreadContext* odp_thread_local_ctxt;
+extern THREAD_LOCAL OdpContext* pkt_thread_odp_ctxt;
+extern THREAD_LOCAL ThirdPartyAppIdContext* pkt_thread_tp_appid_ctxt;
 
 #endif
 

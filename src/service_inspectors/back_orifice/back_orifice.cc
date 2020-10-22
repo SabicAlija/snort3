@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2005 Martin Roesch <roesch@sourcefire.com>
 //
@@ -195,10 +195,13 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    bool is_bindable() const override
+    { return true; }
 };
 
 const PegInfo* BoModule::get_pegs() const
-{ return snort::simple_pegs; }
+{ return simple_pegs; }
 
 PegCount* BoModule::get_counts() const
 { return (PegCount*)&bostats; }
@@ -430,14 +433,8 @@ class BackOrifice : public Inspector
 public:
     BackOrifice() = default;
 
-    void show(SnortConfig*) override;
     void eval(Packet*) override;
 };
-
-void BackOrifice::show(SnortConfig*)
-{
-    LogMessage("%s\n", s_name);
-}
 
 void BackOrifice::eval(Packet* p)
 {

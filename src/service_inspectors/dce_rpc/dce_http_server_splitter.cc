@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,17 +27,13 @@
 
 #include "dce_http_server_module.h"
 
-#ifdef UNIT_TEST
-#include "catch/snort_catch.h"
-#endif
-
 using namespace snort;
 
 // NOTE:  These strings must have a length of at least one character
 #define HTTP_SERVER_MARKER "ncacn_http/1.0"
 
 StreamSplitter::Status DceHttpServerSplitter::scan(
-    Flow*, const uint8_t* data, uint32_t len, uint32_t flags, uint32_t* fp)
+    Packet*, const uint8_t* data, uint32_t len, uint32_t flags, uint32_t* fp)
 {
     if ( (flags & PKT_FROM_CLIENT) != 0 )
         return StreamSplitter::ABORT;
@@ -75,116 +71,112 @@ DceHttpServerSplitter::DceHttpServerSplitter(bool c2s) : StreamSplitter(c2s)
     cutover = false;
 }
 
+#ifdef CATCH_TEST_BUILD
+
+#include "catch/catch.hpp"
+
 //--------------------------------------------------------------------------
-// unit tests 
+// mocks
 //--------------------------------------------------------------------------
 
-#ifdef UNIT_TEST
+unsigned StreamSplitter::max(Flow*) { return 16384; }
+
+const StreamBuffer StreamSplitter::reassemble(
+    Flow*, unsigned, unsigned, const uint8_t*,
+    unsigned, uint32_t, unsigned&)
+{
+    return { nullptr, 0 };
+}
+
+//--------------------------------------------------------------------------
+// unit tests
+//--------------------------------------------------------------------------
 
 TEST_CASE("DceHttpServerSplitter-scan - first_server", "[http_server_splitter]")
 {
     DceHttpServerSplitter* splitter = new DceHttpServerSplitter(false);
-    Flow* flow = new Flow();
     uint32_t fp;
 
     REQUIRE(splitter->cutover_inspector() == false);
-    REQUIRE(splitter->scan(flow, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
         StreamSplitter::SEARCH);
     REQUIRE(splitter->cutover_inspector() == false);
-    delete flow;
     delete splitter;
 }
 
 TEST_CASE("DceHttpServerSplitter-scan - first_server_wrong_direction", "[http_server_splitter]")
 {
     DceHttpServerSplitter* splitter = new DceHttpServerSplitter(false);
-    Flow* flow = new Flow();
     uint32_t fp;
 
     REQUIRE(splitter->cutover_inspector() == false);
-    REQUIRE(splitter->scan(flow, (const uint8_t*)"n", 1, PKT_FROM_CLIENT, &fp) ==
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)"n", 1, PKT_FROM_CLIENT, &fp) ==
         StreamSplitter::ABORT);
     REQUIRE(splitter->cutover_inspector() == false);
-    delete flow;
     delete splitter;
 }
 
 TEST_CASE("DceHttpServerSplitter-scan - bad_first_server", "[http_server_splitter]")
 {
     DceHttpServerSplitter* splitter = new DceHttpServerSplitter(false);
-    Flow* flow = new Flow();
     uint32_t fp;
 
-    REQUIRE(splitter->scan(flow, (const uint8_t*)"x", 1, PKT_FROM_SERVER, &fp) ==
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)"x", 1, PKT_FROM_SERVER, &fp) ==
         StreamSplitter::ABORT);
     REQUIRE(splitter->cutover_inspector() == false);
-    delete flow;
     delete splitter;
 }
 
 TEST_CASE("DceHttpServerSplitter-scan - first_bad_second_server", "[http_server_splitter]")
 {
     DceHttpServerSplitter* splitter = new DceHttpServerSplitter(false);
-    Flow* flow = new Flow();
     uint32_t fp;
 
-    REQUIRE(splitter->scan(flow, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
         StreamSplitter::SEARCH);
     REQUIRE(splitter->cutover_inspector() == false);
-    REQUIRE(splitter->scan(flow, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
         StreamSplitter::ABORT);
     REQUIRE(splitter->cutover_inspector() == false);
-    delete flow;
     delete splitter;
 }
 
 TEST_CASE("DceHttpServerSplitter-scan - first_good_second_server", "[http_server_splitter]")
 {
     DceHttpServerSplitter* splitter = new DceHttpServerSplitter(false);
-    Flow* flow = new Flow();
     uint32_t fp;
 
-    REQUIRE(splitter->scan(flow, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)"n", 1, PKT_FROM_SERVER, &fp) ==
         StreamSplitter::SEARCH);
-    REQUIRE(splitter->scan(flow, (const uint8_t*)"c", 1, PKT_FROM_SERVER, &fp) ==
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)"c", 1, PKT_FROM_SERVER, &fp) ==
         StreamSplitter::SEARCH);
     REQUIRE(splitter->cutover_inspector() == false);
-    delete flow;
     delete splitter;
 }
 
 TEST_CASE("DceHttpServerSplitter-scan - full_server", "[http_server_splitter]")
 {
     DceHttpServerSplitter* splitter = new DceHttpServerSplitter(false);
-    Flow* flow = new Flow();
     uint32_t fp;
 
-    REQUIRE(splitter->scan(flow, (const uint8_t*)HTTP_SERVER_MARKER,
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)HTTP_SERVER_MARKER,
         strlen(HTTP_SERVER_MARKER), PKT_FROM_SERVER, &fp) == StreamSplitter::FLUSH);
     REQUIRE(fp == strlen(HTTP_SERVER_MARKER));
     REQUIRE(splitter->cutover_inspector() == true);
-    delete flow;
     delete splitter;
 }
 
 TEST_CASE("DceHttpServerSplitter-scan - extra_server", "[http_server_splitter]")
 {
     DceHttpServerSplitter* splitter = new DceHttpServerSplitter(false);
-    const char* extra = "ignore";
-    char* string = new char[strlen(HTTP_SERVER_MARKER)+strlen(extra)+1];
-    Flow* flow = new Flow();
+    const char* string = HTTP_SERVER_MARKER "ignore";
     uint32_t fp;
-    strncpy(string,(const char*)HTTP_SERVER_MARKER,strlen(HTTP_SERVER_MARKER));
-    strncpy(string+strlen(HTTP_SERVER_MARKER),extra,strlen(extra));
 
-    REQUIRE(splitter->scan(flow, (const uint8_t*)string,
-        (strlen(HTTP_SERVER_MARKER)+strlen(extra)), PKT_FROM_SERVER, &fp) ==
-        StreamSplitter::FLUSH);
+    REQUIRE(splitter->scan(nullptr, (const uint8_t*)string,
+        strlen(string), PKT_FROM_SERVER, &fp) == StreamSplitter::FLUSH);
     REQUIRE(fp == strlen(HTTP_SERVER_MARKER));
     REQUIRE(splitter->cutover_inspector() == true);
-    delete flow;
     delete splitter;
-    delete[] string;
 }
 
 #endif

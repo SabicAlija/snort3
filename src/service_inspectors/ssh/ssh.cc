@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -55,7 +55,7 @@ unsigned SshFlowData::inspector_id = 0;
 
 SshFlowData::SshFlowData() : FlowData(inspector_id)
 {
-    memset(&session, 0, sizeof(session));
+    session = {};
     sshstats.concurrent_sessions++;
     if(sshstats.max_concurrent_sessions < sshstats.concurrent_sessions)
         sshstats.max_concurrent_sessions = sshstats.concurrent_sessions;
@@ -78,20 +78,6 @@ static SSHData* get_session_data(Flow* flow)
 {
     SshFlowData* fd = (SshFlowData*)flow->get_flow_data(SshFlowData::inspector_id);
     return fd ? &fd->session : nullptr;
-}
-
-static void PrintSshConf(SSH_PROTO_CONF* config)
-{
-    if ( !config )
-        return;
-
-    LogMessage("SSH config: \n");
-
-    LogMessage("    Max Encrypted Packets: %d\n", config->MaxEncryptedPackets);
-    LogMessage("    Max Server Version String Length: %d\n", config->MaxServerVersionLen);
-    LogMessage("    MaxClientBytes: %d\n", config->MaxClientBytes);
-
-    LogMessage("\n");
 }
 
 /* Returns the true length of the ssh packet, including
@@ -176,6 +162,7 @@ static void snort_ssh(SSH_PROTO_CONF* config, Packet* p)
             return;
         }
     }
+    sshstats.total_bytes += p->dsize;
 
     uint8_t direction;
     uint32_t search_dir_ver;
@@ -205,7 +192,7 @@ static void snort_ssh(SSH_PROTO_CONF* config, Packet* p)
         {
             offset = ProcessSSHProtocolVersionExchange(config, sessp, p, direction);
             if (!offset)
-                // Error processing protovers exchange msg 
+                // Error processing protovers exchange msg
                 return;
 
             // found protocol version.
@@ -357,11 +344,11 @@ static unsigned int ProcessSSHProtocolVersionExchange(SSH_PROTO_CONF* config, SS
     }
     else
     {
-        /* unknown version */ 
+        /* unknown version */
         sessionp->version =  SSH_VERSION_UNKNOWN;
 
         DetectionEngine::queue_event(GID_SSH, SSH_EVENT_VERSION);
-        
+
         return 0;
     }
 
@@ -378,7 +365,7 @@ static unsigned int ProcessSSHProtocolVersionExchange(SSH_PROTO_CONF* config, SS
         break;
     }
 
-    version_end = (char*)memchr(version_stringp, '\n', p->dsize);
+    version_end = (const char*)memchr(version_stringp, '\n', p->dsize);
     if (version_end)
         return ((version_end - version_stringp) + 1);
     /* incomplete version string, should end with \n or \r\n for sshv2 */
@@ -738,7 +725,7 @@ public:
     Ssh(SSH_PROTO_CONF*);
     ~Ssh() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
 private:
@@ -756,9 +743,14 @@ Ssh::~Ssh()
         delete config;
 }
 
-void Ssh::show(SnortConfig*)
+void Ssh::show(const SnortConfig*) const
 {
-    PrintSshConf(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_value("max_encrypted_packets", config->MaxEncryptedPackets);
+    ConfigLogger::log_value("max_client_bytes", config->MaxClientBytes);
+    ConfigLogger::log_value("max_server_version_len", config->MaxServerVersionLen);
 }
 
 void Ssh::eval(Packet* p)

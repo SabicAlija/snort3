@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -47,6 +47,13 @@ struct SO_PUBLIC TimeProfilerStats
     hr_duration elapsed;
     uint64_t checks;
     mutable unsigned int ref_count;
+    static bool enabled;
+
+    static void set_enabled(bool b)
+    { enabled = b; }
+
+    static bool is_enabled()
+    { return enabled; }
 
     void update(hr_duration delta)
     { elapsed += delta; ++checks; }
@@ -90,17 +97,20 @@ public:
     TimeContext(TimeProfilerStats& stats) :
         stats(stats)
     {
-        if ( stats.enter() )
+        if ( stats.is_enabled() and stats.enter() )
             sw.start();
     }
 
     ~TimeContext()
-    { stop(); }
+    {
+        if ( stats.is_enabled() )
+            stop();
+    }
 
     // Use this for finer grained control of the TimeContext "lifetime"
     void stop()
     {
-        if ( stopped_once )
+        if ( !stats.is_enabled() or stopped_once )
             return; // stop() should only be executed once per context
 
         stopped_once = true;
@@ -109,6 +119,12 @@ public:
         if ( stats.exit() )
             stats.update(sw.get());
     }
+
+    void pause()
+    { sw.stop(); }
+
+    void resume()
+    { sw.start(); }
 
     bool active() const
     { return !stopped_once; }
@@ -130,6 +146,8 @@ public:
 
     ~TimeExclude()
     {
+        if ( !TimeProfilerStats::is_enabled() )
+            return;
         ctx.stop();
         stats.elapsed -= tmp.elapsed;
     }

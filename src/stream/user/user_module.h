@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,12 +24,12 @@
 
 namespace snort
 {
+class Trace;
 struct SnortConfig;
 }
 
+extern THREAD_LOCAL const snort::Trace* stream_user_trace;
 extern THREAD_LOCAL snort::ProfileStats user_perf_stats;
-
-extern Trace TRACE_NAME(stream_user);
 
 //-------------------------------------------------------------------------
 // stream_user module
@@ -48,12 +48,17 @@ public:
 
     bool set(const char*, snort::Value&, snort::SnortConfig*) override;
     bool begin(const char*, int, snort::SnortConfig*) override;
-    bool end(const char*, int, snort::SnortConfig*) override;
 
     Usage get_usage() const override
     { return INSPECT; }
 
+    bool is_bindable() const override
+    { return true; }
+
     StreamUserConfig* get_data();
+
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
 
 private:
     StreamUserConfig* config;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -289,11 +289,13 @@ static inline int ssh_client_validate_keyx(uint16_t offset, const uint8_t* data,
             if (fd->pos >= fd->plen)
             {
                 offset++;
-                // FIXIT-L if offset > size then there is probably a D-H Key Exchange Init packet
-                // in this payload
-                // For now parsing the Key Exchange Init is good enough to declare valid key
-                // exchange but for
-                // future enhance parsing to validate the D-H Key Exchange Init.
+
+                // FIXIT-L if offset > size then there is probably a D-H
+                // Key Exchange Init packet in this payload. For now parsing
+                // the Key Exchange Init is good enough to declare valid
+                // key exchange but for future enhance parsing to validate
+                // the D-H Key Exchange Init.
+
                 if (offset == size)
                     return APPID_SUCCESS;
                 else
@@ -568,7 +570,7 @@ int SshClientDetector::validate(AppIdDiscoveryArgs& args)
     if (sm_ret != APPID_SUCCESS)
         return sm_ret;
 
-    add_app(args.asd, APP_ID_SSH, fd->client_id, (const char*)fd->version);
+    add_app(args.asd, APP_ID_SSH, fd->client_id, (const char*)fd->version, args.change_bits);
     return APPID_SUCCESS;
 }
 

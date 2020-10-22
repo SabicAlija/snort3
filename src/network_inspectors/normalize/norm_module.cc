@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -87,7 +87,7 @@ static bool allow_codes(NormalizerConfig* config, const char* s)
 
 static const Parameter norm_ip4_params[] =
 {
-    { "base", Parameter::PT_BOOL, nullptr, "true",
+    { "base", Parameter::PT_BOOL, nullptr, "false",
       "clear options" },
 
     { "df", Parameter::PT_BOOL, nullptr, "false",
@@ -107,22 +107,22 @@ static const Parameter norm_ip4_params[] =
 
 static const Parameter norm_tcp_params[] =
 {
-    { "base", Parameter::PT_BOOL, nullptr, "true",
+    { "base", Parameter::PT_BOOL, nullptr, "false",
       "clear reserved bits and option padding and fix urgent pointer / flags issues" },
 
-    { "block", Parameter::PT_BOOL, nullptr, "true",
+    { "block", Parameter::PT_BOOL, nullptr, "false",
       "allow packet drops during TCP normalization" },
 
-    { "urp", Parameter::PT_BOOL, nullptr, "true",
+    { "urp", Parameter::PT_BOOL, nullptr, "false",
       "adjust urgent pointer if beyond segment length" },
 
-    { "ips", Parameter::PT_BOOL, nullptr, "false",
+    { "ips", Parameter::PT_BOOL, nullptr, "true",
       "ensure consistency in retransmitted data" },
 
     { "ecn", Parameter::PT_SELECT, "off | packet | stream", "off",
       "clear ecn for all packets | sessions w/o ecn setup" },
 
-    { "pad", Parameter::PT_BOOL, nullptr, "true",
+    { "pad", Parameter::PT_BOOL, nullptr, "false",
       "clear any option padding bytes" },
 
     { "trim_syn", Parameter::PT_BOOL, nullptr, "false",
@@ -140,19 +140,19 @@ static const Parameter norm_tcp_params[] =
     { "trim", Parameter::PT_BOOL, nullptr, "false",
       "enable all of the TCP trim options" },
 
-    { "opts", Parameter::PT_BOOL, nullptr, "true",
+    { "opts", Parameter::PT_BOOL, nullptr, "false",
       "clear all options except mss, wscale, timestamp, and any explicitly allowed" },
 
-    { "req_urg", Parameter::PT_BOOL, nullptr, "true",
+    { "req_urg", Parameter::PT_BOOL, nullptr, "false",
       "clear the urgent pointer if the urgent flag is not set" },
 
-    { "req_pay", Parameter::PT_BOOL, nullptr, "true",
+    { "req_pay", Parameter::PT_BOOL, nullptr, "false",
       "clear the urgent pointer and the urgent flag if there is no payload" },
 
-    { "rsv", Parameter::PT_BOOL, nullptr, "true",
+    { "rsv", Parameter::PT_BOOL, nullptr, "false",
       "clear the reserved bits in the TCP header" },
 
-    { "req_urp", Parameter::PT_BOOL, nullptr, "true",
+    { "req_urp", Parameter::PT_BOOL, nullptr, "false",
       "clear the urgent flag if the urgent pointer is not set" },
 
     { "allow_names", Parameter::PT_MULTI,
@@ -191,7 +191,7 @@ static const Parameter s_params[] =
 //-------------------------------------------------------------------------
 
 // using string* instead of string because clang++ 5.1
-// vector::back() does not seem to return a reference 
+// vector::back() does not seem to return a reference
 //
 // FIXIT-L these are static since get_pegs() is const
 // consider making that non-const
@@ -213,7 +213,7 @@ NormalizeModule::~NormalizeModule()
 ProfileStats* NormalizeModule::get_profile() const
 { return &norm_perf_stats; }
 
-bool NormalizeModule::set_ip4(const char*, Value& v, SnortConfig*)
+bool NormalizeModule::set_ip4(const char*, const Value& v, SnortConfig*)
 {
     if ( v.is("base") )
         Norm_Set(&config, NORM_IP4_BASE, v.get_bool());
@@ -236,7 +236,7 @@ bool NormalizeModule::set_ip4(const char*, Value& v, SnortConfig*)
     return true;
 }
 
-bool NormalizeModule::set_tcp(const char*, Value& v, SnortConfig*)
+bool NormalizeModule::set_tcp(const char*, const Value& v, SnortConfig*)
 {
     if ( v.is("base") )
     {
@@ -354,50 +354,22 @@ bool NormalizeModule::begin(const char* fqn, int, SnortConfig*)
     return true;
 }
 
-bool NormalizeModule::end(const char* fqn, int, SnortConfig* sc)
-{
-    if ( !strcmp(fqn, NORM_NAME) )
-    {
-        NetworkPolicy* policy = snort::get_network_policy();
-
-        // FIXIT-M untangle these policies. this is a workaround for loading inspection-only confs
-        if ( policy == nullptr )
-        {
-            set_network_policy(sc);
-            policy = snort::get_network_policy();
-            set_network_policy((NetworkPolicy*)nullptr);
-        }
-
-        if ( (policy->new_ttl > 1) && (policy->new_ttl >= policy->min_ttl) )
-        {
-            if ( Norm_IsEnabled(&config, NORM_IP4_BASE) )
-                Norm_Enable(&config, NORM_IP4_TTL);
-        }
-        if ( (policy->new_ttl > 1) && (policy->new_ttl >= policy->min_ttl) )
-        {
-            if ( Norm_IsEnabled(&config, NORM_IP6_BASE) )
-                Norm_Enable(&config, NORM_IP6_TTL);
-        }
-    }
-    return true;
-}
-
 void NormalizeModule::add_test_peg(const PegInfo& norm) const
 {
     PegInfo test;
 
     std::string* test_name = new std::string("test_");
     test_name->append(norm.name);
-    test_text.push_back(test_name);
+    test_text.emplace_back(test_name);
     test.name = test_text.back()->c_str();
 
     std::string* test_info = new std::string("test ");
     test_info->append(norm.help);
-    test_text.push_back(test_info);
+    test_text.emplace_back(test_info);
     test.help = test_text.back()->c_str();
 
     test.type = norm.type;
-    test_pegs.push_back(test);
+    test_pegs.emplace_back(test);
 }
 
 const PegInfo* NormalizeModule::get_pegs() const
@@ -411,7 +383,7 @@ const PegInfo* NormalizeModule::get_pegs() const
     while ( p->name )
     {
         add_test_peg(*p);
-        test_pegs.push_back(*p);
+        test_pegs.emplace_back(*p);
         p++;
     }
 
@@ -421,11 +393,11 @@ const PegInfo* NormalizeModule::get_pegs() const
     while ( p->name )
     {
         add_test_peg(*p);
-        test_pegs.push_back(*p);
+        test_pegs.emplace_back(*p);
         p++;
     }
 
-    test_pegs.push_back(*p);
+    test_pegs.emplace_back(*p);
     return &test_pegs[0];
 }
 

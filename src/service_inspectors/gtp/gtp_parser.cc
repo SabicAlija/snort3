@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,6 +31,7 @@
 #include "detection/detection_engine.h"
 #include "events/event_queue.h"
 #include "log/messages.h"
+#include "main/snort_debug.h"
 #include "utils/util_cstring.h"
 
 #include "gtp.h"
@@ -42,7 +43,7 @@ using namespace snort;
 #pragma pack(1)
 static inline void alert(int sid)
 {
-    snort::DetectionEngine::queue_event(GID_GTP, sid);
+    DetectionEngine::queue_event(GID_GTP, sid);
     gtp_stats.events++;
 }
 
@@ -52,14 +53,6 @@ struct GTP_C_Hdr
     uint8_t flag;               /* flag: version (bit 6-8), PT (5), E (3), S (2), PN (1) */
     uint8_t type;               /* message type */
     uint16_t length;            /* length */
-};
-
-struct GTP_C_Hdr_v0
-{
-    GTP_C_Hdr hdr;
-    uint16_t sequence_num;
-    uint16_t flow_lable;
-    uint64_t tid;
 };
 
 /* GTP Information element Header  */
@@ -118,7 +111,7 @@ static void printInfoElements(GTP_IEData* info_elements, GTPMsg* msg)
             char buf[STD_BUF];
             convertToHex( (char*)buf, sizeof(buf),
                 msg->gtp_header + info_elements[i].shift, info_elements[i].length);
-            trace_logf(gtp_inspect, "Info type: %.3d, content: %s\n", i, buf);
+            debug_logf(gtp_inspect_trace, nullptr, "Info type: %.3d, content: %s\n", i, buf);
         }
     }
 }
@@ -280,8 +273,16 @@ static int gtp_parse_v0(GTPMsg* msg, const uint8_t* buff, uint16_t gtp_len)
 static int gtp_parse_v1(GTPMsg* msg, const uint8_t* buff, uint16_t gtp_len)
 {
     const GTP_C_Hdr* hdr;
+    const uint32_t* teid;
 
     hdr = (const GTP_C_Hdr*)buff;
+    /*TEID value at 5-8 octets*/
+    teid = (const uint32_t*)(buff + 4);
+
+    if ((msg->msg_type > 3) && (*teid == 0))
+    {
+        alert(GTP_EVENT_MISSING_TEID);
+    }
 
     /*Check the length based on optional fields and extension header*/
     if (hdr->flag & 0x07)
@@ -368,8 +369,16 @@ static int gtp_parse_v1(GTPMsg* msg, const uint8_t* buff, uint16_t gtp_len)
 static int gtp_parse_v2(GTPMsg* msg, const uint8_t* buff, uint16_t gtp_len)
 {
     const GTP_C_Hdr* hdr;
+    const uint32_t* teid;
 
     hdr = (const GTP_C_Hdr*)buff;
+    /*TEID value at 5-8 octet*/
+    teid = (const uint32_t*)(buff + 4);
+
+    if ((msg->msg_type > 3) && (hdr->flag & 0x08) && (*teid == 0))
+    {
+        alert(GTP_EVENT_MISSING_TEID);
+    }
 
     if (hdr->flag & 0x8)
         msg->header_len = GTP_HEADER_LEN_EPC_V2;
@@ -414,7 +423,7 @@ int gtp_parse(const GTPConfig& config, GTPMsg* msg, const uint8_t* buff, uint16_
 
     if (msg->version > MAX_GTP_VERSION_CODE)
         return false;
-    
+
     /*Check whether this is GTP or GTP', Exit if GTP'*/
     if (!(hdr->flag & 0x10))
         return false;

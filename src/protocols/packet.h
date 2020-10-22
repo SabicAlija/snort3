@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,10 +30,13 @@
 
 namespace snort
 {
+class Active;
 class Endianness;
 class Flow;
+class ActiveAction;
 class IpsContext;
 class Obfuscator;
+class SFDAQInstance;
 
 /* packet status flags */
 #define PKT_REBUILT_FRAG     0x00000001  /* is a rebuilt fragment */
@@ -74,9 +77,13 @@ class Obfuscator;
 
 #define PKT_FILE_EVENT_SET   0x00400000
 #define PKT_IGNORE           0x00800000  /* this packet should be ignored, based on port */
-#define PKT_UNUSED_FLAGS     0xfe000000
+#define PKT_RETRANSMIT       0x01000000  // packet is a re-transmitted pkt.
+#define PKT_RETRY            0x02000000  /* this packet is being re-evaluated from the internal retry queue */
+#define PKT_USE_DIRECT_INJECT 0x04000000  /* Use ioctl when injecting. */
+#define PKT_UNUSED_FLAGS     0xf8000000
 
-// 0x40000000 are available
+#define PKT_TS_OFFLOADED        0x01
+
 #define PKT_PDU_FULL (PKT_PDU_HEAD | PKT_PDU_TAIL)
 
 enum PseudoPacketType
@@ -125,12 +132,22 @@ struct SO_PUBLIC Packet
     // FIXIT-M Consider moving ip_proto_next below `pkth`.
     IpProtocol ip_proto_next;      /* the protocol ID after IP and all IP6 extension */
     bool disable_inspect;
-    // nothing after this point is zeroed ...
+    mutable FilteringState filtering_state;
+
+    // nothing after this point is zeroed by reset() ...
+    IpsContext* context;
+    Active* active;
+    Active* active_inst;
+    ActiveAction** action;
+    ActiveAction* action_inst;
+
+    DAQ_Msg_h daq_msg;              // DAQ message this packet came from
+    SFDAQInstance* daq_instance;    // DAQ instance the message came from
 
     // Everything beyond this point is set by PacketManager::decode()
-    IpsContext* context;   // set by control
-    const DAQ_PktHdr_t* pkth;    // packet meta data
-    const uint8_t* pkt;          // raw packet data
+    const DAQ_PktHdr_t* pkth;   // packet meta data
+    const uint8_t* pkt;         // raw packet data
+    uint32_t pktlen;            // raw packet data length
 
     // These are both set before PacketManager::decode() returns
     const uint8_t* data;        /* packet payload pointer */
@@ -146,6 +163,9 @@ struct SO_PUBLIC Packet
     uint32_t user_ips_policy_id;
     uint32_t user_network_policy_id;
 
+    uint8_t vlan_idx;
+    uint8_t ts_packet_flags; // FIXIT-M packet flags should always be thread safe
+
     // IP_MAXPACKET is the minimum allowable max_dsize
     // there is no requirement that all data fit into an IP datagram
     // but we do require that an IP datagram fit into Packet space
@@ -154,7 +174,7 @@ struct SO_PUBLIC Packet
 
     /*  Boolean functions - general information about this packet */
     inline bool is_eth() const
-    { return proto_bits & PROTO_BIT__ETH; }
+    { return ((proto_bits & PROTO_BIT__ETH) != 0); }
 
     inline bool has_ip() const
     { return ptrs.ip_api.is_ip(); }
@@ -181,10 +201,21 @@ struct SO_PUBLIC Packet
     { return (ptrs.get_pkt_type() == PktType::PDU) or (ptrs.get_pkt_type() == PktType::FILE); }
 
     inline bool is_cooked() const
-    { return packet_flags & PKT_PSEUDO; }
+    { return ((packet_flags & PKT_PSEUDO) != 0); }
 
     inline bool is_fragment() const
     { return ptrs.decode_flags & DECODE_FRAG; }
+
+    inline bool is_udp_tunneled() const
+    {
+        if (proto_bits & PROTO_BIT__UDP_TUNNELED)
+        {
+            assert(ptrs.udph);
+            return true;
+        }
+
+        return false;
+    }
 
     inline bool has_tcp_data() const
     { return (proto_bits & PROTO_BIT__TCP) and data and dsize; }
@@ -248,6 +279,16 @@ struct SO_PUBLIC Packet
     bool is_from_server() const
     { return (packet_flags & PKT_FROM_SERVER) != 0; }
 
+    bool is_from_client_originally() const
+    { return (!flow || flow->flags.client_initiated) ? is_from_client() : is_from_server(); }
+
+    bool is_from_server_originally() const
+    { return (!flow || flow->flags.client_initiated) ? is_from_server() : is_from_client(); }
+    
+    bool is_from_application_client() const;
+
+    bool is_from_application_server() const;
+
     bool is_full_pdu() const
     { return (packet_flags & PKT_PDU_FULL) == PKT_PDU_FULL; }
 
@@ -259,6 +300,18 @@ struct SO_PUBLIC Packet
 
     bool is_rebuilt() const
     { return (packet_flags & (PKT_REBUILT_STREAM|PKT_REBUILT_FRAG)) != 0; }
+
+    bool is_retry() const
+    { return (packet_flags & PKT_RETRY) != 0; }
+
+    bool is_offloaded() const
+    { return (ts_packet_flags & PKT_TS_OFFLOADED) != 0; }
+
+    void set_offloaded()
+    { ts_packet_flags |= PKT_TS_OFFLOADED; }
+
+    void clear_offloaded()
+    { ts_packet_flags &= (~PKT_TS_OFFLOADED); }
 
     bool is_detection_enabled(bool to_server);
 
@@ -273,6 +326,8 @@ struct SO_PUBLIC Packet
         if ( flow )
             flow->ssn_state.snort_protocol_id = proto_id;
     }
+
+    uint16_t get_flow_vlan_id() const;
 
 private:
     bool allocated;

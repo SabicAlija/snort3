@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,9 +25,6 @@
 
 static inline Table* find_table(std::vector<Table*> vec, const std::string& name)
 {
-    if (name.empty())
-        return nullptr;
-
     for ( auto* t : vec)
         if (name == t->get_name())
             return t;
@@ -46,6 +43,15 @@ Table::Table(int d)
 Table::Table(const std::string& table_name, int d)
 {
     this->name = table_name;
+    this->depth = d;
+    this->comments = new Comments(d + 1,
+        Comments::CommentType::SINGLE_LINE);
+}
+
+Table::Table(const std::string& table_name, const std::string& key, int d)
+{
+    this->name = table_name;
+    this->key = key;
     this->depth = d;
     this->comments = new Comments(d + 1,
         Comments::CommentType::SINGLE_LINE);
@@ -254,7 +260,12 @@ std::ostream& operator<<(std::ostream& out, const Table& t)
         if ( t.print_whitespace )
             out << whitespace;
 
-        out << t.name << (t.one_line ? " = " : " =\n");
+        out << t.name;
+
+        if ( !t.key.empty() )
+            out << "[\"" << t.key << "\"]";
+
+        out << (t.one_line ? " = " : " =\n");
     }
 
     out << (t.print_whitespace ? whitespace : "")

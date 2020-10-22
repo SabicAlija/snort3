@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,10 +25,10 @@
 
 #include <cstdint>
 
-namespace snort
-{
-struct Packet;
-}
+#include "protocols/packet.h"
+#include "smb_common.h"
+
+#pragma pack(1)
 
 /********************************************************************
  * SMB_COM_OPEN
@@ -902,7 +902,7 @@ inline uint64_t SmbNtCreateAndXReqAllocSize(const SmbNtCreateAndXReq* req)
 
 inline bool SmbNtCreateAndXReqSequentialOnly(const SmbNtCreateAndXReq* req)
 {
-    return (snort::alignedNtohl(&req->smb_create_opts) & SMB_CREATE_OPTIONS__FILE_SEQUENTIAL_ONLY);
+    return ((snort::alignedNtohl(&req->smb_create_opts) & SMB_CREATE_OPTIONS__FILE_SEQUENTIAL_ONLY) != 0);
 }
 
 inline uint32_t SmbNtCreateAndXReqFileAttrs(const SmbNtCreateAndXReq* req)
@@ -1734,7 +1734,7 @@ inline uint32_t SmbNtTransactCreateReqFileAttrs(const SmbNtTransactCreateReqPara
 
 inline bool SmbNtTransactCreateReqSequentialOnly(const SmbNtTransactCreateReqParams* req)
 {
-    return (snort::alignedNtohl(&req->create_options) & SMB_CREATE_OPTIONS__FILE_SEQUENTIAL_ONLY);
+    return ((snort::alignedNtohl(&req->create_options) & SMB_CREATE_OPTIONS__FILE_SEQUENTIAL_ONLY) != 0);
 }
 
 struct SmbNtTransactCreateReq
@@ -2191,8 +2191,10 @@ inline uint16_t SmbWriteAndCloseRespCount(const SmbWriteAndCloseResp* resp)
 #pragma pack()
 
 void DCE2_SmbInitGlobals();
-void DCE2_SmbProcess(struct DCE2_SmbSsnData*);
-DCE2_SmbSsnData* dce2_handle_smb_session(snort::Packet*, struct dce2SmbProtoConf*);
+void DCE2_Smb1Process(struct DCE2_SmbSsnData*);
+struct DCE2_SmbSsnData* dce2_create_new_smb_session(snort::Packet*, struct dce2SmbProtoConf*);
+struct DCE2_Smb2SsnData* dce2_create_new_smb2_session(snort::Packet*, struct dce2SmbProtoConf*);
+void DCE2_SmbDataFree(DCE2_SmbSsnData*);
 
 #endif
 

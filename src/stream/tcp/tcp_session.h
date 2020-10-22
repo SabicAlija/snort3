@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -20,9 +20,9 @@
 #ifndef TCP_SESSION_H
 #define TCP_SESSION_H
 
-#include "stream/libtcp/tcp_state_machine.h"
-#include "stream/libtcp/tcp_stream_session.h"
-#include "stream/libtcp/tcp_stream_tracker.h"
+#include "tcp_state_machine.h"
+#include "tcp_stream_session.h"
+#include "tcp_stream_tracker.h"
 
 namespace snort
 {
@@ -38,6 +38,9 @@ public:
     TcpSession(snort::Flow*);
     ~TcpSession() override;
 
+    static void sinit();
+    static void sterm();
+
     bool setup(snort::Packet*) override;
     void restart(snort::Packet* p) override;
     void precheck(snort::Packet* p) override;
@@ -51,8 +54,8 @@ public:
     void clear_session(bool free_flow_data, bool flush_segments, bool restart, snort::Packet* p = nullptr) override;
     void set_extra_data(snort::Packet*, uint32_t /*flag*/) override;
     void update_perf_base_state(char new_state) override;
-    TcpStreamTracker::TcpState get_talker_state() override;
-    TcpStreamTracker::TcpState get_listener_state() override;
+    TcpStreamTracker::TcpState get_talker_state(TcpSegmentDescriptor& tsd) override;
+    TcpStreamTracker::TcpState get_listener_state(TcpSegmentDescriptor& tsd) override;
     void update_timestamp_tracking(TcpSegmentDescriptor&) override;
     void update_session_on_rst(TcpSegmentDescriptor&, bool) override;
     bool handle_syn_on_reset_session(TcpSegmentDescriptor&) override;
@@ -66,20 +69,24 @@ public:
     void handle_data_segment(TcpSegmentDescriptor&) override;
     bool validate_packet_established_session(TcpSegmentDescriptor&) override;
 
+    bool is_midstream_allowed(const TcpSegmentDescriptor& tsd)
+    { return tcp_config->midstream_allowed(tsd.get_pkt()); }
+
 private:
-    void set_os_policy() override;
-    bool flow_exceeds_config_thresholds(TcpSegmentDescriptor&);
+    int process_tcp_packet(TcpSegmentDescriptor&, const snort::Packet*);
     void process_tcp_stream(TcpSegmentDescriptor&);
     int process_tcp_data(TcpSegmentDescriptor&);
+    void set_os_policy() override;
+    bool flow_exceeds_config_thresholds(const TcpSegmentDescriptor&);
+    void update_stream_order(const TcpSegmentDescriptor&, bool aligned);
     void swap_trackers();
-    void NewTcpSessionOnSyn(TcpSegmentDescriptor&);
-    void NewTcpSessionOnSynAck(TcpSegmentDescriptor&);
-    int process_dis(snort::Packet*);
+    void init_session_on_syn(TcpSegmentDescriptor&);
+    void init_session_on_synack(TcpSegmentDescriptor&);
     void update_on_3whs_complete(TcpSegmentDescriptor&);
-    bool is_flow_handling_packets(snort::Packet*);
+    bool ignore_this_packet(snort::Packet*);
     void cleanup_session_if_expired(snort::Packet*);
-    bool do_packet_analysis_pre_checks(snort::Packet*, TcpSegmentDescriptor&);
-    void do_packet_analysis_post_checks(snort::Packet*);
+    void init_tcp_packet_analysis(TcpSegmentDescriptor&);
+    void check_events_and_actions(const TcpSegmentDescriptor& tsd);
     void flush_tracker(TcpStreamTracker&, snort::Packet*, uint32_t dir, bool final_flush);
 
 private:

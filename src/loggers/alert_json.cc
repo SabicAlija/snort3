@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,6 +42,7 @@
 #include "log/text_log.h"
 #include "packet_io/active.h"
 #include "packet_io/sfdaq.h"
+#include "protocols/cisco_meta_data.h"
 #include "protocols/eth.h"
 #include "protocols/icmp4.h"
 #include "protocols/tcp.h"
@@ -71,7 +72,7 @@ struct Args
     bool comma;
 };
 
-static void print_label(Args& a, const char* label)
+static void print_label(const Args& a, const char* label)
 {
     if ( a.comma )
         TextLog_Print(json_log, ",");
@@ -79,26 +80,26 @@ static void print_label(Args& a, const char* label)
     TextLog_Print(json_log, " \"%s\" : ", label);
 }
 
-static bool ff_action(Args& a)
+static bool ff_action(const Args& a)
 {
     print_label(a, "action");
-    TextLog_Quote(json_log, Active::get_action_string());
+    TextLog_Quote(json_log, a.pkt->active->get_action_string());
     return true;
 }
 
-static bool ff_class(Args& a)
+static bool ff_class(const Args& a)
 {
     const char* cls = "none";
 
-    if ( a.event.sig_info->class_type and a.event.sig_info->class_type->name )
-        cls = a.event.sig_info->class_type->name;
+    if ( a.event.sig_info->class_type and !a.event.sig_info->class_type->text.empty() )
+        cls = a.event.sig_info->class_type->text.c_str();
 
     print_label(a, "class");
     TextLog_Quote(json_log, cls);
     return true;
 }
 
-static bool ff_b64_data(Args& a)
+static bool ff_b64_data(const Args& a)
 {
     if ( !a.pkt->dsize )
         return false;
@@ -128,13 +129,35 @@ static bool ff_b64_data(Args& a)
     return true;
 }
 
-static bool ff_dir(Args& a)
+static bool ff_client_bytes(const Args& a)
+{
+    if (a.pkt->flow)
+    {
+        print_label(a, "client_bytes");
+        TextLog_Print(json_log, "%" PRIu64, a.pkt->flow->flowstats.client_bytes);
+        return true;
+    }
+    return false;
+}
+
+static bool ff_client_pkts(const Args& a)
+{
+    if (a.pkt->flow)
+    {
+        print_label(a, "client_pkts");
+        TextLog_Print(json_log, "%" PRIu64, a.pkt->flow->flowstats.client_pkts);
+        return true;
+    }
+    return false;
+}
+
+static bool ff_dir(const Args& a)
 {
     const char* dir;
 
-    if ( a.pkt->is_from_client() )
+    if ( a.pkt->is_from_application_client() )
         dir = "C2S";
-    else if ( a.pkt->is_from_server() )
+    else if ( a.pkt->is_from_application_server() )
         dir = "S2C";
     else
         dir = "UNK";
@@ -144,7 +167,7 @@ static bool ff_dir(Args& a)
     return true;
 }
 
-static bool ff_dst_addr(Args& a)
+static bool ff_dst_addr(const Args& a)
 {
     if ( a.pkt->has_ip() or a.pkt->is_data() )
     {
@@ -156,7 +179,7 @@ static bool ff_dst_addr(Args& a)
     return false;
 }
 
-static bool ff_dst_ap(Args& a)
+static bool ff_dst_ap(const Args& a)
 {
     SfIpString addr = "";
     unsigned port = 0;
@@ -172,7 +195,7 @@ static bool ff_dst_ap(Args& a)
     return true;
 }
 
-static bool ff_dst_port(Args& a)
+static bool ff_dst_port(const Args& a)
 {
     if ( a.pkt->proto_bits & (PROTO_BIT__TCP|PROTO_BIT__UDP) )
     {
@@ -183,7 +206,7 @@ static bool ff_dst_port(Args& a)
     return false;
 }
 
-static bool ff_eth_dst(Args& a)
+static bool ff_eth_dst(const Args& a)
 {
     if ( !(a.pkt->proto_bits & PROTO_BIT__ETH) )
         return false;
@@ -198,7 +221,7 @@ static bool ff_eth_dst(Args& a)
     return true;
 }
 
-static bool ff_eth_len(Args& a)
+static bool ff_eth_len(const Args& a)
 {
     if ( !(a.pkt->proto_bits & PROTO_BIT__ETH) )
         return false;
@@ -208,7 +231,7 @@ static bool ff_eth_len(Args& a)
     return true;
 }
 
-static bool ff_eth_src(Args& a)
+static bool ff_eth_src(const Args& a)
 {
     if ( !(a.pkt->proto_bits & PROTO_BIT__ETH) )
         return false;
@@ -222,7 +245,7 @@ static bool ff_eth_src(Args& a)
     return true;
 }
 
-static bool ff_eth_type(Args& a)
+static bool ff_eth_type(const Args& a)
 {
     if ( !(a.pkt->proto_bits & PROTO_BIT__ETH) )
         return false;
@@ -234,14 +257,25 @@ static bool ff_eth_type(Args& a)
     return true;
 }
 
-static bool ff_gid(Args& a)
+static bool ff_flowstart_time(const Args& a)
+{
+    if (a.pkt->flow)
+    {
+        print_label(a, "flowstart_time");
+        TextLog_Print(json_log, "%lu", a.pkt->flow->flowstats.start_time.tv_sec);
+        return true;
+    }
+    return false;
+}
+
+static bool ff_gid(const Args& a)
 {
     print_label(a, "gid");
     TextLog_Print(json_log, "%u",  a.event.sig_info->gid);
     return true;
 }
 
-static bool ff_icmp_code(Args& a)
+static bool ff_icmp_code(const Args& a)
 {
     if (a.pkt->ptrs.icmph )
     {
@@ -252,7 +286,7 @@ static bool ff_icmp_code(Args& a)
     return false;
 }
 
-static bool ff_icmp_id(Args& a)
+static bool ff_icmp_id(const Args& a)
 {
     if (a.pkt->ptrs.icmph )
     {
@@ -263,7 +297,7 @@ static bool ff_icmp_id(Args& a)
     return false;
 }
 
-static bool ff_icmp_seq(Args& a)
+static bool ff_icmp_seq(const Args& a)
 {
     if (a.pkt->ptrs.icmph )
     {
@@ -274,7 +308,7 @@ static bool ff_icmp_seq(Args& a)
     return false;
 }
 
-static bool ff_icmp_type(Args& a)
+static bool ff_icmp_type(const Args& a)
 {
     if (a.pkt->ptrs.icmph )
     {
@@ -285,14 +319,14 @@ static bool ff_icmp_type(Args& a)
     return false;
 }
 
-static bool ff_iface(Args& a)
+static bool ff_iface(const Args& a)
 {
     print_label(a, "iface");
-    TextLog_Quote(json_log, SFDAQ::get_interface_spec());
+    TextLog_Quote(json_log, SFDAQ::get_input_spec());
     return true;
 }
 
-static bool ff_ip_id(Args& a)
+static bool ff_ip_id(const Args& a)
 {
     if (a.pkt->has_ip())
     {
@@ -303,7 +337,7 @@ static bool ff_ip_id(Args& a)
     return false;
 }
 
-static bool ff_ip_len(Args& a)
+static bool ff_ip_len(const Args& a)
 {
     if (a.pkt->has_ip())
     {
@@ -314,14 +348,14 @@ static bool ff_ip_len(Args& a)
     return false;
 }
 
-static bool ff_msg(Args& a)
+static bool ff_msg(const Args& a)
 {
     print_label(a, "msg");
     TextLog_Puts(json_log, a.msg);
     return true;
 }
 
-static bool ff_mpls(Args& a)
+static bool ff_mpls(const Args& a)
 {
     uint32_t mpls;
 
@@ -339,14 +373,14 @@ static bool ff_mpls(Args& a)
     return true;
 }
 
-static bool ff_pkt_gen(Args& a)
+static bool ff_pkt_gen(const Args& a)
 {
     print_label(a, "pkt_gen");
     TextLog_Quote(json_log, a.pkt->get_pseudo_type());
     return true;
 }
 
-static bool ff_pkt_len(Args& a)
+static bool ff_pkt_len(const Args& a)
 {
     print_label(a, "pkt_len");
 
@@ -358,35 +392,35 @@ static bool ff_pkt_len(Args& a)
     return true;
 }
 
-static bool ff_pkt_num(Args& a)
+static bool ff_pkt_num(const Args& a)
 {
     print_label(a, "pkt_num");
     TextLog_Print(json_log, STDu64, a.pkt->context->packet_number);
     return true;
 }
 
-static bool ff_priority(Args& a)
+static bool ff_priority(const Args& a)
 {
     print_label(a, "priority");
     TextLog_Print(json_log, "%u", a.event.sig_info->priority);
     return true;
 }
 
-static bool ff_proto(Args& a)
+static bool ff_proto(const Args& a)
 {
     print_label(a, "proto");
     TextLog_Quote(json_log, a.pkt->get_type());
     return true;
 }
 
-static bool ff_rev(Args& a)
+static bool ff_rev(const Args& a)
 {
     print_label(a, "rev");
     TextLog_Print(json_log, "%u",  a.event.sig_info->rev);
     return true;
 }
 
-static bool ff_rule(Args& a)
+static bool ff_rule(const Args& a)
 {
     print_label(a, "rule");
 
@@ -396,14 +430,36 @@ static bool ff_rule(Args& a)
     return true;
 }
 
-static bool ff_seconds(Args& a)
+static bool ff_seconds(const Args& a)
 {
     print_label(a, "seconds");
-    TextLog_Print(json_log, "%u",  a.pkt->pkth->ts.tv_sec);
+    TextLog_Print(json_log, "%lu",  a.pkt->pkth->ts.tv_sec);
     return true;
 }
 
-static bool ff_service(Args& a)
+static bool ff_server_bytes(const Args& a)
+{
+    if (a.pkt->flow)
+    {
+        print_label(a, "server_bytes");
+        TextLog_Print(json_log, "%" PRIu64, a.pkt->flow->flowstats.server_bytes);
+        return true;
+    }
+    return false;
+}
+
+static bool ff_server_pkts(const Args& a)
+{
+    if (a.pkt->flow)
+    {
+        print_label(a, "server_pkts");
+        TextLog_Print(json_log, "%" PRIu64, a.pkt->flow->flowstats.server_pkts);
+        return true;
+    }
+    return false;
+}
+
+static bool ff_service(const Args& a)
 {
     const char* svc = "unknown";
 
@@ -415,14 +471,26 @@ static bool ff_service(Args& a)
     return true;
 }
 
-static bool ff_sid(Args& a)
+static bool ff_sgt(const Args& a)
+{
+    if (a.pkt->proto_bits & PROTO_BIT__CISCO_META_DATA)
+    {
+        const cisco_meta_data::CiscoMetaDataHdr* cmdh = layer::get_cisco_meta_data_layer(a.pkt);
+        print_label(a, "sgt");
+        TextLog_Print(json_log, "%hu", cmdh->sgt_val());
+        return true;
+    }
+    return false;
+}
+
+static bool ff_sid(const Args& a)
 {
     print_label(a, "sid");
     TextLog_Print(json_log, "%u",  a.event.sig_info->sid);
     return true;
 }
 
-static bool ff_src_addr(Args& a)
+static bool ff_src_addr(const Args& a)
 {
     if ( a.pkt->has_ip() or a.pkt->is_data() )
     {
@@ -434,7 +502,7 @@ static bool ff_src_addr(Args& a)
     return false;
 }
 
-static bool ff_src_ap(Args& a)
+static bool ff_src_ap(const Args& a)
 {
     SfIpString addr = "";
     unsigned port = 0;
@@ -450,7 +518,7 @@ static bool ff_src_ap(Args& a)
     return true;
 }
 
-static bool ff_src_port(Args& a)
+static bool ff_src_port(const Args& a)
 {
     if ( a.pkt->proto_bits & (PROTO_BIT__TCP|PROTO_BIT__UDP) )
     {
@@ -461,7 +529,7 @@ static bool ff_src_port(Args& a)
     return false;
 }
 
-static bool ff_target(Args& a)
+static bool ff_target(const Args& a)
 {
     SfIpString addr = "";
 
@@ -479,7 +547,7 @@ static bool ff_target(Args& a)
     return true;
 }
 
-static bool ff_tcp_ack(Args& a)
+static bool ff_tcp_ack(const Args& a)
 {
     if (a.pkt->ptrs.tcph )
     {
@@ -490,7 +558,7 @@ static bool ff_tcp_ack(Args& a)
     return false;
 }
 
-static bool ff_tcp_flags(Args& a)
+static bool ff_tcp_flags(const Args& a)
 {
     if (a.pkt->ptrs.tcph )
     {
@@ -504,7 +572,7 @@ static bool ff_tcp_flags(Args& a)
     return false;
 }
 
-static bool ff_tcp_len(Args& a)
+static bool ff_tcp_len(const Args& a)
 {
     if (a.pkt->ptrs.tcph )
     {
@@ -515,7 +583,7 @@ static bool ff_tcp_len(Args& a)
     return false;
 }
 
-static bool ff_tcp_seq(Args& a)
+static bool ff_tcp_seq(const Args& a)
 {
     if (a.pkt->ptrs.tcph )
     {
@@ -526,7 +594,7 @@ static bool ff_tcp_seq(Args& a)
     return false;
 }
 
-static bool ff_tcp_win(Args& a)
+static bool ff_tcp_win(const Args& a)
 {
     if (a.pkt->ptrs.tcph )
     {
@@ -537,7 +605,7 @@ static bool ff_tcp_win(Args& a)
     return false;
 }
 
-static bool ff_timestamp(Args& a)
+static bool ff_timestamp(const Args& a)
 {
     print_label(a, "timestamp");
     TextLog_Putc(json_log, '"');
@@ -546,7 +614,7 @@ static bool ff_timestamp(Args& a)
     return true;
 }
 
-static bool ff_tos(Args& a)
+static bool ff_tos(const Args& a)
 {
     if (a.pkt->has_ip())
     {
@@ -557,7 +625,7 @@ static bool ff_tos(Args& a)
     return false;
 }
 
-static bool ff_ttl(Args& a)
+static bool ff_ttl(const Args& a)
 {
     if (a.pkt->has_ip())
     {
@@ -568,7 +636,7 @@ static bool ff_ttl(Args& a)
     return false;
 }
 
-static bool ff_udp_len(Args& a)
+static bool ff_udp_len(const Args& a)
 {
     if (a.pkt->ptrs.udph )
     {
@@ -579,21 +647,10 @@ static bool ff_udp_len(Args& a)
     return false;
 }
 
-static bool ff_vlan(Args& a)
+static bool ff_vlan(const Args& a)
 {
-    uint16_t vid;
-
-    if (a.pkt->flow)
-        vid = a.pkt->flow->key->vlan_tag;
-
-    else if ( a.pkt->proto_bits & PROTO_BIT__VLAN )
-        vid = layer::get_vlan_layer(a.pkt)->vid();
-
-    else
-        return false;
-
     print_label(a, "vlan");
-    TextLog_Print(json_log, "%hu", vid);
+    TextLog_Print(json_log, "%hu", a.pkt->get_flow_vlan_id());
     return true;
 }
 
@@ -601,27 +658,29 @@ static bool ff_vlan(Args& a)
 // module stuff
 //-------------------------------------------------------------------------
 
-typedef bool (*JsonFunc)(Args&);
+typedef bool (*JsonFunc)(const Args&);
 
 static const JsonFunc json_func[] =
 {
-    ff_action, ff_class, ff_b64_data, ff_dir, ff_dst_addr, ff_dst_ap,
-    ff_dst_port, ff_eth_dst, ff_eth_len, ff_eth_src, ff_eth_type, ff_gid,
-    ff_icmp_code, ff_icmp_id, ff_icmp_seq, ff_icmp_type, ff_iface, ff_ip_id,
-    ff_ip_len, ff_msg, ff_mpls, ff_pkt_gen, ff_pkt_len, ff_pkt_num, ff_priority,
-    ff_proto, ff_rev, ff_rule, ff_seconds, ff_service, ff_sid, ff_src_addr, ff_src_ap,
-    ff_src_port, ff_target, ff_tcp_ack, ff_tcp_flags, ff_tcp_len, ff_tcp_seq,
-    ff_tcp_win, ff_timestamp, ff_tos, ff_ttl, ff_udp_len, ff_vlan
+    ff_action, ff_class, ff_b64_data, ff_client_bytes, ff_client_pkts, ff_dir,
+    ff_dst_addr, ff_dst_ap, ff_dst_port, ff_eth_dst, ff_eth_len, ff_eth_src,
+    ff_eth_type, ff_flowstart_time, ff_gid, ff_icmp_code, ff_icmp_id, ff_icmp_seq,
+    ff_icmp_type, ff_iface, ff_ip_id, ff_ip_len, ff_msg, ff_mpls, ff_pkt_gen, ff_pkt_len,
+    ff_pkt_num, ff_priority, ff_proto, ff_rev, ff_rule, ff_seconds, ff_server_bytes,
+    ff_server_pkts, ff_service, ff_sgt, ff_sid, ff_src_addr, ff_src_ap, ff_src_port,
+    ff_target, ff_tcp_ack, ff_tcp_flags,ff_tcp_len, ff_tcp_seq, ff_tcp_win, ff_timestamp,
+    ff_tos, ff_ttl, ff_udp_len, ff_vlan
 };
 
 #define json_range \
-    "action | class | b64_data | dir | dst_addr | dst_ap | " \
-    "dst_port | eth_dst | eth_len | eth_src | eth_type | gid | " \
-    "icmp_code | icmp_id | icmp_seq | icmp_type | iface | ip_id | " \
-    "ip_len | msg | mpls | pkt_gen | pkt_len | pkt_num | priority | " \
-    "proto | rev | rule | seconds | service | sid | src_addr | src_ap | " \
-    "src_port | target | tcp_ack | tcp_flags | tcp_len | tcp_seq | " \
-    "tcp_win | timestamp | tos | ttl | udp_len | vlan"
+    "action | class | b64_data | client_bytes | client_pkts | dir | " \
+    "dst_addr | dst_ap | dst_port | eth_dst | eth_len | eth_src | " \
+    "eth_type | flowstart_time | gid | icmp_code | icmp_id | icmp_seq | " \
+    "icmp_type | iface | ip_id | ip_len | msg | mpls | pkt_gen | pkt_len | " \
+    "pkt_num | priority | proto | rev | rule | seconds | server_bytes | " \
+    "server_pkts | service | sgt| sid | src_addr | src_ap | src_port | " \
+    "target | tcp_ack | tcp_flags | tcp_len | tcp_seq | tcp_win | timestamp | " \
+    "tos | ttl | udp_len | vlan"
 
 #define json_deflt \
     "timestamp pkt_num proto pkt_gen pkt_len dir src_ap dst_ap rule action"
@@ -634,7 +693,7 @@ static const Parameter s_params[] =
     { "fields", Parameter::PT_MULTI, json_range, json_deflt,
       "selected fields will be output in given order left to right" },
 
-    { "limit", Parameter::PT_INT, "0:", "0",
+    { "limit", Parameter::PT_INT, "0:maxSZ", "0",
       "set maximum size in MB before rollover (0 is unlimited)" },
 
     { "separator", Parameter::PT_STRING, nullptr, ", ",
@@ -655,12 +714,12 @@ public:
     bool begin(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    bool file;
+    bool file = false;
+    size_t limit = 0;
     string sep;
-    unsigned long limit;
     vector<JsonFunc> fields;
 };
 
@@ -676,11 +735,15 @@ bool JsonModule::set(const char*, Value& v, SnortConfig*)
         fields.clear();
 
         while ( v.get_next_token(tok) )
-            fields.push_back(json_func[Parameter::index(json_range, tok.c_str())]);
+        {
+            int i = Parameter::index(json_range, tok.c_str());
+            if ( i >= 0 )
+                fields.emplace_back(json_func[i]);
+        }
     }
 
     else if ( v.is("limit") )
-        limit = v.get_long() * 1024 * 1024;
+        limit = v.get_size() * 1024 * 1024;
 
     else if ( v.is("separator") )
         sep = v.get_string();
@@ -704,7 +767,11 @@ bool JsonModule::begin(const char*, int, SnortConfig*)
         v.set_first_token();
 
         while ( v.get_next_token(tok) )
-            fields.push_back(json_func[Parameter::index(json_range, tok.c_str())]);
+        {
+            int i = Parameter::index(json_range, tok.c_str());
+            if ( i >= 0 )
+                fields.emplace_back(json_func[i]);
+        }
     }
     return true;
 }
@@ -774,7 +841,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* json_ctor(SnortConfig*, Module* mod)
+static Logger* json_ctor(Module* mod)
 { return new JsonLogger((JsonModule*)mod); }
 
 static void json_dtor(Logger* p)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,8 @@
 //    based on configuration.
 //-------------------------------------------------------------------------
 
+#include <map>
+#include <memory>
 #include <string>
 
 #include "framework/base_api.h"
@@ -67,7 +69,27 @@ public:
         const char* name);
 
     static const char* get_available_plugins(PlugType);
+    static void load_so_plugins(snort::SnortConfig*, bool is_reload = false);
+    static void reload_so_plugins(const char*, snort::SnortConfig*);
+    static void reload_so_plugins_cleanup(snort::SnortConfig*);
 };
+
+struct Plugin;
+struct Plugins
+{
+    std::map<std::string, Plugin> plug_map;
+    ~Plugins();
+};
+
+struct SoHandle
+{
+    void* handle;
+
+    SoHandle(void* h) : handle(h) { }
+    ~SoHandle();
+};
+
+using SoHandlePtr = std::shared_ptr<SoHandle>;
 
 #endif
 

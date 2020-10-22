@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -88,7 +88,7 @@ bool SslModule::set(const char*, Value& v, SnortConfig*)
         conf->trustservers = v.get_bool();
 
     else if ( v.is("max_heartbeat_length") )
-        conf->max_heartbeat_len = v.get_long();
+        conf->max_heartbeat_len = v.get_uint16();
 
     else
         return false;

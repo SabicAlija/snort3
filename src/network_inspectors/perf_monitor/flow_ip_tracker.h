@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,9 +21,9 @@
 #ifndef FLOW_IP_TRACKER_H
 #define FLOW_IP_TRACKER_H
 
-#include "perf_tracker.h"
-
 #include "hash/xhash.h"
+
+#include "perf_tracker.h"
 
 enum FlowState
 {
@@ -63,20 +63,25 @@ public:
     FlowIPTracker(PerfConfig* perf);
     ~FlowIPTracker() override;
 
+    bool initialize(size_t new_memcap);
     void reset() override;
     void update(snort::Packet*) override;
     void process(bool) override;
-
     int update_state(const snort::SfIp* src_addr, const snort::SfIp* dst_addr, FlowState);
+    snort::XHash* get_ip_map()
+        { return ip_map; }
 
 private:
     FlowStateValue stats;
     snort::XHash* ip_map;
     char ip_a[41], ip_b[41];
-
+    int perf_flags;
+    PerfConfig* perf_conf;
+    size_t memcap;
     FlowStateValue* find_stats(const snort::SfIp* src_addr, const snort::SfIp* dst_addr, int* swapped);
     void write_stats();
     void display_stats();
+
 };
 #endif
 

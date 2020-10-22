@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,12 +22,11 @@
 #define REGEX_OFFLOAD_H
 
 // RegexOffload provides an interface to fast pattern search accelerators.
-// currently implemented as a simple thread offload, but will become an 
-// abstract base class with true hardware offload subclasses.  for starters
-// the thread offload will "cheat" and tightly interface with fp_detect but
-// eventually morph into such a proper subclass as the offload api emerges.
-// presently all offload is per packet thread; packet threads do not share
-// offload resources.
+// There are two flavors: MPSE and thread.  The MpseRegexOffload interfaces to
+// an MPSE that is capable of regex offload such as the RXP whereas
+// ThreadRegexOffload implements the regex search in auxiliary threads w/o
+// requiring extra MPSE instances.  presently all offload is per packet thread;
+// packet threads do not share offload resources.
 
 #include <condition_variable>
 #include <list>
@@ -38,34 +37,59 @@ namespace snort
 {
 class Flow;
 struct Packet;
+struct SnortConfig;
 }
 struct RegexRequest;
 
 class RegexOffload
 {
 public:
-    RegexOffload(unsigned max);
-    ~RegexOffload();
+    static RegexOffload* get_offloader(unsigned max, bool async);
+    virtual ~RegexOffload();
 
-    void stop();
+    virtual void stop();
 
-    unsigned available()
+    virtual void put(snort::Packet*) = 0;
+    virtual bool get(snort::Packet*&) = 0;
+
+    unsigned available() const
     { return idle.size(); }
 
-    unsigned count()
+    unsigned count() const
     { return busy.size(); }
 
-    void put(unsigned id, snort::Packet*);
-    bool get(unsigned& id);
+    bool on_hold(snort::Flow*) const;
 
-    bool on_hold(snort::Flow*);
+protected:
+    RegexOffload(unsigned max);
 
-private:
-    static void worker(RegexRequest*);
-
-private:
+protected:
     std::list<RegexRequest*> busy;
     std::list<RegexRequest*> idle;
+};
+
+class MpseRegexOffload : public RegexOffload
+{
+public:
+    MpseRegexOffload(unsigned max);
+
+    void put(snort::Packet*) override;
+    bool get(snort::Packet*&) override;
+};
+
+class ThreadRegexOffload : public RegexOffload
+{
+public:
+    ThreadRegexOffload(unsigned max);
+    ~ThreadRegexOffload() override;
+
+    void stop() override;
+
+    void put(snort::Packet*) override;
+    bool get(snort::Packet*&) override;
+
+private:
+    static void worker(RegexRequest*, const snort::SnortConfig*, unsigned id);
 };
 
 #endif

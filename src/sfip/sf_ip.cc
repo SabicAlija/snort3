@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -159,10 +159,8 @@ static inline int _netmask_str_to_bit_count(char* mask, int family)
     int bits, i, nBits, nBytes;
     uint8_t* bytes = (uint8_t*)buf;
 
-    /* XXX
-     * Mask not validated.
-     * Only sfip_pton should be using this function, and using it safely.
-     * XXX */
+    // Mask not validated.
+    // Only sfip_pton should be using this function, and using it safely.
 
     if (inet_pton(family, mask, buf) < 1)
         return -1;
@@ -355,7 +353,7 @@ SfIpRet SfIp::set(const void* src)
 
 /* Obfuscates this IP with an obfuscation CIDR
     Makes this:  ob | (this & mask) */
-void SfIp::obfuscate(SfCidr* ob)
+void SfIp::obfuscate(const SfCidr* ob)
 {
     const uint32_t* ob_p;
     int index, i;
@@ -426,7 +424,7 @@ const char* snort_inet_ntop(int family, const void* ip_raw, char* buf, int bufsi
         return buf;
     }
 
-#ifndef REG_TEST
+#if !defined(REG_TEST) && !defined(CATCH_TEST_BUILD)
     if (!inet_ntop(family, ip_raw, buf, bufsize))
         snprintf(buf, bufsize, "ERROR");
 #else

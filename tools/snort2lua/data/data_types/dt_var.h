@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -35,8 +35,8 @@ public:
     inline const std::string& get_name() { return name; }
     std::string get_value(DataApi*);
     bool add_value(std::string);
-    void set_value(std::string, bool quoted);
-    
+    void set_value(const std::string&, bool quoted);
+
     void set_print_whitespace(bool w)
     { print_whitespace = w; }
 

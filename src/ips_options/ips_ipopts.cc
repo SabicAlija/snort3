@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -24,7 +24,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/ipv4_options.h"
 #include "protocols/packet.h"
@@ -38,7 +38,7 @@ static THREAD_LOCAL ProfileStats ipOptionPerfStats;
 struct IpOptionData
 {
     ip::IPOptionCodes ip_option;
-    u_char any_flag;
+    uint8_t any_flag;
 };
 
 class IpOptOption : public IpsOption
@@ -66,14 +66,11 @@ private:
 
 uint32_t IpOptOption::hash() const
 {
-    uint32_t a,b,c;
-    const IpOptionData* data = &config;
+    uint32_t a = (uint32_t)config.ip_option;
+    uint32_t b = config.any_flag;
+    uint32_t c = IpsOption::hash();
 
-    a = (uint32_t)data->ip_option;
-    b = data->any_flag;
-    c = 0;
-
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -81,7 +78,7 @@ uint32_t IpOptOption::hash() const
 
 bool IpOptOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const IpOptOption& rhs = (const IpOptOption&)ips;
@@ -99,7 +96,7 @@ bool IpOptOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus IpOptOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(ipOptionPerfStats);
+    RuleProfile profile(ipOptionPerfStats);
 
     if ( !p->is_ip4() )
         // if error occurred while ip header
@@ -212,7 +209,7 @@ public:
     { return DETECT; }
 
 public:
-    IpOptionData data;
+    IpOptionData data = {};
 };
 
 bool IpOptModule::begin(const char*, int, SnortConfig*)

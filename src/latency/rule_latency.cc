@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -86,7 +86,7 @@ static inline std::ostream& operator<<(std::ostream& os, const Event& e)
     using std::chrono::duration_cast;
     using std::chrono::microseconds;
 
-    os << "latency: " << e.packet->context->packet_number << " rule tree ";
+    os << "packet " << e.packet->context->packet_number << " rule tree ";
 
     switch ( e.type )
     {
@@ -110,8 +110,22 @@ static inline std::ostream& operator<<(std::ostream& os, const Event& e)
     if ( e.root->num_children > 1 )
         os << " (of " << e.root->num_children << ")";
 
-    os << ", " << e.packet->ptrs.ip_api.get_src() << ":" << e.packet->ptrs.sp;
-    os << " -> " << e.packet->ptrs.ip_api.get_dst() << ":" << e.packet->ptrs.dp;
+    if ( e.packet->has_ip() or e.packet->is_data() )
+    {
+        SfIpString src_addr, dst_addr;
+        unsigned src_port = 0, dst_port = 0;
+
+        e.packet->ptrs.ip_api.get_src()->ntop(src_addr);
+        e.packet->ptrs.ip_api.get_dst()->ntop(dst_addr);
+        if ( e.packet->proto_bits & (PROTO_BIT__TCP|PROTO_BIT__UDP) )
+        {
+            src_port = e.packet->ptrs.sp;
+            dst_port = e.packet->ptrs.dp;
+        }
+
+        os << ", " << src_addr << ":" << src_port;
+        os << " -> " << dst_addr << ":" << dst_port;
+    }
 
     return os;
 }
@@ -159,7 +173,6 @@ struct DefaultRuleInterface
             for ( int i = 0; i < root.num_children; ++i )
             {
                 auto& child_state = root.children[i]->state[get_instance_id()];
-                // FIXIT-L rename to something like latency_timeout_count
                 ++child_state.latency_timeouts;
                 ++child_state.latency_suspends;
             }
@@ -171,7 +184,6 @@ struct DefaultRuleInterface
         {
             for ( int i = 0; i < root.num_children; ++i )
             {
-                // FIXIT-L rename to something like latency_timeout_count
                 ++root.children[i]->state[get_instance_id()].latency_timeouts;
             }
         }
@@ -188,24 +200,21 @@ template<typename Clock = SnortClock, typename RuleTree = DefaultRuleInterface>
 class Impl
 {
 public:
-    Impl(const ConfigWrapper&, EventHandler&, EventHandler&);
+    Impl(const ConfigWrapper&, EventHandler&);
 
     bool push(detection_option_tree_root_t*, Packet*);
     bool pop();
     bool suspended() const;
 
 private:
-    void handle(const Event&);
-
     std::vector<RuleTimer<Clock>> timers;
     const ConfigWrapper& config;
     EventHandler& event_handler;
-    EventHandler& log_handler;
 };
 
 template<typename Clock, typename RuleTree>
-inline Impl<Clock, RuleTree>::Impl(const ConfigWrapper& cfg, EventHandler& eh, EventHandler& lh) :
-    config(cfg), event_handler(eh), log_handler(lh)
+inline Impl<Clock, RuleTree>::Impl(const ConfigWrapper& cfg, EventHandler& eh) :
+    config(cfg), event_handler(eh)
 { }
 
 template<typename Clock, typename RuleTree>
@@ -221,7 +230,7 @@ inline bool Impl<Clock, RuleTree>::push(detection_option_tree_root_t* root, Pack
         if ( RuleTree::reenable(*root, config->max_suspend_time, Clock::now()) )
         {
             Event e { Event::EVENT_ENABLED, config->max_suspend_time, root, p };
-            handle(e);
+            event_handler.handle(e);
             return true;
         }
     }
@@ -240,7 +249,9 @@ inline bool Impl<Clock, RuleTree>::pop()
     if ( !RuleTree::is_suspended(*timer.root) )
     {
         timed_out = timer.timed_out();
-
+#ifdef REG_TEST
+        timed_out = config->test_timeout ? true : timed_out;
+#endif
         if ( timed_out )
         {
             auto suspended = RuleTree::timeout_and_suspend(*timer.root, config->suspend_threshold,
@@ -252,7 +263,7 @@ inline bool Impl<Clock, RuleTree>::pop()
                 timer.elapsed(), timer.root, timer.packet
             };
 
-            handle(e);
+            event_handler.handle(e);
         }
     }
 
@@ -270,16 +281,6 @@ inline bool Impl<Clock, RuleTree>::suspended() const
     return RuleTree::is_suspended(*timers.back().root);
 }
 
-template<typename Clock, typename RuleTree>
-inline void Impl<Clock, RuleTree>::handle(const Event& e)
-{
-    if ( config->action & RuleLatencyConfig::LOG )
-        log_handler.handle(e);
-
-    if ( config->action & RuleLatencyConfig::ALERT )
-        event_handler.handle(e);
-}
-
 // -----------------------------------------------------------------------------
 // static variables
 // -----------------------------------------------------------------------------
@@ -295,6 +296,12 @@ static struct SnortEventHandler : public EventHandler
 {
     void handle(const Event& e) override
     {
+        assert(e.packet);
+
+        std::ostringstream ss;
+        ss << e;
+        debug_logf(latency_trace, e.packet, "%s\n", ss.str().c_str());
+
         switch ( e.type )
         {
             case Event::EVENT_ENABLED:
@@ -311,22 +318,13 @@ static struct SnortEventHandler : public EventHandler
     }
 } event_handler;
 
-static struct SnortLogHandler : public EventHandler
-{
-    void handle(const Event& e) override
-    {
-        std::ostringstream ss;
-        ss << e;
-        LogMessage("%s\n", ss.str().c_str());
-    }
-} log_handler;
-
 static THREAD_LOCAL Impl<>* impl = nullptr;
 
+// FIXIT-L this should probably be put in a tinit
 static inline Impl<>& get_impl()
 {
     if ( !impl )
-        impl = new Impl<>(config, event_handler, log_handler);
+        impl = new Impl<>(config, event_handler);
 
     return *impl;
 }
@@ -462,17 +460,14 @@ TEST_CASE ( "rule latency impl", "[latency]" )
 
     MockConfigWrapper config;
     EventHandlerSpy event_handler;
-    EventHandlerSpy log_handler;
 
     MockClock::reset();
     RuleInterfaceSpy::reset();
 
-    config.config.action = RuleLatencyConfig::ALERT_AND_LOG;
-
     detection_option_tree_root_t root;
     Packet pkt(false);
 
-    rule_latency::Impl<MockClock, RuleInterfaceSpy> impl(config, event_handler, log_handler);
+    rule_latency::Impl<MockClock, RuleInterfaceSpy> impl(config, event_handler);
 
     SECTION( "push" )
     {
@@ -483,7 +478,6 @@ TEST_CASE ( "rule latency impl", "[latency]" )
             SECTION( "push rule" )
             {
                 CHECK_FALSE( impl.push(&root, &pkt) );
-                CHECK( log_handler.count == 0 );
                 CHECK( event_handler.count == 0 );
                 CHECK( RuleInterfaceSpy::reenable_called );
             }
@@ -493,7 +487,6 @@ TEST_CASE ( "rule latency impl", "[latency]" )
                 RuleInterfaceSpy::reenable_result = true;
 
                 CHECK( impl.push(&root, &pkt) );
-                CHECK( log_handler.count == 1 );
                 CHECK( event_handler.count == 1 );
                 CHECK( RuleInterfaceSpy::reenable_called );
             }
@@ -506,7 +499,6 @@ TEST_CASE ( "rule latency impl", "[latency]" )
             SECTION( "push rule" )
             {
                 CHECK_FALSE( impl.push(&root, &pkt) );
-                CHECK( log_handler.count == 0 );
                 CHECK( event_handler.count == 0 );
                 CHECK_FALSE( RuleInterfaceSpy::reenable_called );
             }
@@ -551,7 +543,6 @@ TEST_CASE ( "rule latency impl", "[latency]" )
                 RuleInterfaceSpy::is_suspended_result = true;
 
                 CHECK_FALSE( impl.pop() );
-                CHECK( log_handler.count == 0 );
                 CHECK( event_handler.count == 0 );
                 CHECK_FALSE( RuleInterfaceSpy::timeout_and_suspend_called );
             }
@@ -562,7 +553,6 @@ TEST_CASE ( "rule latency impl", "[latency]" )
                 RuleInterfaceSpy::timeout_and_suspend_result = true;
 
                 CHECK( impl.pop() );
-                CHECK( log_handler.count == 1 );
                 CHECK( event_handler.count == 1 );
                 CHECK( RuleInterfaceSpy::timeout_and_suspend_called );
             }
@@ -572,7 +562,6 @@ TEST_CASE ( "rule latency impl", "[latency]" )
                 RuleInterfaceSpy::timeout_and_suspend_result = false;
 
                 CHECK( impl.pop() );
-                CHECK( log_handler.count == 1 );
                 CHECK( event_handler.count == 1 );
                 CHECK( RuleInterfaceSpy::timeout_and_suspend_called );
             }
@@ -585,7 +574,6 @@ TEST_CASE ( "rule latency impl", "[latency]" )
             RuleInterfaceSpy::is_suspended_result = false;
 
             CHECK_FALSE( impl.pop() );
-            CHECK( log_handler.count == 0 );
             CHECK( event_handler.count == 0 );
             CHECK_FALSE( RuleInterfaceSpy::timeout_and_suspend_called );
         }

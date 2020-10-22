@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2008-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -106,28 +106,28 @@ void DCE2_ClProcess(DCE2_SsnData* sd, DCE2_ClTracker* clt)
 {
     const DceRpcClHdr* cl_hdr;
     DCE2_ClActTracker* at;
-    const uint8_t* data_ptr = sd->wire_pkt->data;
-    uint16_t data_len = sd->wire_pkt->dsize;
+    Packet* p = DetectionEngine::get_current_packet();
+    const uint8_t* data_ptr = p->data;
+    uint16_t data_len = p->dsize;
 
     if (data_len < sizeof(DceRpcClHdr))
     {
-        dce_alert(GID_DCE2,  DCE2_CL_DATA_LT_HDR, (dce2CommonStats*)&dce2_udp_stats);
+        dce_alert(GID_DCE2,  DCE2_CL_DATA_LT_HDR, (dce2CommonStats*)&dce2_udp_stats, *sd);
         return;
     }
 
     cl_hdr = (const DceRpcClHdr*)data_ptr;
 
-    DCE2_MOVE(data_ptr, data_len, sizeof(DceRpcClHdr));
+    dce2_move(data_ptr, data_len, sizeof(DceRpcClHdr));
 
     if (DCE2_ClHdrChecks(sd, cl_hdr) != DCE2_RET__SUCCESS)
         return;
 
-    Profile profile(dce2_udp_pstat_cl_acts);
     at = DCE2_ClGetActTracker(clt, cl_hdr);
     if (at == nullptr)
         return;
 
-    if (DCE2_SsnFromClient(sd->wire_pkt))
+    if ( p->is_from_client() )
     {
         switch (DceRpcClPduType(cl_hdr))
         {
@@ -154,8 +154,7 @@ void DCE2_ClProcess(DCE2_SsnData* sd, DCE2_ClTracker* clt)
 
         case DCERPC_PDU_TYPE__RESPONSE:
         {
-            trace_log(dce_udp, "Response from client.  Changing stream direction.\n");
-            Packet* p = sd->wire_pkt;
+            debug_log(dce_udp_trace, p, "Response from client.  Changing stream direction.\n");
             ip::IpApi* ip_api = &p->ptrs.ip_api;
 
             p->flow->session->update_direction(SSN_DIR_FROM_SERVER,
@@ -219,17 +218,17 @@ void DCE2_ClProcess(DCE2_SsnData* sd, DCE2_ClTracker* clt)
 // alert on the header anomaly.  If we've autodetected the session,
 // however, don't alert, but set a header anomaly flag, so we can
 // re-autodetect on the next go around.
-static DCE2_Ret DCE2_ClHdrChecks(DCE2_SsnData*, const DceRpcClHdr* cl_hdr)
+static DCE2_Ret DCE2_ClHdrChecks(DCE2_SsnData* sd, const DceRpcClHdr* cl_hdr)
 {
     if (DceRpcClRpcVers(cl_hdr) != DCERPC_PROTO_MAJOR_VERS__4)
     {
-        dce_alert(GID_DCE2, DCE2_CL_BAD_MAJOR_VERSION, (dce2CommonStats*)&dce2_udp_stats);
+        dce_alert(GID_DCE2, DCE2_CL_BAD_MAJOR_VERSION, (dce2CommonStats*)&dce2_udp_stats, *sd);
         return DCE2_RET__ERROR;
     }
 
     if (DceRpcClPduType(cl_hdr) >= DCERPC_PDU_TYPE__MAX)
     {
-        dce_alert(GID_DCE2, DCE2_CL_BAD_PDU_TYPE, (dce2CommonStats*)&dce2_udp_stats);
+        dce_alert(GID_DCE2, DCE2_CL_BAD_PDU_TYPE, (dce2CommonStats*)&dce2_udp_stats, *sd);
         return DCE2_RET__ERROR;
     }
 
@@ -349,7 +348,7 @@ static void DCE2_ClRequest(DCE2_SsnData* sd, DCE2_ClActTracker* at, const DceRpc
     sd->ropts.iface_vers = DceRpcClIfaceVers(cl_hdr);
     sd->ropts.opnum = DceRpcClOpnum(cl_hdr);
     sd->ropts.stub_data = (const uint8_t*)cl_hdr + sizeof(DceRpcClHdr);
-    DceEndianness* endianness = (DceEndianness*)sd->wire_pkt->endianness;
+    DceEndianness* endianness = (DceEndianness*)DetectionEngine::get_current_packet()->endianness;
     endianness->hdr_byte_order = DceRpcClByteOrder(cl_hdr);
     endianness->data_byte_order = DceRpcClByteOrder(cl_hdr);
     DCE2_Detect(sd);
@@ -385,8 +384,6 @@ static void DCE2_ClHandleFrag(DCE2_SsnData* sd, DCE2_ClActTracker* at, const Dce
     DCE2_ClFragNode* fn;
     uint16_t frag_len;
     int status;
-
-    Profile profile(dce2_udp_pstat_cl_frag);
 
     /* If the frag length is less than data length there might be authentication
      * data that we don't want to include, otherwise just set to data len */
@@ -486,7 +483,7 @@ static void DCE2_ClHandleFrag(DCE2_SsnData* sd, DCE2_ClActTracker* at, const Dce
     sd->ropts.first_frag = DceRpcClFirstFrag(cl_hdr);
     DCE2_CopyUuid(&sd->ropts.iface, &ft->iface, DCERPC_BO_FLAG__NONE);
     sd->ropts.iface_vers = ft->iface_vers;
-    DceEndianness* endianness = (DceEndianness*)sd->wire_pkt->endianness;
+    DceEndianness* endianness = (DceEndianness*)DetectionEngine::get_current_packet()->endianness;
     endianness->hdr_byte_order = DceRpcClByteOrder(cl_hdr);
 
     if (ft->data_byte_order != DCE2_SENTINEL)
@@ -548,8 +545,6 @@ static void DCE2_ClFragReassemble(
     DCE2_ClFragNode* fnode;
     uint32_t stub_len = 0;
 
-    Profile profile(dce2_udp_pstat_cl_reass);
-
     for (fnode = (DCE2_ClFragNode*)DCE2_ListFirst(ft->frags);
         fnode != nullptr;
         fnode = (DCE2_ClFragNode*)DCE2_ListNext(ft->frags))
@@ -558,12 +553,12 @@ static void DCE2_ClFragReassemble(
             break;
 
         memcpy(const_cast<uint8_t*>(rdata), fnode->frag_data, fnode->frag_len);
-        DCE2_MOVE(rdata, rlen, fnode->frag_len);
+        dce2_move(rdata, rlen, fnode->frag_len);
         stub_len += fnode->frag_len;
     }
 
-    Packet* rpkt = DCE2_GetRpkt(
-        sd->wire_pkt, DCE2_RPKT_TYPE__UDP_CL_FRAG, dce2_cl_rbuf, stub_len);
+    Packet* rpkt = DCE2_GetRpkt(DetectionEngine::get_current_packet(),
+        DCE2_RPKT_TYPE__UDP_CL_FRAG, dce2_cl_rbuf, stub_len);
 
     if ( !rpkt )
         return;
@@ -577,7 +572,7 @@ static void DCE2_ClFragReassemble(
     sd->ropts.first_frag = 1;
     DCE2_CopyUuid(&sd->ropts.iface, &ft->iface, DCERPC_BO_FLAG__NONE);
     sd->ropts.iface_vers = ft->iface_vers;
-    DceEndianness* endianness = (DceEndianness*)sd->wire_pkt->endianness;
+    DceEndianness* endianness = (DceEndianness*)DetectionEngine::get_current_packet()->endianness;
     endianness->hdr_byte_order = DceRpcClByteOrder(cl_hdr);
 
     if (ft->data_byte_order != DCE2_SENTINEL)

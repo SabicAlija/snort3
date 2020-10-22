@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -44,78 +44,68 @@ struct SfIp;
 class FlowCache;
 
 enum class PruneReason : uint8_t;
+enum class FlowDeleteState : uint8_t;
 
 class FlowControl
 {
 public:
-    FlowControl();
+    FlowControl(const FlowCacheConfig& fc);
     ~FlowControl();
 
-public:
-    bool process(PktType, snort::Packet*);
+    void set_flow_cache_config(const FlowCacheConfig& cfg);
+    const FlowCacheConfig& get_flow_cache_config() const;
+    void init_proto(PktType, snort::InspectSsnFunc);
+    void init_exp(uint32_t max);
+    unsigned get_flows_allocated() const;
 
+    bool process(PktType, snort::Packet*, bool* new_flow = nullptr);
     snort::Flow* find_flow(const snort::FlowKey*);
     snort::Flow* new_flow(const snort::FlowKey*);
-
-    void init_proto(PktType, const FlowConfig&, snort::InspectSsnFunc);
-    void init_exp(uint32_t max);
-
-    void delete_flow(const snort::FlowKey*);
-    void delete_flow(snort::Flow*, PruneReason);
-    void purge_flows(PktType);
+    void release_flow(const snort::FlowKey*);
+    void release_flow(snort::Flow*, PruneReason);
+    void purge_flows();
+    unsigned delete_flows(unsigned num_to_delete);
     bool prune_one(PruneReason, bool do_cleanup);
-
+    snort::Flow* stale_flow_cleanup(FlowCache*, snort::Flow*, snort::Packet*);
     void timeout_flows(time_t cur_time);
-
-    bool expected_flow(snort::Flow*, snort::Packet*);
+    void check_expected_flow(snort::Flow*, snort::Packet*);
     bool is_expected(snort::Packet*);
 
-    int add_expected(
+    int add_expected_ignore(
         const snort::Packet* ctrlPkt, PktType, IpProtocol,
         const snort::SfIp *srcIP, uint16_t srcPort,
         const snort::SfIp *dstIP, uint16_t dstPort,
         char direction, snort::FlowData*);
 
-    int add_expected(
-        const snort::Packet* ctrlPkt, PktType, IpProtocol,
-        const snort::SfIp *srcIP, uint16_t srcPort,
-        const snort::SfIp *dstIP, uint16_t dstPort,
-        SnortProtocolId snort_protocol_id, snort::FlowData*);
+    int add_expected(const snort::Packet* ctrlPkt, PktType, IpProtocol, const snort::SfIp *srcIP,
+        uint16_t srcPort, const snort::SfIp *dstIP, uint16_t dstPort,
+        SnortProtocolId snort_protocol_id, snort::FlowData*, bool swap_app_direction = false);
 
-    PegCount get_flows(PktType pt)
-    { return proto[to_utype(pt)].num_flows; }
+    class ExpectCache* get_exp_cache()
+    { return exp_cache; }
 
-    PegCount get_total_prunes(PktType) const;
-    PegCount get_prunes(PktType, PruneReason) const;
+    PegCount get_flows()
+    { return num_flows; }
 
+    PegCount get_total_prunes() const;
+    PegCount get_prunes(PruneReason) const;
+    PegCount get_total_deletes() const;
+    PegCount get_deletes(FlowDeleteState state) const;
     void clear_counts();
 
 private:
-    FlowCache* get_cache(PktType pt)
-    { return proto[to_utype(pt)].cache; }
-
-    const FlowCache* get_cache(PktType pt) const
-    { return proto[to_utype(pt)].cache; }
-
     void set_key(snort::FlowKey*, snort::Packet*);
-
     unsigned process(snort::Flow*, snort::Packet*);
     void preemptive_cleanup();
+    void update_stats(snort::Flow*, snort::Packet*);
 
 private:
-    struct
-    {
-        FlowCache* cache = nullptr;
-        snort::Flow* mem = nullptr;
-        snort::InspectSsnFunc get_ssn = nullptr;
-        PegCount num_flows = 0;
-    } proto[to_utype(PktType::MAX)];
-
+    snort::InspectSsnFunc get_proto_session[to_utype(PktType::MAX)] = {};
+    PegCount num_flows = 0;
+    FlowCache* cache = nullptr;
+    snort::Flow* mem = nullptr;
     class ExpectCache* exp_cache = nullptr;
     PktType last_pkt_type = PktType::NONE;
-
-    std::vector<PktType> types;
-    unsigned next = 0;
 };
 
 #endif

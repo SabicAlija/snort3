@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_normalizers.h author davis mcpherson <davmcphe@@cisco.com>
+// tcp_normalizers.h author davis mcpherson <davmcphe@cisco.com>
 // Created on: Sep 22, 2015
 
 #ifndef TCP_NORMALIZERS_H
@@ -30,7 +30,14 @@ class TcpStreamSession;
 class TcpNormalizerFactory
 {
 public:
-    static TcpNormalizer* create(StreamPolicy);
+    static void initialize();
+    static void term();
+    static TcpNormalizer* get_instance(StreamPolicy);
+
+private:
+    TcpNormalizerFactory() = delete;
+
+    static TcpNormalizer* normalizers[StreamPolicy::OS_END_OF_LIST];
 };
 
 class TcpNormalizerPolicy
@@ -41,7 +48,7 @@ public:
 
     void init(StreamPolicy os, TcpStreamSession* ssn, TcpStreamTracker* trk, TcpStreamTracker* peer);
     void reset()
-    { init(StreamPolicy::OS_INVALID, nullptr, nullptr, nullptr); }
+    { init(StreamPolicy::OS_DEFAULT, nullptr, nullptr, nullptr); }
 
     bool packet_dropper(TcpSegmentDescriptor& tsd, NormFlags nflags)
     { return norm->packet_dropper(tns, tsd, nflags); }
@@ -61,8 +68,8 @@ public:
     void ecn_tracker(const snort::tcp::TCPHdr* tcph, bool req3way)
     { norm->ecn_tracker(tns, tcph, req3way); }
 
-    void ecn_stripper(snort::Packet* p)
-    { norm->ecn_stripper(tns, p); }
+    void ecn_stripper(TcpSegmentDescriptor& tsd)
+    { norm->ecn_stripper(tns, tsd); }
 
     uint32_t get_stream_window(TcpSegmentDescriptor& tsd)
     { return norm->get_stream_window(tns, tsd); }

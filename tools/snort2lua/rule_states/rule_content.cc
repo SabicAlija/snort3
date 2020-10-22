@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,8 +23,8 @@
 
 #include "conversion_state.h"
 #include "helpers/converter.h"
-#include "rule_states/rule_api.h"
 #include "helpers/s2l_util.h"
+#include "rule_api.h"
 
 namespace rules
 {
@@ -87,7 +87,7 @@ bool Content<option_name>::parse_options(
         rule_api.add_suboption("length", val);
 
     else if (keyword == "rawbytes")
-        add_sticky_buffer(data_stream, "pkt_data");
+        add_sticky_buffer(data_stream, "raw_data");
 
     else if (keyword == "http_client_body")
         add_sticky_buffer(data_stream, "http_client_body");

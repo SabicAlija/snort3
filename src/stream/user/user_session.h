@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -48,6 +48,7 @@ private:
     unsigned len;
     unsigned offset;
     unsigned used;
+    unsigned size;
     uint8_t data[1];
 };
 
@@ -75,6 +76,7 @@ class UserSession : public Session
 {
 public:
     UserSession(snort::Flow*);
+    ~UserSession() override;
 
     bool setup(snort::Packet*) override;
     void clear() override;
@@ -98,8 +100,6 @@ private:
     void start(snort::Packet*, snort::Flow*);
     void update(snort::Packet*, snort::Flow*);
     void end(snort::Packet*, snort::Flow*);
-
-    void update_direction(char dir, const snort::SfIp*, uint16_t port) override;
 
     bool add_alert(snort::Packet*, uint32_t gid, uint32_t sid) override;
     bool check_alerted(snort::Packet*, uint32_t gid, uint32_t sid) override;

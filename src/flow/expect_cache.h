@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -95,10 +95,10 @@ public:
     ExpectCache(const ExpectCache&) = delete;
     ExpectCache& operator=(const ExpectCache&) = delete;
 
-    int add_flow(const snort::Packet *ctrlPkt, PktType, IpProtocol,
-        const snort::SfIp* cliIP, uint16_t cliPort,
-        const snort::SfIp* srvIP, uint16_t srvPort,
-        char direction, snort::FlowData*, SnortProtocolId snort_protocol_id = UNKNOWN_PROTOCOL_ID);
+    int add_flow(const snort::Packet *ctrlPkt, PktType, IpProtocol, const snort::SfIp* cliIP,
+        uint16_t cliPort, const snort::SfIp* srvIP, uint16_t srvPort, char direction,
+        snort::FlowData*, SnortProtocolId snort_protocol_id = UNKNOWN_PROTOCOL_ID,
+        bool swap_app_direction = false);
 
     bool is_expected(snort::Packet*);
     bool check(snort::Packet*, snort::Flow*);
@@ -109,7 +109,7 @@ public:
     unsigned long get_overflows() { return overflows; }
 
 private:
-    void prune();
+    void prune_lru();
 
     ExpectNode* get_node(snort::FlowKey&, bool&);
     snort::ExpectFlow* get_flow(ExpectNode*, uint32_t, int16_t);
@@ -120,10 +120,13 @@ private:
 private:
     class ZHash* hash_table;
     ExpectNode* nodes;
-    snort::ExpectFlow* pool, * free_list;
+    snort::ExpectFlow* pool;
+    snort::ExpectFlow* free_list;
 
-    unsigned long expects, realized;
-    unsigned long prunes, overflows;
+    unsigned long expects = 0;
+    unsigned long realized = 0;
+    unsigned long prunes = 0;
+    unsigned long overflows = 0;
 };
 
 #endif

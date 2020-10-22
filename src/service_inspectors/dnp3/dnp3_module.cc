@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,8 +23,6 @@
 #endif
 
 #include "dnp3_module.h"
-
-#include "log/messages.h"
 
 #include "dnp3.h"
 
@@ -101,12 +99,3 @@ void Dnp3Module::get_data(dnp3ProtoConf& dnp3_config)
 {
     dnp3_config.check_crc = config.check_crc;
 }
-
-void print_dnp3_conf(dnp3ProtoConf& config)
-{
-    LogMessage("DNP3 config: \n");
-    LogMessage("    Check CRC: %s\n",
-        config.check_crc ?
-        "ENABLED" : "DISABLED");
-}
-

@@ -1,6 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
-// Copyright (C) 2004-2013 Sourcefire, Inc.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,8 +19,11 @@
 #ifndef IPS_FLOWBITS_H
 #define IPS_FLOWBITS_H
 
-void FlowbitResetCounts();
-int FlowBits_SetOperation(void*);
+#include <string>
+#include <vector>
+
+bool flowbits_setter(void*);
+void get_flowbits_dependencies(void*, bool& set, std::vector<std::string>& bits);
 
 #endif
 

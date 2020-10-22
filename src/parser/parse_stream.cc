@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -403,51 +403,51 @@ struct State
 
 static const State fsm[] =
 {
-    { -1, 0, TT_NONE,    FSM_ERR, nullptr,    "" },
-    { 0, 15, TT_LITERAL, FSM_KEY, "include",  "" },
-    { 0,  1, TT_LITERAL, FSM_ACT, nullptr,    "(" },
-    { 1,  8, TT_PUNCT,   FSM_STB, "(",        "(:,;)" },
-    { 1,  2, TT_LITERAL, FSM_PRO, nullptr,    "(" },
-    { 2,  8, TT_PUNCT,   FSM_HDR, "(",        "(:,;)" },
-    { 2,  3, TT_LIST,    FSM_SIP, nullptr,    "" },
-    { 2,  3, TT_LITERAL, FSM_SIP, nullptr,    "" },
-    { 3,  5, TT_LITERAL, FSM_SPX, "->",       nullptr },
-    { 3,  5, TT_LITERAL, FSM_SPX, "<>",       nullptr },
-    { 3,  4, TT_LIST,    FSM_SP,  nullptr,    nullptr },
-    { 3,  4, TT_LITERAL, FSM_SP,  nullptr,    nullptr },
-    { 4,  5, TT_LITERAL, FSM_DIR, nullptr,    nullptr },
-    { 5,  6, TT_LIST,    FSM_DIP, nullptr,    "(" },
-    { 5,  6, TT_LITERAL, FSM_DIP, nullptr,    "(" },
-    { 6,  8, TT_PUNCT,   FSM_DPX, "(",        "(:,;)" },
-    { 6,  7, TT_LIST,    FSM_DP,  nullptr,    "(:,;)" },
-    { 6,  7, TT_LITERAL, FSM_DP,  nullptr,    "(:,;)" },
-    { 7,  8, TT_PUNCT,   FSM_SOB, "(",        nullptr },
-    { 8,  0, TT_PUNCT,   FSM_EOB, ")",        nullptr },
-    { 8, 13, TT_LITERAL, FSM_KEY, "metadata", nullptr },
-    { 8, 16, TT_LITERAL, FSM_KEY, "reference",":;" },
-    { 8,  9, TT_LITERAL, FSM_KEY, nullptr,    nullptr },
-    { 9,  8, TT_PUNCT,   FSM_END, ";",        nullptr },
-    { 9, 10, TT_PUNCT,   FSM_NOP, ":",        nullptr },
-    // we can't allow this because the syntax is squiffy
-    // would prefer to require a ; after the last option
-    // (and delete all the other cases like this too)
-    //{  9,  0, TT_PUNCT,   FSM_EOB, ")",        ""      },
+    { -1,  0, TT_NONE,    FSM_ERR, nullptr,    ""      },
+    {  0, 15, TT_LITERAL, FSM_KEY, "include",  ""      },
+    {  0,  1, TT_LITERAL, FSM_ACT, nullptr,    "("     },
+    {  1,  8, TT_PUNCT,   FSM_STB, "(",        "(:,;)" },
+    {  1,  2, TT_LITERAL, FSM_PRO, nullptr,    "("     },
+    {  2,  8, TT_PUNCT,   FSM_HDR, "(",        "(:,;)" },
+    {  2,  3, TT_LIST,    FSM_SIP, nullptr,    ""      },
+    {  2,  3, TT_LITERAL, FSM_SIP, nullptr,    ""      },
+    {  3,  5, TT_LITERAL, FSM_SPX, "->",       nullptr },
+    {  3,  5, TT_LITERAL, FSM_SPX, "<>",       nullptr },
+    {  3,  4, TT_LIST,    FSM_SP,  nullptr,    nullptr },
+    {  3,  4, TT_LITERAL, FSM_SP,  nullptr,    nullptr },
+    {  4,  5, TT_LITERAL, FSM_DIR, nullptr,    nullptr },
+    {  5,  6, TT_LIST,    FSM_DIP, nullptr,    "("     },
+    {  5,  6, TT_LITERAL, FSM_DIP, nullptr,    "("     },
+    {  6,  8, TT_PUNCT,   FSM_DPX, "(",        "(:,;)" },
+    {  6,  7, TT_LIST,    FSM_DP,  nullptr,    "(:,;)" },
+    {  6,  7, TT_LITERAL, FSM_DP,  nullptr,    "(:,;)" },
+    {  7,  8, TT_PUNCT,   FSM_SOB, "(",        nullptr },
+    {  8,  0, TT_PUNCT,   FSM_EOB, ")",        nullptr },
+    {  8, 13, TT_LITERAL, FSM_KEY, "metadata", nullptr },
+    {  8, 16, TT_LITERAL, FSM_KEY, "reference",":;"    },
+    {  8,  9, TT_LITERAL, FSM_KEY, nullptr,    nullptr },
+    {  9,  8, TT_PUNCT,   FSM_END, ";",        nullptr },
+    {  9, 10, TT_PUNCT,   FSM_NOP, ":",        nullptr },
+ // we can't allow this because the syntax is squiffy
+ // would prefer to require a ; after the last option
+ // (and delete all the other cases like this too)
+ // {  9,  0, TT_PUNCT,   FSM_EOB, ")",        ""      },
     { 10, 12, TT_STRING,  FSM_OPT, nullptr,    nullptr },
     { 10, 11, TT_LITERAL, FSM_OPT, nullptr,    nullptr },
     { 11, 12, TT_STRING,  FSM_VAL, nullptr,    nullptr },
     { 11, 12, TT_LITERAL, FSM_VAL, nullptr,    nullptr },
     { 11,  8, TT_PUNCT,   FSM_END, ";",        nullptr },
-    { 11,  0, TT_PUNCT,   FSM_EOB, ")",        "" },
+    { 11,  0, TT_PUNCT,   FSM_EOB, ")",        ""      },
     { 11, 10, TT_PUNCT,   FSM_SET, ",",        nullptr },
     { 12,  8, TT_PUNCT,   FSM_END, ";",        nullptr },
-    { 12,  0, TT_PUNCT,   FSM_EOB, ")",        "" },
+    { 12,  0, TT_PUNCT,   FSM_EOB, ")",        ""      },
     { 12, 10, TT_PUNCT,   FSM_SET, ",",        nullptr },
     { 13, 14, TT_PUNCT,   FSM_NOP, ":",        nullptr },
     { 14,  8, TT_PUNCT,   FSM_END, ";",        "(:,;)" },
     { 14, 14, TT_NONE,    FSM_SET, ",",        nullptr },
     { 14, 14, TT_NONE,    FSM_ADD, nullptr,    nullptr },
     { 15,  0, TT_LITERAL, FSM_INC, nullptr,    nullptr },
-    { 16, 14, TT_PUNCT,   FSM_NOP, ":",        ";" },
+    { 16, 14, TT_PUNCT,   FSM_NOP, ":",        ";"     },
 };
 
 static const State* get_state(int num, TokenType type, const string& tok)
@@ -473,23 +473,18 @@ static const State* get_state(int num, TokenType type, const string& tok)
 struct RuleParseState
 {
     RuleTreeNode rtn;
-    OptTreeNode* otn;
+    OptTreeNode* otn = nullptr;
 
     string key;
     string opt;
     string val;
 
-    bool tbd;
-
-    RuleParseState()
-    { otn = nullptr; }
+    bool tbd = false;
 };
-
-static void parse_body(const char*, RuleParseState&, struct snort::SnortConfig*);
 
 static bool exec(
     FsmAction act, string& tok,
-    RuleParseState& rps, snort::SnortConfig* sc)
+    RuleParseState& rps, SnortConfig* sc)
 {
     switch ( act )
     {
@@ -543,16 +538,9 @@ static bool exec(
         if ( rps.tbd )
             exec(FSM_END, tok, rps, sc);
 
-        if ( const char* extra = parse_rule_close(sc, rps.rtn, rps.otn) )
-        {
-            IpsManager::reset_options();
-            parse_body(extra, rps, sc);
-        }
-        else
-        {
-            rps.otn = nullptr;
-            rules++;
-        }
+        parse_rule_close(sc, rps.rtn, rps.otn);
+        rps.otn = nullptr;
+        rules++;
         break;
     }
     case FSM_KEY:
@@ -624,40 +612,7 @@ static int get_escape(const string& s)
     return 1;      // escape, option goes to "
 }
 
-// parse_body() is called at the end of a stub rule to parse the detection
-// options in an so rule.  similar to parse_stream() except we start in a
-// different state.
-static void parse_body(const char* extra, RuleParseState& rps, snort::SnortConfig* sc)
-{
-    stringstream is(extra);
-
-    string tok;
-    TokenType type;
-    int esc = 1;
-
-    int num = 8;
-    const char* punct = "(:,;)";
-
-    while ( (type = get_token(is, tok, punct, esc)) )
-    {
-        ++tokens;
-        const State* s = get_state(num, type, tok);
-
-#ifdef TRACER
-        printf("%d: %s = '%s' -> %s\n",
-            num, toks[type], tok.c_str(), acts[s->action]);
-#endif
-        exec(s->action, tok, rps, sc);
-
-        num = s->next;
-        esc = get_escape(rps.key);
-
-        if ( s->punct )
-            punct = s->punct;
-    }
-}
-
-void parse_stream(istream& is, snort::SnortConfig* sc)
+void parse_stream(istream& is, SnortConfig* sc)
 {
     string tok;
     TokenType type;

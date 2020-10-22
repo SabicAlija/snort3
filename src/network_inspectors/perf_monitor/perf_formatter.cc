@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,11 +28,11 @@ using namespace std;
 
 void PerfFormatter::register_section(const string& name)
 {
-    types.push_back(vector<FormatterType>());
-    values.push_back(vector<FormatterValue>());
+    types.emplace_back(vector<FormatterType>());
+    values.emplace_back(vector<FormatterValue>());
 
-    section_names.push_back(name);
-    field_names.push_back(vector<string>());
+    section_names.emplace_back(name);
+    field_names.emplace_back(vector<string>());
 
     last_section++;
 }
@@ -42,10 +42,10 @@ void PerfFormatter::register_field(const string& name, PegCount* val)
     FormatterValue fv;
     fv.pc = val;
 
-    values[last_section].push_back(fv);
-    types[last_section].push_back(FT_PEG_COUNT);
+    values[last_section].emplace_back(fv);
+    types[last_section].emplace_back(FT_PEG_COUNT);
 
-    field_names[last_section].push_back(name);
+    field_names[last_section].emplace_back(name);
 }
 
 void PerfFormatter::register_field(const string& name, const char* val)
@@ -53,10 +53,10 @@ void PerfFormatter::register_field(const string& name, const char* val)
     FormatterValue fv;
     fv.s = val;
 
-    values[last_section].push_back(fv);
-    types[last_section].push_back(FT_STRING);
+    values[last_section].emplace_back(fv);
+    types[last_section].emplace_back(FT_STRING);
 
-    field_names[last_section].push_back(name);
+    field_names[last_section].emplace_back(name);
 }
 
 void PerfFormatter::register_field(const string& name, vector<PegCount>* val)
@@ -64,9 +64,9 @@ void PerfFormatter::register_field(const string& name, vector<PegCount>* val)
     FormatterValue fv;
     fv.ipc = val;
 
-    values[last_section].push_back(fv);
-    types[last_section].push_back(FT_IDX_PEG_COUNT);
+    values[last_section].emplace_back(fv);
+    types[last_section].emplace_back(FT_IDX_PEG_COUNT);
 
-    field_names[last_section].push_back(name);
+    field_names[last_section].emplace_back(name);
 }
 

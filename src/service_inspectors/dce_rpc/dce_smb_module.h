@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,17 +25,16 @@
 #include "framework/module.h"
 #include "dce_list.h"
 
+namespace snort
+{
+class Trace;
 struct SnortConfig;
+}
+
+extern THREAD_LOCAL const snort::Trace* dce_smb_trace;
 
 #define DCE2_VALID_SMB_VERSION_FLAG_V1 1
 #define DCE2_VALID_SMB_VERSION_FLAG_V2 2
-
-enum dce2SmbFileInspection
-{
-    DCE2_SMB_FILE_INSPECTION_OFF = 0,
-    DCE2_SMB_FILE_INSPECTION_ON,
-    DCE2_SMB_FILE_INSPECTION_ONLY
-};
 
 enum dce2SmbFingerprintPolicy
 {
@@ -55,18 +54,17 @@ struct dce2SmbShare
 
 struct dce2SmbProtoConf
 {
-    dce2CoProtoConf common;
+    dce2CoProtoConf common; // This member must be first
     dce2SmbFingerprintPolicy smb_fingerprint_policy;
     uint8_t smb_max_chain;
     uint8_t smb_max_compound;
     uint16_t smb_valid_versions_mask;
-    dce2SmbFileInspection smb_file_inspection;
     int16_t smb_file_depth;
     DCE2_List* smb_invalid_shares;
     bool legacy_mode;
+    uint16_t smb_max_credit;
+    size_t memcap;
 };
-
-extern Trace TRACE_NAME(dce_smb);
 
 class Dce2SmbModule : public snort::Module
 {
@@ -82,37 +80,26 @@ public:
     const snort::RuleMap* get_rules() const override;
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
-    snort::ProfileStats* get_profile(unsigned, const char*&, const char*&) const override;
+    snort::ProfileStats* get_profile() const override;
     void get_data(dce2SmbProtoConf&);
 
     Usage get_usage() const override
     { return INSPECT; }
 
+    bool is_bindable() const override
+    { return true; }
+
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
+
 private:
     dce2SmbProtoConf config;
 };
 
-void print_dce2_smb_conf(dce2SmbProtoConf& config);
-
-inline bool DCE2_ScSmbFileInspection(const dce2SmbProtoConf* sc)
-{
-    if (sc == nullptr)
-        return false;
-    return ((sc->smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ON)
-           || (sc->smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ONLY));
-}
-
-inline bool DCE2_ScSmbFileInspectionOnly(const dce2SmbProtoConf* sc)
-{
-    if (sc == nullptr)
-        return false;
-    return sc->smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ONLY;
-}
+void print_dce2_smb_conf(const dce2SmbProtoConf&);
 
 inline int64_t DCE2_ScSmbFileDepth(const dce2SmbProtoConf* sc)
 {
-    if (!DCE2_ScSmbFileInspection(sc))
-        return -1;
     return sc->smb_file_depth;
 }
 
@@ -128,6 +115,31 @@ inline DCE2_List* DCE2_ScSmbInvalidShares(const dce2SmbProtoConf* sc)
     if (sc == nullptr)
         return nullptr;
     return sc->smb_invalid_shares;
+}
+
+#define SMB_DEFAULT_MAX_CREDIT        8192
+#define SMB_DEFAULT_MEMCAP            8388608
+#define SMB_DEFAULT_MAX_COMPOUND_REQ  3
+
+inline uint16_t DCE2_ScSmbMaxCredit(const dce2SmbProtoConf* sc)
+{
+    if (sc == nullptr)
+        return SMB_DEFAULT_MAX_CREDIT;
+    return sc->smb_max_credit;
+}
+
+inline size_t DCE2_ScSmbMemcap(const dce2SmbProtoConf* sc)
+{
+    if (sc == nullptr)
+        return SMB_DEFAULT_MEMCAP;
+    return sc->memcap;
+}
+
+inline uint16_t DCE2_ScSmbMaxCompound(const dce2SmbProtoConf* sc)
+{
+    if (sc == nullptr)
+        return SMB_DEFAULT_MAX_COMPOUND_REQ;
+    return sc->smb_max_compound;
 }
 
 inline bool DCE2_GcSmbFingerprintClient(const dce2SmbProtoConf* sc)

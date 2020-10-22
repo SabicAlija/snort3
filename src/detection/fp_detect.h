@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 // matches trigger rule tree evaluation.
 
 #include "main/thread.h"
+#include "profiler/profiler_defs.h"
 
 #define REBUILD_FLAGS (PKT_REBUILT_FRAG | PKT_REBUILT_STREAM)
 
@@ -39,17 +40,20 @@ class IpsContext;
 struct Packet;
 struct ProfileStats;
 }
+
+class Cursor;
 struct PortGroup;
 struct OptTreeNode;
 
+extern THREAD_LOCAL snort::ProfileStats mpsePerfStats;
 extern THREAD_LOCAL snort::ProfileStats rulePerfStats;
-extern THREAD_LOCAL snort::ProfileStats ruleRTNEvalPerfStats;
-extern THREAD_LOCAL snort::ProfileStats ruleOTNEvalPerfStats;
-extern THREAD_LOCAL snort::ProfileStats ruleNFPEvalPerfStats;
 
 struct RuleTreeNode;
 int fpLogEvent(const RuleTreeNode*, const OptTreeNode*, snort::Packet*);
-int fpEvalRTN(RuleTreeNode*, snort::Packet*, int check_ports);
+bool fp_eval_rtn(RuleTreeNode*, snort::Packet*, int check_ports);
+int fp_eval_option(void*, Cursor&, snort::Packet*);
+
+#define MAX_NUM_RULE_TYPES 16   // max number of allowed rule types
 
 /*
 **  This define is for the number of unique events
@@ -66,9 +70,9 @@ int fpEvalRTN(RuleTreeNode*, snort::Packet*, int check_ports);
 struct MatchInfo
 {
     const OptTreeNode* MatchArray[MAX_EVENT_MATCH];
-    int iMatchCount;
-    int iMatchIndex;
-    int iMatchMaxLen;
+    unsigned iMatchCount;
+    unsigned iMatchIndex;
+    unsigned iMatchMaxLen;
 };
 
 /*
@@ -81,28 +85,18 @@ struct MatchInfo
 */
 struct OtnxMatchData
 {
-    PortGroup* pg;
-    snort::Packet* p;
-
-    const uint8_t* data;
-    unsigned size;
-
-    int check_ports;
-    bool have_match;
-    bool do_fp;
-
     MatchInfo* matchInfo;
-    int iMatchInfoArraySize;
+    bool have_match;
 };
 
-int fpAddMatch(OtnxMatchData*, int pLen, const OptTreeNode*);
+int fpAddMatch(OtnxMatchData*, const OptTreeNode*);
 
 void fp_set_context(snort::IpsContext&);
 void fp_clear_context(snort::IpsContext&);
 
-void fp_local(snort::Packet*);
-void fp_offload(snort::Packet*);
-void fp_onload(snort::Packet*);
+void fp_full(snort::Packet*);
+void fp_partial(snort::Packet*);
+void fp_complete(snort::Packet*, bool search = false);
 
 #endif
 

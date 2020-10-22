@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -41,6 +41,7 @@ typedef struct
 
 static IP_entry ip_lists[] =
 {
+// __STRDUMP_DISABLE__
     { "192.168.0.1",4 },
     { "2.16.0.1", 100 },
     { "12.16.0.1", 500 },
@@ -55,6 +56,7 @@ static IP_entry ip_lists[] =
     { "ffee:ddcc:bbaa:9988:7766:5544:3322:1100/32", 121 },
     { "1001:db8:85a3::/29", 122 },
     { "255.255.255.255", 0 }
+// __STRDUMP_ENABLE__
 };
 
 //---------------------------------------------------------------

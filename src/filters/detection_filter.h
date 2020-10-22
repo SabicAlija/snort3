@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,8 +36,8 @@ struct SfIp;
 
 struct DetectionFilterConfig
 {
+    unsigned memcap;
     int count;
-    int memcap;
     int enabled;
 };
 
@@ -46,8 +46,6 @@ void DetectionFilterConfigFree(DetectionFilterConfig*);
 
 void detection_filter_init(DetectionFilterConfig*);
 void detection_filter_term();
-
-void detection_filter_print_config(DetectionFilterConfig*);
 
 int detection_filter_test(void*, const snort::SfIp* sip, const snort::SfIp* dip, long curtime);
 struct THD_NODE* detection_filter_create(DetectionFilterConfig*, struct THDX_STRUCT*);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -24,12 +24,14 @@
 
 #include <pcap.h>
 
+#include "detection/ips_context.h"
 #include "framework/logger.h"
 #include "framework/module.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
-#include "protocols/packet.h"
 #include "packet_io/sfdaq.h"
+#include "packet_io/sfdaq_config.h"
+#include "protocols/packet.h"
 #include "utils/util.h"
 
 using namespace snort;
@@ -74,7 +76,7 @@ static void TcpdumpRollLogFile(LtdConfig*);
 
 static const Parameter s_params[] =
 {
-    { "limit", Parameter::PT_INT, "0:", "0",
+    { "limit", Parameter::PT_INT, "0:maxSZ", "0",
       "set maximum size in MB before rollover (0 is unlimited)" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -92,16 +94,16 @@ public:
     bool begin(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    unsigned long limit;
+    size_t limit = 0;
 };
 
 bool TcpdumpModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("limit") )
-        limit = v.get_long() * 1024 * 1024;
+        limit = v.get_size() * 1024 * 1024;
 
     else
         return false;
@@ -119,23 +121,27 @@ bool TcpdumpModule::begin(const char*, int, SnortConfig*)
 // api stuff
 //-------------------------------------------------------------------------
 
-static inline size_t SizeOf(const DAQ_PktHdr_t* pkth)
+static inline size_t SizeOf(const Packet* p)
 {
-    return PCAP_PKT_HDR_SZ + pkth->caplen;
+    return PCAP_PKT_HDR_SZ + p->pktlen;
 }
 
 static void LogTcpdumpSingle(
     LtdConfig* data, Packet* p, const char*, Event*)
 {
-    size_t dumpSize = SizeOf(p->pkth);
+    size_t dumpSize = SizeOf(p);
 
     if ( data->limit && (context.size + dumpSize > data->limit) )
         TcpdumpRollLogFile(data);
 
-    pcap_dump((u_char*)context.dumpd, reinterpret_cast<const struct pcap_pkthdr*>(p->pkth), p->pkt);
+    struct pcap_pkthdr pcaphdr;
+    pcaphdr.ts = p->pkth->ts;
+    pcaphdr.caplen = p->pktlen;
+    pcaphdr.len = p->pkth->pktlen;
+    pcap_dump((uint8_t*)context.dumpd, &pcaphdr, p->pkt);
     context.size += dumpSize;
 
-    if (!SnortConfig::line_buffered_logging())  // FIXIT-L misnomer
+    if (!p->context->conf->line_buffered_logging())  // FIXIT-L misnomer
     {
         fflush( (FILE*)context.dumpd);
     }
@@ -159,7 +165,7 @@ static void TcpdumpInitLogFile(LtdConfig*, bool no_timestamp)
     if(!no_timestamp)
     {
         char timestamp[16];
-        snprintf(timestamp, sizeof(timestamp), ".%lu", context.lastTime);
+        snprintf(timestamp, sizeof(timestamp), ".%lu", (unsigned long)context.lastTime);
         filename += timestamp;
     }
 
@@ -173,7 +179,7 @@ static void TcpdumpInitLogFile(LtdConfig*, bool no_timestamp)
         dlt = DLT_RAW;
 
     pcap_t* pcap;
-    pcap = pcap_open_dead(dlt, SFDAQ::get_snap_len());
+    pcap = pcap_open_dead(dlt, SnortConfig::get_conf()->daq_config->get_mru_size());
 
     if ( !pcap )
         FatalError("%s: can't get pcap context\n", S_NAME);
@@ -267,7 +273,7 @@ PcapLogger::~PcapLogger()
 
 void PcapLogger::open()
 {
-    TcpdumpInitLogFile(config, SnortConfig::output_no_timestamp());
+    TcpdumpInitLogFile(config, SnortConfig::get_conf()->output_no_timestamp());
 }
 
 void PcapLogger::close()
@@ -313,7 +319,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* tcpdump_ctor(SnortConfig*, Module* mod)
+static Logger* tcpdump_ctor(Module* mod)
 { return new PcapLogger((TcpdumpModule*)mod); }
 
 static void tcpdump_dtor(Logger* p)

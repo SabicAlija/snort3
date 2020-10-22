@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,13 +23,12 @@
 
 #include "module.h"
 
+#include "trace/trace.h"
+
 using namespace snort;
 
-static const Parameter defaults[] =
+static const Parameter null_params[] =
 {
-    { "trace", Parameter::PT_INT, nullptr, nullptr,
-      "mask for enabling debug traces in module" },
-
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -53,37 +52,19 @@ void Module::init(const char* s, const char* h)
 {
     name = s;
     help = h;
-    params = &defaults[(sizeof(defaults) / sizeof(Parameter)) - 1];
-    default_params = params;
     list = false;
     num_counts = -1;
+    params = null_params;
 }
 
 Module::Module(const char* s, const char* h)
 { init(s, h); }
 
-Module::Module(const char* s, const char* h, const Parameter* p, bool is_list, Trace* t)
+Module::Module(const char* s, const char* h, const Parameter* p, bool is_list)
 {
     init(s, h);
     list = is_list;
-    trace = t;
     params = p;
-
-    // FIXIT-L: This will not be valid after adding more default options
-    if ( t )
-        default_params = defaults;
-}
-
-bool Module::set(const char*, Value& v, SnortConfig*)
-{
-    if ( v.is("trace") )
-    {
-        if ( trace )
-            *trace = v.get_long();
-    }
-    else
-        return false;
-    return true;
 }
 
 void Module::sum_stats(bool accumulate_now_stats)
@@ -194,12 +175,6 @@ bool Module::verified_end(const char* fqn, int idx, SnortConfig* c)
 {
     table_level--;
     return end(fqn, idx, c);
-}
-
-void Module::enable_trace()
-{
-    if ( trace )
-        *trace = 1;
 }
 
 namespace snort

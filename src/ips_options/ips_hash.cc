@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,7 +27,7 @@
 #include "framework/ips_option.h"
 #include "framework/module.h"
 #include "hash/hashes.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "parser/parse_utils.h"
 #include "profiler/profiler.h"
@@ -98,20 +98,20 @@ private:
 
 uint32_t HashOption::hash() const
 {
-    uint32_t a,b,c;
-    const HashMatchData* hmd = config;
+    uint32_t a = config->negated;
+    uint32_t b = config->relative;
+    uint32_t c = size;
 
-    a = hmd->negated;
-    b = hmd->relative;
-    c = size;
+    mix(a,b,c);
+    a += IpsOption::hash();
 
-    mix_str(a,b,c,hmd->hash.c_str());
+    mix_str(a,b,c,config->hash.c_str());
 
-    a += hmd->length;
-    b += hmd->offset;
-    c += hmd->offset_var;
+    a += config->length;
+    b += config->offset;
+    c += config->offset_var;
 
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -165,8 +165,6 @@ int HashOption::match(Cursor& c)
         pos += offset;
     }
 
-    // FIXIT-H should fail if offset is out of bounds
-    // same for content and possibly others too
     if ( pos < 0 )
         pos = 0;
 
@@ -197,7 +195,7 @@ int HashOption::match(Cursor& c)
 
 IpsOption::EvalStatus HashOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(hash_ps[idx]);
+    RuleProfile profile(hash_ps[idx]);
 
     int found = match(c);
 
@@ -225,7 +223,8 @@ IpsOption::EvalStatus HashOption::eval(Cursor& c, Packet*)
 
 static void parse_hash(HashMatchData* hmd, const char* rule)
 {
-    parse_byte_code(rule, hmd->negated, hmd->hash);
+    if (!parse_byte_code(rule, hmd->negated, hmd->hash))
+        ParseError("Invalid hash");
 }
 
 // FIXIT-L refactor for general use?
@@ -336,7 +335,7 @@ bool HashModule::set(const char*, Value& v, SnortConfig*)
         hmd->relative = true;
 
     else if ( v.is("length") )
-        hmd->length = v.get_long();
+        hmd->length = v.get_uint16();
 
     else
         return false;

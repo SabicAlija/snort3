@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -45,16 +45,18 @@
 
 #include "asn1_util.h"
 
-#include "main/snort_config.h"
+#include "main/thread.h"
 #include "utils/util.h"
+
+using namespace snort;
 
 /*
 **  Macros
 */
-#define SF_ASN1_CLASS(c)   (((u_char)(c)) & SF_ASN1_CLASS_MASK)
-#define SF_ASN1_FLAG(c)    (((u_char)(c)) & SF_ASN1_FLAG_MASK)
-#define SF_ASN1_TAG(c)     (((u_char)(c)) & SF_ASN1_TAG_MASK)
-#define SF_ASN1_LEN_EXT(c) (((u_char)(c)) & SF_BER_LEN_MASK)
+#define SF_ASN1_CLASS(c)   (((uint8_t)(c)) & SF_ASN1_CLASS_MASK)
+#define SF_ASN1_FLAG(c)    (((uint8_t)(c)) & SF_ASN1_FLAG_MASK)
+#define SF_ASN1_TAG(c)     (((uint8_t)(c)) & SF_ASN1_TAG_MASK)
+#define SF_ASN1_LEN_EXT(c) (((uint8_t)(c)) & SF_BER_LEN_MASK)
 
 #define ASN1_OOB(s,e,d)      (!(((s) <= (d)) && ((d) < (e))))
 #define ASN1_FATAL_ERR(e)    ((e) < 0)
@@ -109,26 +111,15 @@ static ASN1_TYPE* asn1_node_alloc()
 **  an ASN.1 decode.  Pass in the max number of nodes for an ASN.1 decode and
 **  we will track that many.
 **
-**  @return integer
+**  @return none
 **
-**  @retval ASN1_OK function successful
-**  @retval ASN1_ERR_MEM_ALLOC memory allocation failed
-**  @retval ASN1_ERR_INVALID_ARG invalid argument
 */
-void asn1_init_mem(snort::SnortConfig* sc)
+void asn1_init_mem(int asn1_mem)
 {
-    int num_nodes;
+    asn1_config.num_nodes = asn1_mem;
 
-    if (sc->asn1_mem != 0)
-        num_nodes = sc->asn1_mem;
-    else
-        num_nodes = 256;
-
-    if (num_nodes <= 0)
-        return;
-
-    asn1_config.mem = (ASN1_TYPE*)snort_calloc(num_nodes, sizeof(ASN1_TYPE));
-    asn1_config.num_nodes = num_nodes;
+    if (asn1_config.num_nodes > 0)
+        asn1_config.mem = (ASN1_TYPE*)snort_calloc(asn1_config.num_nodes, sizeof(ASN1_TYPE));
     node_index = 0;
 }
 
@@ -143,7 +134,7 @@ void asn1_init_mem(snort::SnortConfig* sc)
 **  @return none
 **
 */
-void asn1_free_mem(snort::SnortConfig*)
+void asn1_free_mem()
 {
     if (asn1_config.mem != nullptr)
     {
@@ -161,7 +152,7 @@ void asn1_free_mem(snort::SnortConfig*)
 **  tag numbers, etc.
 **
 **  @param ASN1_DATA ptr to data
-**  @param u_int ptr to tag num
+**  @param unsigned ptr to tag num
 **
 **  @return integer
 **
@@ -170,10 +161,10 @@ void asn1_free_mem(snort::SnortConfig*)
 **  @retval ASN1_ERR_OOB encoding goes out of bounds
 **  @retval ASN1_ERR_NULL_MEM function arguments are NULL
 */
-static int asn1_decode_tag_num_ext(ASN1_DATA* asn1_data, u_int* tag_num)
+static int asn1_decode_tag_num_ext(ASN1_DATA* asn1_data, unsigned* tag_num)
 {
     int iExtension = 0;
-    u_int new_tag_num;
+    unsigned new_tag_num;
 
     if (!asn1_data || !tag_num)
         return ASN1_ERR_NULL_MEM;
@@ -276,7 +267,7 @@ static int asn1_decode_ident(ASN1_TYPE* asn1_type, ASN1_DATA* asn1_data)
 **  @retval SF_BER_LEN_DEF_SHORT one byte length < 127
 **  @retval SF_BER_LEN_INDEF indeterminate length
 */
-static int asn1_decode_len_type(const u_char* data)
+static int asn1_decode_len_type(const uint8_t* data)
 {
     int iExt;
 
@@ -314,11 +305,11 @@ static int asn1_decode_len_type(const u_char* data)
 **  @retval ASN1_ERR_OOB out of bounds condition
 **  @retval ASN1_OK function successful
 */
-static int asn1_decode_len_ext(ASN1_DATA* asn1_data, u_int* size)
+static int asn1_decode_len_ext(ASN1_DATA* asn1_data, unsigned* size)
 {
     int iBytes;
     int iCtr;
-    u_int new_size;
+    unsigned new_size;
 
     if (!asn1_data || !size)
         return ASN1_ERR_NULL_MEM;
@@ -496,10 +487,10 @@ static int asn1_is_eoc(ASN1_TYPE* asn1)
 **  @retval ASN1_ERR_INVALID_ARG invalid argument
 **  @retval ASN1_ERR_OOB out of bounds
 */
-static int asn1_decode_type(const u_char** data, u_int* len, ASN1_TYPE** asn1_type)
+static int asn1_decode_type(const uint8_t** data, unsigned* len, ASN1_TYPE** asn1_type)
 {
     ASN1_DATA asn1data;
-    u_int uiRawLen;
+    unsigned uiRawLen;
     int iRet;
 
     if (!*data)
@@ -647,15 +638,15 @@ valid:
 **  @retval  ASN1_OK function successful
 **  @retval !ASN1_OK lots of error conditions, figure it out
 */
-int asn1_decode(const u_char* data, u_int len, ASN1_TYPE** asn1_type)
+int asn1_decode(const uint8_t* data, unsigned len, ASN1_TYPE** asn1_type)
 {
     ASN1_TYPE* cur;
     ASN1_TYPE* child = nullptr;
     ASN1_TYPE* indef;
     ASN1_TYPE* asnstack[ASN1_MAX_STACK];
 
-    const u_char* end;
-    u_int con_len;
+    const uint8_t* end;
+    unsigned con_len;
     int index = 0;
     int iRet;
 
@@ -1016,95 +1007,4 @@ int asn1_print_types(ASN1_TYPE* asn1_type, void* user)
 
     return 0;
 }
-
-#ifdef I_WANT_MAIN_DAMMIT
-static int BitStringOverflow(ASN1_TYPE* asn1_type)
-{
-    if (!asn1_type)
-        return 0;
-
-    if (asn1_type->ident.tag == SF_ASN1_TAG_BIT_STR && !asn1_type->ident.flag)
-    {
-        if (((asn1_type->len.size - 1)*8) < (u_int)asn1_type->data[0])
-        {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-/*
-**  Program reads from stdin and decodes the hexadecimal ASN.1 stream
-**  into identifier,len,data.
-*/
-int main(int argc, char** argv)
-{
-    ASN1_TYPE* asn1_type;
-    char line[10000];
-    u_int ctmp;
-    char* buf;
-    int buf_size;
-    int iCtr;
-    int iRet;
-
-    fgets(line, sizeof(line), stdin);
-    buf_size = strlen(line);
-
-    while (buf_size && line[buf_size-1] <= 0x20)
-    {
-        buf_size--;
-        line[buf_size] = 0x00;
-    }
-
-    if (!buf_size)
-    {
-        printf("** No valid characters in data string.\n");
-        return 1;
-    }
-
-    if (buf_size % 2)
-    {
-        printf("** Data must be represent in hex, meaning that there is an "
-            "odd number of characters in the data string.\n");
-        return 1;
-    }
-
-    buf_size >>= 1;
-
-    buf = snort_calloc(buf_size + 1);
-
-    for (iCtr = 0; iCtr < buf_size; iCtr++)
-    {
-        if (!(isxdigit(line[iCtr*2]) && isxdigit(line[(iCtr*2)+1])))
-        {
-            printf("** Data stream is not all hex digits.\n");
-            return 1;
-        }
-
-        sscanf(&line[iCtr*2], "%2x", &ctmp);
-        buf[iCtr] = (char)ctmp;
-    }
-
-    buf[iCtr] = 0x00;
-
-    asn1_init_mem(256);
-
-    iRet = asn1_decode(buf, buf_size, &asn1_type);
-    if (iRet && !asn1_type)
-    {
-        printf("** FAILED\n");
-        return 1;
-    }
-
-    printf("** iRet = %d\n", iRet);
-
-    asn1_print_types(asn1_type, 0);
-
-    snort_free(buf);
-
-    return 0;
-}
-
-#endif
 

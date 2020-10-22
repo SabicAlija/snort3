@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -44,14 +44,14 @@ using namespace std;
 
 static const Parameter s_params[] =
 {
-    { "ayt_attack_thresh", Parameter::PT_INT, "-1:", "-1",
+    { "ayt_attack_thresh", Parameter::PT_INT, "-1:max31", "-1",
       "alert on this number of consecutive Telnet AYT commands" },
 
     { "check_encrypted", Parameter::PT_BOOL, nullptr, "false",
       "check for end of encryption" },
 
     { "encrypted_traffic", Parameter::PT_BOOL, nullptr, "false",
-      "check for encrypted Telnet and FTP" },
+      "check for encrypted Telnet" },
 
     { "normalize", Parameter::PT_BOOL, nullptr, "false",
       "eliminate escape sequences" },
@@ -98,7 +98,7 @@ ProfileStats* TelnetModule::get_profile() const
 bool TelnetModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("ayt_attack_thresh") )
-        conf->ayt_threshold = v.get_long();
+        conf->ayt_threshold = v.get_int32();
 
     else if ( v.is("check_encrypted") )
         conf->detect_encrypted = v.get_bool();

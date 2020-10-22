@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,18 +29,25 @@
 
 #include "conversion_state.h"
 #include "helpers/converter.h"
-#include "rule_states/rule_api.h"
 #include "helpers/s2l_util.h"
+#include "rule_api.h"
 
 namespace rules
 {
 namespace
 {
+
+static const std::string removed_gids[] = { "146" , "147" };
+constexpr uint8_t MAX_GIDS = (sizeof(removed_gids) / sizeof(removed_gids[0]));
+
 class Gid : public ConversionState
 {
 public:
     Gid(Converter& c) : ConversionState(c) { }
     bool convert(std::istringstream& data_stream) override;
+
+private:
+    static bool gids_seen[MAX_GIDS];
 };
 
 class Sid : public ConversionState
@@ -56,12 +63,29 @@ public:
 // Gid
 //
 
+bool Gid::gids_seen[MAX_GIDS];
+
 bool Gid::convert(std::istringstream& data_stream)
 {
     std::string gid = util::get_rule_option_args(data_stream);
+    const std::string old_http_gid("120");
+    bool found = false;
 
-    const std::string old_http_gid("120");  
-    if (gid.compare(old_http_gid) == 0)
+    for ( int i = 0; i < MAX_GIDS; i++ )
+    {
+        if ( gid == removed_gids[i] )
+        {
+            if ( !gids_seen[i] )
+            {
+                rule_api.add_comment("deleted all gid:" + removed_gids[i] + " rules");
+                gids_seen[i] = true;
+            }
+            rule_api.make_rule_a_comment();
+            found = true;
+            break;
+        }
+    }
+    if ( !found && gid.compare(old_http_gid) == 0)
     {
         const std::string nhi_gid("119");
         gid.assign(nhi_gid);
@@ -83,7 +107,7 @@ bool Gid::convert(std::istringstream& data_stream)
 // Sid
 //
 
-void Sid::convert_sid(std::string& sid, std::istringstream& data_stream, RuleApi& rule_api)
+void Sid::convert_sid(std::string& sid, std::istringstream& data_stream, RuleApi& r_api)
 {
     int sid_num;
     try
@@ -92,7 +116,7 @@ void Sid::convert_sid(std::string& sid, std::istringstream& data_stream, RuleApi
     }
     catch (...)
     {
-        rule_api.bad_rule(data_stream, "sid - invalid input, expecting int type");
+        r_api.bad_rule(data_stream, "sid - invalid input, expecting int type");
         return;
     }
     const int sid_offset = 100;

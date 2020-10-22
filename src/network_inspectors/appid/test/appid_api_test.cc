@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,8 +42,83 @@
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
+#include <CppUTestExt/MockSupport.h>
 
 using namespace snort;
+
+static SnortProtocolId dummy_http2_protocol_id = 1;
+
+namespace snort
+{
+
+class Inspector* InspectorManager::get_inspector(const char*, bool, const SnortConfig*)
+{ return &dummy_appid_inspector; }
+
+Packet::Packet(bool) { }
+Packet::~Packet() { }
+
+Packet* DetectionEngine::get_current_packet()
+{
+    static Packet p;
+    return &p;
+}
+
+AppIdSessionApi::AppIdSessionApi(const AppIdSession*, const SfIp&) :
+    StashGenericObject(STASH_GENERIC_OBJECT_APPID) {}
+}
+
+class DummyInspector : public snort::Inspector
+{
+public:
+    void eval(Packet*) override {};
+};
+
+void DataBus::publish(const char*, DataEvent& event, Flow*)
+{
+    AppidEvent* appid_event = (AppidEvent*)&event;
+    char* test_log = (char*)mock().getData("test_log").getObjectPointer();
+    snprintf(test_log, 256, "Published change_bits == %s",
+        appid_event->get_change_bitset().to_string().c_str());
+    mock().actualCall("publish");
+}
+
+void AppIdSession::publish_appid_event(AppidChangeBits& change_bits, const Packet& p, bool, uint32_t)
+{
+    AppidEvent app_event(change_bits, false, 0, this->get_api(), p);
+    DataBus::publish(APPID_EVENT_ANY_CHANGE, app_event, p.flow);
+}
+
+bool SslPatternMatchers::scan_hostname(const uint8_t* server_name, size_t, AppId& client_id, AppId& payload_id)
+{
+    if (((const char*)server_name) == APPID_UT_TLS_HOST)
+    {
+        client_id = APPID_UT_ID + 1;
+        payload_id = APPID_UT_ID + 1;
+    }
+    else
+    {
+        client_id = 0;
+        payload_id = 0;
+    }
+    return true;
+}
+
+bool SslPatternMatchers::scan_cname(const uint8_t* cname, size_t, AppId& client_id, AppId& payload_id)
+{
+    if (((const char*)cname) == APPID_UT_TLS_HOST)
+    {
+        client_id = APPID_UT_ID + 2;;
+        payload_id = APPID_UT_ID + 2;
+    }
+    else
+    {
+        client_id = 0;
+        payload_id = 0;
+    }
+    return true;
+}
+
+void ApplicationDescriptor::set_id(const Packet&, AppIdSession&, AppidSessionDirection, AppId, AppidChangeBits&) { }
 
 const char* AppInfoManager::get_app_name(AppId)
 {
@@ -55,54 +130,130 @@ AppId AppInfoManager::get_appid_by_name(const char*)
     return APPID_UT_ID;
 }
 
-AppInfoManager& app_info_mgr = AppInfoManager::get_instance();
+AppId AppIdSessionApi::get_service_app_id() const
+{
+    return application_ids[APP_PROTOID_SERVICE];
+}
+
+AppId AppIdSessionApi::get_client_app_id(uint32_t) const
+{
+    return application_ids[APP_PROTOID_CLIENT];
+}
+
+AppId AppIdSessionApi::get_payload_app_id(uint32_t) const
+{
+    return application_ids[APP_PROTOID_PAYLOAD];
+}
+
+void AppIdSession::set_ss_application_ids(AppId service_id, AppId client_id, AppId payload_id,
+    AppId misc_id, AppId referred_id, AppidChangeBits& change_bits)
+{
+    if (api.application_ids[APP_PROTOID_SERVICE] != service_id)
+    {
+        api.application_ids[APP_PROTOID_SERVICE] = service_id;
+        change_bits.set(APPID_SERVICE_BIT);
+    }
+    if (api.application_ids[APP_PROTOID_CLIENT] != client_id)
+    {
+        api.application_ids[APP_PROTOID_CLIENT] = client_id;
+        change_bits.set(APPID_CLIENT_BIT);
+    }
+    if (api.application_ids[APP_PROTOID_PAYLOAD] != payload_id)
+    {
+        api.application_ids[APP_PROTOID_PAYLOAD] = payload_id;
+        change_bits.set(APPID_PAYLOAD_BIT);
+    }
+    if (api.application_ids[APP_PROTOID_MISC] != misc_id)
+    {
+        api.application_ids[APP_PROTOID_MISC] = misc_id;
+        change_bits.set(APPID_MISC_BIT);
+    }
+    if (api.application_ids[APP_PROTOID_REFERRED] != referred_id)
+    {
+        api.application_ids[APP_PROTOID_REFERRED] = referred_id;
+        change_bits.set(APPID_REFERRED_BIT);
+    }
+}
+
+void AppIdSession::set_ss_application_ids(AppId client_id, AppId payload_id,
+    AppidChangeBits& change_bits)
+{
+    if (api.application_ids[APP_PROTOID_CLIENT] != client_id)
+    {
+        api.application_ids[APP_PROTOID_CLIENT] = client_id;
+        change_bits.set(APPID_CLIENT_BIT);
+    }
+    if (api.application_ids[APP_PROTOID_PAYLOAD] != payload_id)
+    {
+        api.application_ids[APP_PROTOID_PAYLOAD] = payload_id;
+        change_bits.set(APPID_PAYLOAD_BIT);
+    }
+}
+
+AppIdHttpSession* AppIdSession::get_http_session(uint32_t) const { return nullptr; }
 
 Flow* flow = nullptr;
 AppIdSession* mock_session = nullptr;
 
 TEST_GROUP(appid_api)
 {
+    char test_log[256];
     void setup() override
     {
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
+        mock_init_appid_pegs();
+        SfIp ip;
+        mock_session = new AppIdSession(IpProtocol::TCP, &ip, 1492, dummy_appid_inspector,
+            dummy_appid_inspector.get_ctxt().get_odp_ctxt());
+        pkt_thread_odp_ctxt = &mock_session->get_odp_ctxt();
         flow = new Flow;
         flow->set_flow_data(mock_session);
+        mock().setDataObject("test_log", "char", test_log);
     }
 
     void teardown() override
     {
         delete flow;
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
+        mock().clear();
+        mock_cleanup_appid_pegs();
+        delete &mock_session->get_api();
+        delete mock_session;
     }
 };
 
 TEST(appid_api, get_application_name)
 {
-    const char* app_name = appid_api.get_application_name(1066);
+    AppIdConfig config;
+    AppIdContext ctxt(config);
+    const char* app_name = appid_api.get_application_name(1066, ctxt.get_odp_ctxt());
     STRCMP_EQUAL(app_name, test_app_name);
 }
 
 TEST(appid_api, get_application_id)
 {
-    AppId id = appid_api.get_application_id(test_app_name);
+    AppIdConfig config;
+    AppIdContext ctxt(config);
+    AppId id = appid_api.get_application_id(test_app_name, ctxt);
     CHECK_EQUAL(id, 1492);
 }
 
-// FIXIT - enable this test when consume ha appid api call is fixed
-#ifdef APPID_HA_SUPPORT_ENABLED
 TEST(appid_api, produce_ha_state)
 {
     AppIdSessionHA appHA, cmp_buf;
 
     memset((void*)&appHA, 0, sizeof(appHA));
     memset((void*)&cmp_buf, 0, sizeof(cmp_buf));
-    mock_session->common.flow_type = APPID_FLOW_TYPE_IGNORE;
-    mock_session->common.flags |= APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_HTTP_SESSION;
-    uint32_t val = appid_api.produce_ha_state(flow, (uint8_t*)&appHA);
-    CHECK_TRUE(val == sizeof(appHA));
-    CHECK_TRUE(memcmp(&appHA, &cmp_buf, val) == 0);
-    mock_session->common.flow_type = APPID_FLOW_TYPE_NORMAL;
-    val = appid_api.produce_ha_state(flow, (uint8_t*)&appHA);
+    mock_session->flags |= APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_HTTP_SESSION;
+
+    mock_session->set_tp_app_id(APPID_UT_ID);
+    mock_session->set_service_id(APPID_UT_ID + 1, stub_odp_ctxt);
+    mock_session->client_inferred_service_id = APPID_UT_ID + 2;
+    mock_session->set_port_service_id(APPID_UT_ID + 3);
+    mock_session->set_payload_id(APPID_UT_ID + 4);
+    mock_session->set_tp_payload_app_id(APPID_UT_ID + 5);
+    mock_session->set_client_id(APPID_UT_ID + 6);
+    mock_session->misc_app_id = APPID_UT_ID + 7;
+
+    uint32_t val = appid_api.produce_ha_state(*flow, (uint8_t*)&appHA);
     CHECK_TRUE(val == sizeof(appHA));
     CHECK_TRUE(appHA.appId[0] == APPID_UT_ID);
     CHECK_TRUE(appHA.appId[1] == APPID_UT_ID + 1);
@@ -118,66 +269,125 @@ TEST(appid_api, produce_ha_state)
     mock_flow_data= nullptr;
     SfIp ip;
     ip.pton(AF_INET, "192.168.1.222");
-    val = appid_api.consume_ha_state(flow, (uint8_t*)&appHA, 0, IpProtocol::TCP, &ip, 1066);
+    val = appid_api.consume_ha_state(*flow, (uint8_t*)&appHA, 0, IpProtocol::TCP, &ip, 1066);
+    CHECK_TRUE(val == sizeof(appHA));
+
     AppIdSession* session = (AppIdSession*)flow->get_flow_data(AppIdSession::inspector_id);
     CHECK_TRUE(session);
     CHECK_TRUE(session->get_tp_app_id() == appHA.appId[0]);
-    CHECK_TRUE(session->service.get_id() == appHA.appId[1]);
+    CHECK_TRUE(session->get_service_id() == appHA.appId[1]);
     CHECK_TRUE(session->client_inferred_service_id == appHA.appId[2]);
-    CHECK_TRUE(session->service.get_port_service_id() == appHA.appId[3]);
-    CHECK_TRUE(session->payload.get_id() == appHA.appId[4]);
-    CHECK_TRUE(session->tp_payload_app_id == appHA.appId[5]);
-    CHECK_TRUE(session->client.get_id() == appHA.appId[6]);
+    CHECK_TRUE(session->get_port_service_id() == appHA.appId[3]);
+    CHECK_TRUE(session->get_payload_id() == appHA.appId[4]);
+    CHECK_TRUE(session->get_tp_payload_app_id() == appHA.appId[5]);
+    CHECK_TRUE(session->get_client_id() == appHA.appId[6]);
     CHECK_TRUE(session->misc_app_id == appHA.appId[7]);
     CHECK_TRUE(session->service_disco_state == APPID_DISCO_STATE_FINISHED);
     CHECK_TRUE(session->client_disco_state == APPID_DISCO_STATE_FINISHED);
+    delete &session->get_api();
     delete session;
 
     // test logic when service app is ftp control
     appHA.appId[1] = APP_ID_FTP_CONTROL;
     mock_flow_data= nullptr;
-    val = appid_api.consume_ha_state(flow, (uint8_t*)&appHA, 0, IpProtocol::TCP, &ip, 1066);
+    val = appid_api.consume_ha_state(*flow, (uint8_t*)&appHA, 0, IpProtocol::TCP, &ip, 1066);
+    CHECK_TRUE(val == sizeof(appHA));
+
     session = (AppIdSession*)flow->get_flow_data(AppIdSession::inspector_id);
     CHECK_TRUE(session);
     uint64_t flags = session->get_session_flags(APPID_SESSION_CLIENT_DETECTED |
         APPID_SESSION_NOT_A_SERVICE | APPID_SESSION_SERVICE_DETECTED);
     CHECK_TRUE(flags == (APPID_SESSION_CLIENT_DETECTED | APPID_SESSION_NOT_A_SERVICE
         | APPID_SESSION_SERVICE_DETECTED));
-    CHECK_TRUE(session->service.get_id() == APP_ID_FTP_CONTROL);
+    CHECK_TRUE(session->get_service_id() == APP_ID_FTP_CONTROL);
     CHECK_TRUE(session->service_disco_state == APPID_DISCO_STATE_STATEFUL);
     CHECK_TRUE(session->client_disco_state == APPID_DISCO_STATE_FINISHED);
+    delete &session->get_api();
     delete session;
 }
-#endif
 
-TEST(appid_api, create_appid_session_api)
+TEST(appid_api, ssl_app_group_id_lookup)
 {
-    AppIdSessionApi* appid_session_api = appid_api.create_appid_session_api(*flow);
-    CHECK_TRUE(appid_session_api);
-    appid_api.free_appid_session_api(appid_session_api);
+    mock().expectNCalls(4, "publish");
+    AppId service, client, payload = APP_ID_NONE;
+    bool val = false;
 
-    Flow* old_flow = flow;
-    flow = new Flow;
-    flow->set_flow_data(nullptr);
-    appid_session_api = appid_api.create_appid_session_api(*flow);
-    CHECK_FALSE(appid_session_api);
+    AppidChangeBits change_bits;
+    mock_session->set_ss_application_ids(APPID_UT_ID, APPID_UT_ID, APPID_UT_ID,
+        APPID_UT_ID, APPID_UT_ID, change_bits);
+    val = appid_api.ssl_app_group_id_lookup(flow, nullptr, nullptr, nullptr, nullptr,
+        false, service, client, payload);
+    CHECK_TRUE(val);
+    CHECK_EQUAL(service, APPID_UT_ID);
+    CHECK_EQUAL(client, APPID_UT_ID);
+    CHECK_EQUAL(payload, APPID_UT_ID);
+    STRCMP_EQUAL("Published change_bits == 00000000000000000000", test_log);
 
-    AppIdSession ignore_asd(IpProtocol::TCP, nullptr, 1492, appid_inspector);
-    ignore_asd.common.flow_type = APPID_FLOW_TYPE_IGNORE;
-    flow->set_flow_data(&ignore_asd);
-    appid_session_api = appid_api.create_appid_session_api(*flow);
-    CHECK_FALSE(appid_session_api);
+    service = APP_ID_NONE;
+    client = APP_ID_NONE;
+    payload = APP_ID_NONE;
+    val = appid_api.ssl_app_group_id_lookup(flow, (const char*)APPID_UT_TLS_HOST, (const char*)APPID_UT_TLS_HOST,
+        (const char*)APPID_UT_TLS_HOST, (const char*)APPID_UT_TLS_HOST, false, service, client, payload);
+    CHECK_TRUE(val);
+    CHECK_EQUAL(client, APPID_UT_ID + 1);
+    CHECK_EQUAL(payload, APPID_UT_ID + 1);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_host(), APPID_UT_TLS_HOST);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_first_alt_name(), APPID_UT_TLS_HOST);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_cname(), APPID_UT_TLS_HOST);
+    STRCMP_EQUAL("Published change_bits == 00000000000100011000", test_log);
 
-    delete flow;
-    flow = old_flow;
+    mock_session->tsession->set_tls_host("www.cisco.com", 13, change_bits);
+    mock_session->tsession->set_tls_cname("www.cisco.com", 13, change_bits);
+    mock_session->tsession->set_tls_org_unit("Cisco", 5);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_host(), "www.cisco.com");
+    STRCMP_EQUAL(mock_session->tsession->get_tls_cname(), "www.cisco.com");
+    STRCMP_EQUAL(mock_session->tsession->get_tls_org_unit(), "Cisco");
+    val = appid_api.ssl_app_group_id_lookup(flow, (const char*)"www.google.com",
+        nullptr, (const char*)APPID_UT_TLS_HOST, nullptr, false, service, client, payload);
+    CHECK_TRUE(val);
+    CHECK_EQUAL(client, APPID_UT_ID + 2);
+    CHECK_EQUAL(payload, APPID_UT_ID + 2);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_host(), APPID_UT_TLS_HOST);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_cname(), APPID_UT_TLS_HOST);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_org_unit(), "Cisco");
+    STRCMP_EQUAL("Published change_bits == 00000000000100011000", test_log);
+
+    string host = "";
+    val = appid_api.ssl_app_group_id_lookup(flow, (const char*)(host.c_str()), nullptr,
+        (const char*)APPID_UT_TLS_HOST, (const char*)"Google", false, service, client, payload);
+    CHECK_TRUE(val);
+    CHECK_EQUAL(client, APPID_UT_ID + 2);
+    CHECK_EQUAL(payload, APPID_UT_ID + 2);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_host(), APPID_UT_TLS_HOST);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_cname(), APPID_UT_TLS_HOST);
+    STRCMP_EQUAL(mock_session->tsession->get_tls_org_unit(), "Google");
+    STRCMP_EQUAL("Published change_bits == 00000000000100000000", test_log);
+    mock().checkExpectations();
+}
+
+TEST(appid_api, is_inspection_needed)
+{
+    DummyInspector inspector;
+    inspector.set_service(dummy_http2_protocol_id);
+    dummy_appid_inspector.get_ctxt().config.snort_proto_ids[PROTO_INDEX_HTTP2] =
+        dummy_http2_protocol_id;
+
+    CHECK_TRUE(appid_api.is_inspection_needed(inspector));
+
+    inspector.set_service(dummy_http2_protocol_id + 1);
+    CHECK_FALSE(appid_api.is_inspection_needed(inspector));
+}
+
+TEST(appid_api, is_service_http_type)
+{
+    CHECK_TRUE(appid_api.is_service_http_type(APP_ID_HTTP));
+    CHECK_TRUE(appid_api.is_service_http_type(APP_ID_HTTPS));
+    CHECK_TRUE(appid_api.is_service_http_type(APP_ID_SMTPS));
+    CHECK_FALSE(appid_api.is_service_http_type(APP_ID_SMTP));
 }
 
 int main(int argc, char** argv)
 {
-    mock_init_appid_pegs();
-    mock_session = new AppIdSession(IpProtocol::TCP, nullptr, 1492, appid_inspector);
     int rc = CommandLineTestRunner::RunAllTests(argc, argv);
-    mock_cleanup_appid_pegs();
     return rc;
 }
-

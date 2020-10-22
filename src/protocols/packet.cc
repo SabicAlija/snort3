@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,9 +27,11 @@
 #include "flow/expect_cache.h"
 #include "framework/endianness.h"
 #include "log/obfuscator.h"
+#include "packet_io/active.h"
 #include "managers/codec_manager.h"
 
 #include "packet_manager.h"
+#include "vlan.h"
 
 namespace snort
 {
@@ -51,7 +53,8 @@ Packet::Packet(bool packet_data)
 
     obfuscator = nullptr;
     endianness = nullptr;
-
+    active_inst = new Active();
+    action_inst = nullptr;
     reset();
 }
 
@@ -64,7 +67,7 @@ Packet::~Packet()
         delete pkth;
         delete[] pkt;
     }
-
+    delete active_inst;
     delete[] layers;
 }
 
@@ -72,6 +75,7 @@ void Packet::reset()
 {
     flow = nullptr;
     packet_flags = 0;
+    ts_packet_flags = 0;
     xtradata_mask = 0;
     proto_bits = 0;
     alt_dsize = 0;
@@ -82,6 +86,13 @@ void Packet::reset()
 
     release_helpers();
     ptrs.reset();
+
+    iplist_id = 0;
+    user_inspection_policy_id = 0;
+    user_ips_policy_id = 0;
+    user_network_policy_id = 0;
+    vlan_idx = 0;
+    filtering_state.clear();
 }
 
 void Packet::release_helpers()
@@ -239,6 +250,34 @@ SnortProtocolId Packet::get_snort_protocol_id()
         return context->get_snort_protocol_id();
 
     return flow ? flow->ssn_state.snort_protocol_id : UNKNOWN_PROTOCOL_ID;
+}
+
+uint16_t Packet::get_flow_vlan_id() const
+{
+    uint16_t vid = 0;
+
+    if (flow)
+        vid = flow->key->vlan_tag;
+    else if ( !context->conf->get_vlan_agnostic() and (proto_bits & PROTO_BIT__VLAN) )
+        vid = layer::get_vlan_layer(this)->vid();
+
+    return vid;
+}
+
+bool Packet::is_from_application_client() const
+{ 
+    if (flow)
+        return flow->flags.app_direction_swapped ? is_from_server() : is_from_client();
+    else
+        return is_from_client();
+}
+
+bool Packet::is_from_application_server() const
+{ 
+    if (flow)
+        return flow->flags.app_direction_swapped ? is_from_client() : is_from_server();
+    else
+        return is_from_server();
 }
 
 } // namespace snort

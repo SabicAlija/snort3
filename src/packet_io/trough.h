@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -35,7 +35,7 @@ public:
         SOURCE_DIR         // a directory of sources; often used with filter
     };
 
-    static void set_loop_count(long int c)
+    static void set_loop_count(unsigned c)
     {
         pcap_loop_count = c;
     }
@@ -52,7 +52,7 @@ public:
     {
         return pcap_queue.size();
     }
-    static long get_loop_count()
+    static unsigned get_loop_count()
     {
         return pcap_loop_count;
     }
@@ -65,12 +65,17 @@ private:
         std::string filter;
     };
 
-    static int get_pcaps(std::vector<struct PcapReadObject> &pol);
+    static bool add_pcaps_dir(const std::string& dirname, const std::string& filter);
+    static bool add_pcaps_list_file(const std::string& list_filename, const std::string& filter);
+    static bool add_pcaps_list(const std::string& list);
+    static bool get_pcaps(const std::vector<struct PcapReadObject> &pol);
+
     static std::vector<struct PcapReadObject> pcap_object_list;
     static std::vector<std::string> pcap_queue;
     static std::vector<std::string>::const_iterator pcap_queue_iter;
     static std::string pcap_filter;
-    static long pcap_loop_count;
+
+    static unsigned pcap_loop_count;
     static unsigned file_count;
 };
 

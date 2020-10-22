@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,9 +42,8 @@
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
-#include "parser/mstring.h"
 #include "profiler/profiler.h"
 #include "utils/snort_bounds.h"
 
@@ -94,23 +93,20 @@ private:
 
 uint32_t IsDataAtOption::hash() const
 {
-    uint32_t a,b,c;
-    const IsDataAtData* data = &config;
-
-    a = data->offset;
-    b = data->flags;
-    c = data->offset_var;
+    uint32_t a = config.offset;
+    uint32_t b = config.flags;
+    uint32_t c = config.offset_var;
 
     mix(a,b,c);
-    mix_str(a,b,c,get_name());
-    finalize(a,b,c);
+    a += IpsOption::hash();
 
+    finalize(a,b,c);
     return c;
 }
 
 bool IsDataAtOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const IsDataAtOption& rhs = (const IsDataAtOption&)ips;
@@ -129,12 +125,12 @@ bool IsDataAtOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus IsDataAtOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(isDataAtPerfStats);
+    RuleProfile profile(isDataAtPerfStats);
 
     int offset;
 
     // Get values from byte_extract variables, if present.
-    if (config.offset_var >= 0 && config.offset_var < NUM_IPS_OPTIONS_VARS)
+    if (config.offset_var != IPS_OPTIONS_NO_VAR && config.offset_var < NUM_IPS_OPTIONS_VARS)
     {
         uint32_t value;
         GetVarValueByIndex(&(value), config.offset_var);
@@ -171,13 +167,7 @@ IpsOption::EvalStatus IsDataAtOption::eval(Cursor& c, Packet*)
 
 static void isdataat_parse(const char* data, IsDataAtData* idx)
 {
-    char** toks;
-    int num_toks;
-    char* endp;
-    char* offset;
-
-    toks = mSplit(data, ",", 3, &num_toks, 0);
-    offset = toks[0];
+    const char* offset = data;
 
     if (*offset == '!')
     {
@@ -192,12 +182,14 @@ static void isdataat_parse(const char* data, IsDataAtData* idx)
     /* set how many bytes to process from the packet */
     if (isdigit(offset[0]) || offset[0] == '-')
     {
+        char* endp;
+
+        idx->offset_var = IPS_OPTIONS_NO_VAR;
         idx->offset = strtol(offset, &endp, 10);
-        idx->offset_var = -1;
 
         if (offset == endp)
         {
-            ParseError("unable to parse as byte value %s", toks[0]);
+            ParseError("unable to parse as byte value %s", data);
             return;
         }
 
@@ -206,7 +198,6 @@ static void isdataat_parse(const char* data, IsDataAtData* idx)
             ParseError("isdataat offset greater than max IPV4 packet size");
             return;
         }
-        idx->offset_var = IPS_OPTIONS_NO_VAR;
     }
     else
     {
@@ -217,8 +208,6 @@ static void isdataat_parse(const char* data, IsDataAtData* idx)
             return;
         }
     }
-
-    mSplitFree(&toks,num_toks);
 }
 
 //-------------------------------------------------------------------------
@@ -254,7 +243,7 @@ public:
     { return DETECT; }
 
 public:
-    IsDataAtData data;
+    IsDataAtData data = {};
 };
 
 bool IsDataAtModule::begin(const char*, int, SnortConfig*)

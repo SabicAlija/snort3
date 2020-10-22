@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,19 +31,26 @@
 #include "detection/detection_engine.h"
 #include "detection/fp_config.h"
 #include "detection/fp_create.h"
+#include "dump_config/json_config_output.h"
+#include "dump_config/text_config_output.h"
+#include "file_api/file_service.h"
 #include "filters/detection_filter.h"
 #include "filters/rate_filter.h"
 #include "filters/sfrf.h"
 #include "filters/sfthreshold.h"
+#include "flow/ha_module.h"
 #include "hash/xhash.h"
 #include "helpers/process.h"
 #include "latency/latency_config.h"
 #include "log/messages.h"
+#include "managers/action_manager.h"
 #include "managers/event_manager.h"
 #include "managers/inspector_manager.h"
 #include "managers/ips_manager.h"
 #include "managers/module_manager.h"
 #include "managers/mpse_manager.h"
+#include "managers/plugin_manager.h"
+#include "managers/so_manager.h"
 #include "memory/memory_config.h"
 #include "packet_io/sfdaq.h"
 #include "packet_io/sfdaq_config.h"
@@ -53,13 +60,15 @@
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "sfip/sf_ip.h"
-#include "target_based/sftarget_reader.h"
+#include "main/snort.h"
+#include "target_based/host_attributes.h"
 #include "target_based/snort_protocols.h"
+#include "trace/trace_config.h"
 #include "utils/dnet_header.h"
 #include "utils/util.h"
 #include "utils/util_cstring.h"
 
-#include "snort.h"
+#include "analyzer.h"
 #include "thread_config.h"
 
 using namespace snort;
@@ -78,63 +87,30 @@ using namespace snort;
 #define OUTPUT_U2   "unified2"
 #define OUTPUT_FAST "alert_fast"
 
-THREAD_LOCAL SnortConfig* snort_conf = nullptr;
+static THREAD_LOCAL const SnortConfig* snort_conf = nullptr;
 
 uint32_t SnortConfig::warning_flags = 0;
-static std::vector <std::pair<ScScratchFunc,ScScratchFunc>> scratch_handlers;
+
+static std::vector<ScratchAllocator*> scratch_handlers;
 
 //-------------------------------------------------------------------------
 // private implementation
 //-------------------------------------------------------------------------
 
-static void FreeClassifications(ClassType* head)
-{
-    while ( head )
-    {
-        ClassType* tmp = head;
-        head = head->next;
-
-        if ( tmp->name )
-            snort_free(tmp->name);
-
-        if ( tmp->type )
-            snort_free(tmp->type);
-
-        snort_free(tmp);
-    }
-}
-
-static void FreeReferences(ReferenceSystemNode* head)
-{
-    while ( head )
-    {
-        ReferenceSystemNode* tmp = head;
-        head = head->next;
-
-        if ( tmp->name )
-            snort_free(tmp->name);
-
-        if ( tmp->url )
-            snort_free(tmp->url);
-
-        snort_free(tmp);
-    }
-}
-
-static PolicyMode init_policy_mode(PolicyMode mode)
+static PolicyMode init_policy_mode(const SnortConfig* sc, PolicyMode mode)
 {
     switch ( mode )
     {
     case POLICY_MODE__PASSIVE:
-        if ( SnortConfig::adaptor_inline_test_mode() )
+        if ( sc->adaptor_inline_test_mode() )
             return POLICY_MODE__INLINE_TEST;
         break;
 
     case POLICY_MODE__INLINE:
-        if ( SnortConfig::adaptor_inline_test_mode() )
+        if ( sc->adaptor_inline_test_mode() )
             return POLICY_MODE__INLINE_TEST;
 
-        else if (!SnortConfig::adaptor_inline_mode())
+        else if (!sc->adaptor_inline_mode())
         {
             ParseWarning(WARN_DAQ, "adapter is in passive mode; switching policy mode to tap.");
             return POLICY_MODE__PASSIVE;
@@ -145,7 +121,7 @@ static PolicyMode init_policy_mode(PolicyMode mode)
         break;
 
     case POLICY_MODE__MAX:
-        if ( SnortConfig::adaptor_inline_mode() )
+        if ( sc->adaptor_inline_mode() )
             return POLICY_MODE__INLINE;
         else
             return POLICY_MODE__PASSIVE;
@@ -162,13 +138,13 @@ static void init_policies(SnortConfig* sc)
     for ( unsigned idx = 0; idx <  sc->policy_map->ips_policy_count(); ++idx )
     {
         ips_policy = sc->policy_map->get_ips_policy(idx);
-        ips_policy->policy_mode = init_policy_mode(ips_policy->policy_mode);
+        ips_policy->policy_mode = init_policy_mode(sc, ips_policy->policy_mode);
     }
 
     for ( unsigned idx = 0; idx < sc->policy_map->inspection_policy_count(); ++idx )
     {
         inspection_policy = sc->policy_map->get_inspection_policy(idx);
-        inspection_policy->policy_mode = init_policy_mode(inspection_policy->policy_mode);
+        inspection_policy->policy_mode = init_policy_mode(sc, inspection_policy->policy_mode);
     }
 }
 
@@ -188,29 +164,29 @@ void SnortConfig::init(const SnortConfig* const other_conf, ProtocolReference* p
         mpls_stack_depth = DEFAULT_LABELCHAIN_LENGTH;
 
         daq_config = new SFDAQConfig();
+        ActionManager::new_config(this);
         InspectorManager::new_config(this);
 
-        num_slots = ThreadConfig::get_instance_max();
-        state = new std::vector<void *>[num_slots];
+        num_slots = 0;
+        state = nullptr;
 
         profiler = new ProfilerConfig;
         latency = new LatencyConfig();
         memory = new MemoryConfig();
         policy_map = new PolicyMap;
         thread_config = new ThreadConfig();
+        global_dbus = new DataBus();
 
         memset(evalOrder, 0, sizeof(evalOrder));
         proto_ref = new ProtocolReference(protocol_reference);
+        so_rules = new SoRules;
+        trace_config = new TraceConfig;
     }
     else
     {
         clone(other_conf);
         policy_map = new PolicyMap(other_conf->policy_map);
     }
-
-    set_inspection_policy(policy_map->get_inspection_policy());
-    set_ips_policy(policy_map->get_ips_policy());
-    set_network_policy(policy_map->get_network_policy());
 }
 
 //-------------------------------------------------------------------------
@@ -236,28 +212,22 @@ SnortConfig::~SnortConfig()
 {
     if ( cloned )
     {
+        delete global_dbus;
         policy_map->set_cloned(true);
         delete policy_map;
         return;
     }
 
-    free_rule_state_list();
-    FreeClassifications(classifications);
-    FreeReferences(references);
+    for ( auto ct : classifications )
+        delete ct.second;
 
-    // Only call scratch cleanup if we actually called scratch setup
-    if ( state[0].size() > 0 )
-    {
-        for ( unsigned i = scratch_handlers.size(); i > 0; i-- )
-        {
-            if ( scratch_handlers[i - 1].second )
-                scratch_handlers[i - 1].second(this);
-        }
-        // FIXME-T: Do we need to shrink_to_fit() state->scratch at this point?
-    }
+    for ( auto rs : references )
+        delete rs.second;
+
+    for ( auto* s : scratchers )
+        s->cleanup(this);
 
     FreeRuleLists(this);
-    OtnLookupFree(otn_map);
     PortTablesFree(port_tables);
 
     ThresholdConfigFree(threshold_config);
@@ -268,9 +238,9 @@ SnortConfig::~SnortConfig()
         EventQueueConfigFree(event_queue_config);
 
     fpDeleteFastPacketDetection(this);
+    OtnLookupFree(otn_map);
 
-    if (rtn_hash_table)
-        xhash_delete(rtn_hash_table);
+    delete rtn_hash_table;
 
     if (eth_dst )
         snort_free(eth_dst);
@@ -289,18 +259,24 @@ SnortConfig::~SnortConfig()
 
     delete policy_map;
     InspectorManager::delete_config(this);
+    ActionManager::delete_config(this);
 
     delete[] state;
     delete thread_config;
-
-    if (gtp_ports)
-        delete gtp_ports;
+    delete trace_config;
+    delete overlay_trace_config;
+    delete ha_config;
+    delete global_dbus;
 
     delete profiler;
     delete latency;
     delete memory;
     delete daq_config;
     delete proto_ref;
+    delete so_rules;
+    if ( plugins )
+        delete plugins;
+    clear_reload_resource_tuner_list();
 
     trim_heap();
 }
@@ -315,14 +291,16 @@ void SnortConfig::setup()
 
     init_policies(this);
     ParseRules(this);
+    OrderRuleLists(this);
 
-    // FIXIT-L see SnortInit() on config printing
-    //detection_filter_print_config(detection_filter_config);
-    //RateFilter_PrintConfig(rate_filter_config);
-    //print_thresholding(threshold_config, 0);
-    //PrintRuleOrder(rule_lists);
+    if ( rule_states )
+    {
+        rule_states->apply(this);
+        delete rule_states;
+        rule_states = nullptr;
+    }
 
-    SetRuleStates(this);
+    ShowPolicyStats(this);
 
     /* Need to do this after dynamic detection stuff is initialized, too */
     IpsManager::verify(this);
@@ -333,25 +311,23 @@ void SnortConfig::setup()
 
 void SnortConfig::post_setup()
 {
-    unsigned i;
     unsigned int handler_count = scratch_handlers.size();
 
     // Ensure we have allocated the scratch space vector for each thread
-    for ( i = 0; i < num_slots; ++i )
-    {
+    for ( unsigned i = 0; i < num_slots; ++i )
         state[i].resize(handler_count);
-    }
 
-    for ( i = 0; i < handler_count; ++i )
+    for ( auto* s : scratch_handlers )
     {
-        if ( scratch_handlers[i].first )
-            scratch_handlers[i].first(this);
+        if ( s and s->setup(this) )
+            scratchers.push_back(s);
     }
 }
 
 void SnortConfig::clone(const SnortConfig* const conf)
 {
     *this = *conf;
+    global_dbus = new DataBus();
     if (conf->homenet.get_family() != 0)
         memcpy(&homenet, &conf->homenet, sizeof(homenet));
 
@@ -381,6 +357,7 @@ void SnortConfig::merge(SnortConfig* cmd_line)
     output_flags |= cmd_line->output_flags;
     logging_flags |= cmd_line->logging_flags;
 
+    include_path = cmd_line->include_path;
     stdin_rules = cmd_line->stdin_rules;
 
     // only set by cmd_line to override other conf output settings
@@ -391,7 +368,7 @@ void SnortConfig::merge(SnortConfig* cmd_line)
 
     int cl_chk = cmd_line->policy_map->get_network_policy()->checksum_eval;
     int cl_drop = cmd_line->policy_map->get_network_policy()->checksum_drop;
-    
+
     NetworkPolicy* nw_policy = nullptr;
 
     for ( unsigned idx = 0; idx < policy_map->network_policy_count(); ++idx )
@@ -433,6 +410,9 @@ void SnortConfig::merge(SnortConfig* cmd_line)
     if (cmd_line->pkt_skip != 0)
         pkt_skip = cmd_line->pkt_skip;
 
+    if (cmd_line->pkt_pause_cnt != 0)
+        pkt_pause_cnt = cmd_line->pkt_pause_cnt;
+
     if (cmd_line->group_id != -1)
         group_id = cmd_line->group_id;
 
@@ -444,12 +424,13 @@ void SnortConfig::merge(SnortConfig* cmd_line)
         file_mask = cmd_line->file_mask;
 
     if ( !cmd_line->chroot_dir.empty() )
-    {
         chroot_dir = cmd_line->chroot_dir;
-    }
 
     if ( cmd_line->dirty_pig )
         dirty_pig = cmd_line->dirty_pig;
+
+    if ( !cmd_line->metadata_filter.empty() )
+        metadata_filter = cmd_line->metadata_filter;
 
     daq_config->overlay(cmd_line->daq_config);
 
@@ -481,125 +462,59 @@ void SnortConfig::merge(SnortConfig* cmd_line)
     // FIXIT-M should cmd_line use the same var list / table?
     var_list = nullptr;
 
-    delete[] state;
-    num_slots = ThreadConfig::get_instance_max();
-    state = new std::vector<void *>[num_slots];
+    assert(!state);
+    num_slots = offload_threads + ThreadConfig::get_instance_max();
+    state = new std::vector<void*>[num_slots];
 }
 
-bool SnortConfig::verify()
+bool SnortConfig::verify() const
 {
-    if (get_conf()->asn1_mem != asn1_mem)
-    {
-        ErrorMessage("Snort Reload: Changing the asn1 memory configuration "
-            "requires a restart.\n");
-        return false;
-    }
+    bool config_ok = false;
+    const SnortConfig* sc = get_conf();
 
-    if ( bpf_filter != get_conf()->bpf_filter )
-    {
-        ErrorMessage("Snort Reload: Changing the bpf filter configuration "
-            "requires a restart.\n");
-        return false;
-    }
+    if ( sc->asn1_mem != asn1_mem )
+        ReloadError("Changing detection.asn1_mem requires a restart.\n");
 
-    if ( respond_attempts != get_conf()->respond_attempts ||
-        respond_device != get_conf()->respond_device )
-    {
-        ErrorMessage("Snort Reload: Changing config response "
-            "requires a restart.\n");
-        return false;
-    }
+    else if ( sc->bpf_filter != bpf_filter )
+        ReloadError("Changing packets.bfp_filter requires a restart.\n");
 
-    if (get_conf()->chroot_dir != chroot_dir)
-    {
-        ErrorMessage("Snort Reload: Changing the chroot directory "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if ( sc->respond_attempts != respond_attempts )
+        ReloadError("Changing active.attempts requires a restart.\n");
 
-    if ((get_conf()->run_flags & RUN_FLAG__DAEMON) !=
-        (run_flags & RUN_FLAG__DAEMON))
-    {
-        ErrorMessage("Snort Reload: Changing to or from daemon mode "
-            "requires a restart.\n");
-        return false;
-    }
+    else if (  sc->respond_device != respond_device )
+        ReloadError("Changing active.device requires a restart.\n");
 
-    /* Orig log dir because a chroot might have changed it */
-    if (get_conf()->orig_log_dir != orig_log_dir)
-    {
-        ErrorMessage("Snort Reload: Changing the log directory "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if (sc->chroot_dir != chroot_dir)
+        ReloadError("Changing process.chroot requires a restart.\n");
 
-    if (get_conf()->max_attribute_hosts != max_attribute_hosts)
-    {
-        ErrorMessage("Snort Reload: Changing max_attribute_hosts "
-            "configuration requires a restart.\n");
-        return false;
-    }
-    if (get_conf()->max_attribute_services_per_host != max_attribute_services_per_host)
-    {
-        ErrorMessage("Snort Reload: Changing max_attribute_services_per_host "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if ((sc->run_flags & RUN_FLAG__DAEMON) != (run_flags & RUN_FLAG__DAEMON))
+        ReloadError("Changing process.daemon requires a restart.\n");
 
-    if ((get_conf()->run_flags & RUN_FLAG__NO_PROMISCUOUS) !=
-        (run_flags & RUN_FLAG__NO_PROMISCUOUS))
-    {
-        ErrorMessage("Snort Reload: Changing to or from promiscuous mode "
-            "requires a restart.\n");
-        return false;
-    }
+    else if (sc->orig_log_dir != orig_log_dir)
+        ReloadError("Changing output.logdir requires a restart.\n");
 
-    if (get_conf()->group_id != group_id)
-    {
-        ErrorMessage("Snort Reload: Changing the group id "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if (sc->group_id != group_id)
+        ReloadError("Changing process.setgid requires a restart.\n");
 
-    if (get_conf()->user_id != user_id)
-    {
-        ErrorMessage("Snort Reload: Changing the user id "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if (sc->user_id != user_id)
+        ReloadError("Changing process.setuid requires a restart.\n");
 
-    if (get_conf()->daq_config->mru_size != daq_config->mru_size)
-    {
-        ErrorMessage("Snort Reload: Changing the packet snaplen "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if (sc->daq_config->get_mru_size() != daq_config->get_mru_size())
+        ReloadError("Changing daq.snaplen requires a restart.\n");
 
-    if (get_conf()->threshold_config->memcap !=
-        threshold_config->memcap)
-    {
-        ErrorMessage("Snort Reload: Changing the threshold memcap "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if (sc->threshold_config->memcap != threshold_config->memcap)
+        ReloadError("Changing alerts.event_filter_memcap requires a restart.\n");
 
-    if (get_conf()->rate_filter_config->memcap !=
-        rate_filter_config->memcap)
-    {
-        ErrorMessage("Snort Reload: Changing the rate filter memcap "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else  if (sc->rate_filter_config->memcap != rate_filter_config->memcap)
+        ReloadError("Changing alerts.rate_filter_memcap requires a restart.\n");
 
-    if (get_conf()->detection_filter_config->memcap !=
-        detection_filter_config->memcap)
-    {
-        ErrorMessage("Snort Reload: Changing the detection filter memcap "
-            "configuration requires a restart.\n");
-        return false;
-    }
+    else if (sc->detection_filter_config->memcap != detection_filter_config->memcap)
+        ReloadError("Changing alerts.detection_filter_memcap requires a restart.\n");
 
-    return true;
+    else
+        config_ok = true;
+
+    return config_ok;
 }
 
 void SnortConfig::set_alert_before_pass(bool enabled)
@@ -731,7 +646,7 @@ void SnortConfig::set_no_logging_timestamps(bool enabled)
 
 void SnortConfig::set_obfuscation_mask(const char* mask)
 {
-   if (!mask)
+    if (!mask)
         return;
 
     output_flags |= OUTPUT_FLAG__OBFUSCATE;
@@ -765,7 +680,7 @@ void SnortConfig::set_gid(const char* args)
         return;
     }
     else
-        gr = getgrgid((gid_t) target_gid); // main thread only
+        gr = getgrgid((gid_t)target_gid);  // main thread only
 
     if (!gr)
     {
@@ -775,7 +690,7 @@ void SnortConfig::set_gid(const char* args)
 
     /* If we're already running as the desired group ID, don't bother to try changing it later. */
     if (gr->gr_gid != getgid())
-        group_id = (int) gr->gr_gid;
+        group_id = (int)gr->gr_gid;
 }
 
 void SnortConfig::set_uid(const char* args)
@@ -796,7 +711,7 @@ void SnortConfig::set_uid(const char* args)
         return;
     }
     else
-        pw = getpwuid((uid_t) target_uid); // main thread only
+        pw = getpwuid((uid_t)target_uid);  // main thread only
 
     if (!pw)
     {
@@ -808,11 +723,10 @@ void SnortConfig::set_uid(const char* args)
        If we're already running as the desired user and/or group ID,
        don't bother to try changing it later. */
     if (pw->pw_uid != getuid())
-        user_id = (int) pw->pw_uid;
+        user_id = (int)pw->pw_uid;
 
     if (group_id == -1 && pw->pw_gid != getgid())
-        group_id = (int) pw->pw_gid;
-
+        group_id = (int)pw->pw_gid;
 }
 
 void SnortConfig::set_show_year(bool enabled)
@@ -859,16 +773,8 @@ void SnortConfig::set_process_all_events(bool enabled)
 # endif
 #endif
 
-void SnortConfig::set_umask(const char* args)
+void SnortConfig::set_umask(uint32_t mask)
 {
-    char* endptr;
-    long mask = SnortStrtol(args, &endptr, 0);
-
-    if ((errno == ERANGE) || (*endptr != '\0') ||
-        (mask < 0) || (mask & ~FILE_ACCESS_BITS))
-    {
-        ParseError("bad umask: %s", args);
-    }
     file_mask = (mode_t)mask;
 }
 
@@ -890,6 +796,12 @@ void SnortConfig::set_verbose(bool enabled)
         logging_flags &= ~LOGGING_FLAG__VERBOSE;
 }
 
+void SnortConfig::set_overlay_trace_config(TraceConfig* tc)
+{
+    delete overlay_trace_config;
+    overlay_trace_config = tc;
+}
+
 void SnortConfig::set_tunnel_verdicts(const char* args)
 {
     char* tmp, * tok;
@@ -905,6 +817,9 @@ void SnortConfig::set_tunnel_verdicts(const char* args)
 
         else if (!strcasecmp(tok, "teredo"))
             tunnel_mask |= TUNNEL_TEREDO;
+
+        else if (!strcasecmp(tok, "vxlan"))
+            tunnel_mask |= TUNNEL_VXLAN;
 
         else if (!strcasecmp(tok, "6in4"))
             tunnel_mask |= TUNNEL_6IN4;
@@ -935,12 +850,23 @@ void SnortConfig::set_tunnel_verdicts(const char* args)
     snort_free(tmp);
 }
 
-void SnortConfig::set_plugin_path(const char* path)
+void SnortConfig::set_include_path(const char* path)
 {
     if (path)
-        plugin_path = path;
+        include_path = path;
     else
-        plugin_path.clear();
+        include_path.clear();
+}
+
+void SnortConfig::add_plugin_path(const char* path)
+{
+    if (!path)
+        return;
+
+    if (!plugin_path.empty())
+        plugin_path += ":" + std::string(path);
+    else
+        plugin_path = path;
 }
 
 void SnortConfig::set_tweaks(const char* t)
@@ -954,7 +880,7 @@ void SnortConfig::set_tweaks(const char* t)
 void SnortConfig::add_script_path(const char* path)
 {
     if (path)
-        script_paths.push_back(path);
+        script_paths.emplace_back(path);
 }
 
 void SnortConfig::set_alert_mode(const char* val)
@@ -976,14 +902,14 @@ void SnortConfig::set_alert_mode(const char* val)
         output = val;
 
     output_flags |= OUTPUT_FLAG__ALERTS;
-    Snort::set_main_hook(DetectionEngine::inspect);
+    Analyzer::set_main_hook(DetectionEngine::inspect);
 }
 
 void SnortConfig::set_log_mode(const char* val)
 {
     if (strcasecmp(val, LOG_NONE) == 0)
     {
-        Snort::set_main_hook(snort_ignore);
+        Analyzer::set_main_hook(snort_ignore);
         EventManager::enable_logs(false);
     }
     else
@@ -991,13 +917,13 @@ void SnortConfig::set_log_mode(const char* val)
         if ( !strcmp(val, LOG_DUMP) )
             val = LOG_CODECS;
         output = val;
-        Snort::set_main_hook(snort_log);
+        Analyzer::set_main_hook(snort_log);
     }
 }
 
 void SnortConfig::enable_syslog()
 {
-   static bool syslog_configured = false;
+    static bool syslog_configured = false;
 
     if (syslog_configured)
         return;
@@ -1008,37 +934,71 @@ void SnortConfig::enable_syslog()
     syslog_configured = true;
 }
 
-void SnortConfig::free_rule_state_list()
+bool SnortConfig::get_default_rule_state() const
 {
-    RuleState* head = rule_state_list;
-
-    while ( head )
+    switch ( get_ips_policy()->default_rule_state )
     {
-        RuleState* tmp = head;
-        head = head->next;
-        snort_free(tmp);
+    case IpsPolicy::INHERIT_ENABLE:
+        return global_default_rule_state;
+
+    case IpsPolicy::ENABLED:
+        return true;
+
+    case IpsPolicy::DISABLED:
+        return false;
     }
-    rule_state_list = nullptr;
+    return true;
 }
 
-bool SnortConfig::tunnel_bypass_enabled(uint8_t proto)
+ConfigOutput* SnortConfig::create_config_output() const
 {
-    return (!((get_conf()->tunnel_mask & proto) or SFDAQ::get_tunnel_bypass(proto)));
+    ConfigOutput* output = nullptr;
+
+    switch (dump_config_type)
+    {
+    case DUMP_CONFIG_JSON_ALL:
+        output = new JsonAllConfigOutput();
+        break;
+    case DUMP_CONFIG_JSON_TOP:
+        output = new JsonTopConfigOutput();
+        break;
+    case DUMP_CONFIG_TEXT:
+        output = new TextConfigOutput();
+        break;
+    default:
+        break;
+    }
+
+    return output;
 }
 
-SO_PUBLIC int SnortConfig::request_scratch(ScScratchFunc setup, ScScratchFunc cleanup)
+bool SnortConfig::tunnel_bypass_enabled(uint16_t proto) const
 {
-    scratch_handlers.push_back(std::make_pair(setup, cleanup));
+    return !((tunnel_mask & proto) or SFDAQ::get_tunnel_bypass(proto));
+}
+
+int SnortConfig::request_scratch(ScratchAllocator* s)
+{
+    scratch_handlers.emplace_back(s);
 
     // We return an index that the caller uses to reference their per thread
     // scratch space
     return scratch_handlers.size() - 1;
 }
 
-SO_PUBLIC SnortConfig* SnortConfig::get_conf()
+void SnortConfig::release_scratch(int id)
+{
+    assert((unsigned)id < scratch_handlers.size());
+    scratch_handlers[id] = nullptr;
+}
+
+SnortConfig* SnortConfig::get_main_conf()
+{ return const_cast<SnortConfig*>(snort_conf); }
+
+const SnortConfig* SnortConfig::get_conf()
 { return snort_conf; }
 
-void SnortConfig::set_conf(SnortConfig* sc)
+void SnortConfig::set_conf(const SnortConfig* sc)
 {
     snort_conf = sc;
 
@@ -1048,5 +1008,38 @@ void SnortConfig::set_conf(SnortConfig* sc)
         if (sc->policy_map->get_policies(sh))
             set_policies(sc, sh);
     }
+}
+
+void SnortConfig::register_reload_resource_tuner(ReloadResourceTuner* rrt)
+{
+    if (Snort::is_reloading())
+        reload_tuners.push_back(rrt);
+    else
+        delete rrt;
+}
+
+void SnortConfig::clear_reload_resource_tuner_list()
+{
+    for (ReloadResourceTuner* rrt : reload_tuners)
+        delete rrt;
+    reload_tuners.clear();
+}
+
+void SnortConfig::cleanup_fatal_error()
+{
+    // FIXIT-L need a generic way to manage type other threads
+    // and preferably not start them too soon
+    FileService::close();
+
+#ifdef REG_TEST
+    const SnortConfig* sc = SnortConfig::get_conf();
+    if ( sc && !sc->dirty_pig )
+    {
+        ModuleManager::term();
+        EventManager::release_plugins();
+        IpsManager::release_plugins();
+        InspectorManager::release_plugins();
+    }
+#endif
 }
 

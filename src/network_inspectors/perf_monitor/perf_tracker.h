@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -51,35 +51,35 @@ struct Packet;
 class PerfTracker
 {
 public:
-    virtual void reset() {}
-
-    virtual void update(snort::Packet*) {}
-    virtual void process(bool /*summary*/) {} // FIXIT-M get rid of this step.
-
-    virtual void update_time(time_t time) final { cur_time = time; }
-    virtual const std::string& get_name() final { return tracker_name; }
-
-    virtual bool open(bool append) final;
-    virtual bool rotate() final;
-    virtual bool auto_rotate() final;
-
     virtual ~PerfTracker();
+
+    virtual void reset() { }
+    virtual void process(bool /*summary*/) { } // FIXIT-M get rid of this step.
+    virtual void update(snort::Packet*) { }
+    virtual void update_time(time_t time) { cur_time = time; }
+    virtual const std::string& get_name() { return tracker_name; }
+
+    bool open(bool append);
+    void close();
+    bool rotate();
+    bool auto_rotate();
+    bool is_open() { return fh != nullptr; }
 
     PerfTracker(const PerfTracker&) = delete;
     PerfTracker& operator=(const PerfTracker&) = delete;
 
 protected:
-    PerfConfig* config;
-    PerfFormatter* formatter;
-
     PerfTracker(PerfConfig*, const char* tracker_name);
-    virtual void write() final;
+    virtual void write();
+
+    uint64_t max_file_size = 0;
+    PerfFormatter* formatter = nullptr;
 
 private:
     std::string fname;
     std::string tracker_name;
     FILE* fh = nullptr;
-    time_t cur_time;
+    time_t cur_time = 0;
 };
 #endif
 

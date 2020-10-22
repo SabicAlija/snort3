@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,7 +42,7 @@ public:
     PortScan(class PortScanModule*);
     ~PortScan() override;
 
-    void show(snort::SnortConfig*) override;
+    void show(const snort::SnortConfig*) const override;
     void eval(snort::Packet*) override;
 
     void tinit() override;
@@ -65,7 +65,7 @@ private:
     void ps_proto_update_window(unsigned window, PS_PROTO*, time_t pkt_time);
 
     int ps_proto_update( PS_PROTO*, int ps_cnt, int pri_cnt, unsigned window, const snort::SfIp* ip,
-        u_short port, time_t pkt_time);
+        unsigned short port, time_t pkt_time);
 
     void ps_tracker_update_ip(PS_PKT*, PS_TRACKER* scanner, PS_TRACKER* scanned);
     void ps_tracker_update_tcp(PS_PKT*, PS_TRACKER* scanner, PS_TRACKER* scanned);

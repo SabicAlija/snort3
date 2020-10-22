@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@
 
 namespace snort
 {
-    class Mpse;
+    class MpseGroup;
 }
 
 // PortGroup contains a set of fast patterns in the form of an MPSE and a
@@ -44,12 +44,19 @@ enum PmType
     PM_TYPE_HEADER,
     PM_TYPE_BODY,
     PM_TYPE_FILE,
+    PM_TYPE_RAW_KEY,
+    PM_TYPE_RAW_HEADER,
+    PM_TYPE_METHOD,
+    PM_TYPE_STAT_CODE,
+    PM_TYPE_STAT_MSG,
+    PM_TYPE_COOKIE,
     PM_TYPE_MAX
 };
 
 const char* const pm_type_strings[PM_TYPE_MAX] =
 {
-    "packet", "alt", "key", "header", "body", "file"
+    "packet", "alt", "key", "header", "body", "file", "raw_key", "raw_header",
+    "method", "stat_code", "stat_msg", "cookie"
 };
 
 struct RULE_NODE
@@ -65,7 +72,7 @@ struct PortGroup
     RULE_NODE* nfp_head, * nfp_tail;
 
     // pattern matchers
-    snort::Mpse* mpse[PM_TYPE_MAX];
+    snort::MpseGroup* mpsegrp[PM_TYPE_MAX];
 
     // detection option tree
     void* nfp_tree;

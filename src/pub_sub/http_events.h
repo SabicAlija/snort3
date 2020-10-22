@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,10 +36,8 @@ namespace snort
 class SO_PUBLIC HttpEvent : public snort::DataEvent
 {
 public:
-    HttpEvent(HttpMsgHeader* http_msg_header_) :
-        http_msg_header(http_msg_header_)
-    {
-    }
+    HttpEvent(HttpMsgHeader* http_msg_header_, bool http2, uint32_t stream_id) :
+        http_msg_header(http_msg_header_), is_http2(http2), http2_stream_id(stream_id) { }
 
 
     const uint8_t* get_content_type(int32_t &length);
@@ -48,15 +46,20 @@ public:
     const uint8_t* get_location(int32_t &length);
     const uint8_t* get_referer(int32_t &length);
     const uint8_t* get_server(int32_t &length);
+    const uint8_t* get_trueip_addr(int32_t& length);
     const uint8_t* get_uri(int32_t &length);
     const uint8_t* get_user_agent(int32_t &length);
     const uint8_t* get_via(int32_t &length);
     const uint8_t* get_x_working_with(int32_t &length);
     int32_t get_response_code();
     bool contains_webdav_method();
+    bool get_is_http2() const;
+    uint32_t get_http2_stream_id() const;
 
 private:
     HttpMsgHeader* const http_msg_header;
+    bool is_http2 = false;
+    uint32_t http2_stream_id = 0;
 
     const uint8_t* get_header(unsigned, uint64_t, int32_t&);
 

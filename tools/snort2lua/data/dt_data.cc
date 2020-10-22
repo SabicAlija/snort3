@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -18,22 +18,24 @@
 // dt_data.cc author Josh Rosenbaum <jrosenba@cisco.com>
 
 #include "dt_data.h"
-#include "helpers/s2l_util.h"
+
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <sstream>
-#include <cstring>
 
 #include "data/data_types/dt_table.h"
 #include "data/data_types/dt_var.h"
 #include "data/data_types/dt_comment.h"
 #include "data/data_types/dt_rule.h"
 #include "data/data_types/dt_include.h"
+#include "helpers/s2l_util.h"
 
 DataApi::PrintMode DataApi::mode = DataApi::PrintMode::DEFAULT;
 std::size_t DataApi::dev_warnings = 0;
 std::size_t DataApi::errors_count = 0;
 
-DataApi::DataApi() : curr_data_bad(false)
+DataApi::DataApi()
 {
     comments = new Comments(start_comments, 0,
         Comments::CommentType::MULTI_LINE);
@@ -157,11 +159,11 @@ std::string DataApi::expand_vars(const std::string& string)
                     if (strlen(p) >= 2)
                     {
                         varmodifier = *(p + 1);
-                        std::strncpy(varaux, p + 2, sizeof(varaux));
+                        std::strncpy(varaux, p + 2, sizeof(varaux) - 1);
                     }
                 }
                 else
-                    std::strncpy(varname, rawvarname, sizeof(varname));
+                    std::strncpy(varname, rawvarname, sizeof(varname) - 1);
 
                 std::memset((char*)varbuffer, 0, sizeof(varbuffer));
 
@@ -261,8 +263,19 @@ void DataApi::failed_conversion(const std::istringstream& stream, const std::str
         errors->add_text("^^^^ unknown_syntax=" + unknown_option);
 }
 
+static bool is_local_variable(const std::string& name)
+{
+    return name.find("_PATH") != std::string::npos
+        || name.find("_PORT") != std::string::npos
+        || name.find("_NET") != std::string::npos
+        || name.find("_SERVER") != std::string::npos;
+}
+
 void DataApi::set_variable(const std::string& name, const std::string& value, bool quoted)
 {
+    if (is_local_variable(name))
+        local_vars.push_back(name);
+
     Variable* var = new Variable(name);
     vars.push_back(var);
     var->set_value(value, quoted);
@@ -273,6 +286,9 @@ bool DataApi::add_variable(const std::string& name, const std::string& value)
     for (auto v : vars)
         if (name == v->get_name())
             return v->add_value(value);
+
+    if (is_local_variable(name))
+        local_vars.push_back(name);
 
     Variable* var = new Variable(name);
     vars.push_back(var);
@@ -309,7 +325,7 @@ void DataApi::add_comment(const std::string& c)
 void DataApi::add_unsupported_comment(const std::string& c)
 { unsupported->add_text(c); }
 
-void DataApi::print_errors(std::ostream& out)
+void DataApi::print_errors(std::ostream& out) const
 {
     if (is_default_mode() &&
         !errors->empty())
@@ -318,7 +334,7 @@ void DataApi::print_errors(std::ostream& out)
     }
 }
 
-void DataApi::print_data(std::ostream& out)
+void DataApi::print_data(std::ostream& out) const
 {
     for (Variable* v : vars)
         out << (*v) << "\n\n";
@@ -327,16 +343,27 @@ void DataApi::print_data(std::ostream& out)
         out << (*i) << "\n\n";
 }
 
-void DataApi::print_comments(std::ostream& out)
+void DataApi::print_comments(std::ostream& out) const
 {
     if (is_default_mode() && !comments->empty())
         out << (*comments) << "\n";
 }
 
-void DataApi::print_unsupported(std::ostream& out)
+void DataApi::print_unsupported(std::ostream& out) const
 {
     if (is_default_mode() && !unsupported->empty())
         out << (*unsupported) << "\n";
+}
+
+void DataApi::print_local_variables(std::ostream& out) const
+{
+    if (local_vars.empty())
+        return;
+
+    out << "local_variables =\n{\n";
+    for (const auto& v : local_vars)
+        out << "    " << v << " = " << v << ",\n";
+    out << "}\n\n";
 }
 
 void DataApi::swap_conf_data(std::vector<Variable*>& new_vars,
@@ -345,13 +372,7 @@ void DataApi::swap_conf_data(std::vector<Variable*>& new_vars,
 {
     vars.swap(new_vars);
     includes.swap(new_includes);
-
-    Comments* tmp = new_comments;
-    new_comments = comments;
-    comments = tmp;
-
-    tmp = new_unsupported;
-    new_unsupported = unsupported;
-    unsupported = tmp;
+    std::swap(comments, new_comments);
+    std::swap(unsupported, new_unsupported);
 }
 

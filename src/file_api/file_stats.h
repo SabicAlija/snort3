@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,8 +22,6 @@
 #ifndef FILE_STATS_H
 #define FILE_STATS_H
 
-// FIXIT-M This will be refactored soon
-
 #include "framework/counts.h"
 #include "main/thread.h"
 
@@ -37,6 +35,8 @@ struct FileCounts
     PegCount files_total;
     PegCount file_data_total;
     PegCount cache_add_fails;
+    PegCount files_over_flow_limit_not_processed;
+    PegCount max_concurrent_files_per_flow;
     PegCount files_buffered_total;
     PegCount files_released_total;
     PegCount files_freed_total;

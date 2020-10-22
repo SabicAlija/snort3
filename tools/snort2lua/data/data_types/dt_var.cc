@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -54,7 +54,7 @@ std::string Variable::get_value(DataApi* ld)
     return variable;
 }
 
-void Variable::set_value(std::string val, bool quoted)
+void Variable::set_value(const std::string& val, bool quoted)
 {
     VarData* vd = new VarData();
     vd->type = quoted ? VarType::STRING : VarType::VARIABLE;
@@ -89,7 +89,7 @@ bool Variable::add_value(std::string elem)
         }
     }
 
-    if (s.front() == '$')
+    if (!s.empty() and s.front() == '$')
     {
         // add a space between strings
         if (!vars.empty())

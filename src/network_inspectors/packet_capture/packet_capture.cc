@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -76,7 +76,7 @@ static void _capture_term()
 
 static bool bpf_compile_and_validate()
 {
-    // FIXIT-M This BPF compilation is not threadsafe and should be handled by the main thread
+    // FIXIT-M This BPF compilation is not thread-safe and should be handled by the main thread
     // and this call should use DLT from DAQ rather then hard coding DLT_EN10MB
     if ( pcap_compile_nopcap(SNAP_LEN, DLT_EN10MB, &bpf,
         config.filter.c_str(), 1, 0) >= 0 )
@@ -143,7 +143,7 @@ void packet_capture_enable(const string& f)
                 return;
             }
         }
-        else 
+        else
         {
             WarningMessage("Failed to enable Packet capture\n");
             packet_capture_disable();
@@ -168,6 +168,7 @@ public:
     PacketCapture(CaptureModule*);
 
     // non-static functions
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
     void tterm() override { capture_term(); }
 
@@ -196,16 +197,27 @@ bool PacketCapture::capture_init()
     return false;
 }
 
+void PacketCapture::show(const SnortConfig*) const
+{
+    ConfigLogger::log_flag("enable", config.enabled);
+    if ( config.enabled )
+        ConfigLogger::log_value("filter", config.filter.c_str());
+}
+
 void PacketCapture::eval(Packet* p)
 {
+
     if ( config.enabled )
     {
         if ( !capture_initialized() )
-            if ( !capture_init() )  
+            if ( !capture_init() )
                 return;
 
+        if ( p->is_cooked() )
+            return;
+
         if ( !bpf.bf_insns || bpf_filter(bpf.bf_insns, p->pkt,
-                p->pkth->caplen, p->pkth->pktlen) )
+                p->pktlen, p->pkth->pktlen) )
         {
             write_packet(p);
             cap_count_stats.matched++;
@@ -219,8 +231,11 @@ void PacketCapture::eval(Packet* p)
 
 void PacketCapture::write_packet(Packet* p)
 {
-    //DAQ_PktHdr_t is compatible with pcap_pkthdr
-    pcap_dump((unsigned char*)dumper, (const pcap_pkthdr*)p->pkth, p->pkt);
+    struct pcap_pkthdr pcaphdr;
+    pcaphdr.ts = p->pkth->ts;
+    pcaphdr.caplen = p->pktlen;
+    pcaphdr.len = p->pkth->pktlen;
+    pcap_dump((unsigned char*)dumper, &pcaphdr, p->pkt);
     pcap_dump_flush(dumper);
 }
 
@@ -255,7 +270,7 @@ static const InspectApi pc_api =
         mod_dtor
     },
     IT_PROBE,
-    PROTO_BIT__ANY_TYPE,
+    PROTO_BIT__ANY_IP | PROTO_BIT__ETH,
     nullptr, // buffers
     nullptr, // service
     nullptr, // pinit
@@ -288,9 +303,9 @@ static Packet* init_null_packet()
     static Packet p(false);
     static DAQ_PktHdr_t h;
 
-    p.pkt = nullptr;
     p.pkth = &h;
-    h.caplen = 0;
+    p.pkt = nullptr;
+    p.pktlen = 0;
     h.pktlen = 0;
 
     return &p;
@@ -307,7 +322,7 @@ public:
 protected:
     void write_packet(Packet* p) override
     {
-        pcap.push_back(p);
+        pcap.emplace_back(p);
         write_packet_called = true;
     }
 
@@ -391,10 +406,10 @@ TEST_CASE("blank filter", "[PacketCapture]")
 
     Packet p(false);
     DAQ_PktHdr_t daq_hdr;
-    p.pkt = cooked;
     p.pkth = &daq_hdr;
+    p.pkt = cooked;
+    p.pktlen = sizeof(cooked);
 
-    daq_hdr.caplen = sizeof(cooked);
     daq_hdr.pktlen = sizeof(cooked);
 
     CaptureModule mod;
@@ -476,7 +491,9 @@ TEST_CASE("bpf filter", "[PacketCapture]")
     p_match.pkt = match;
     p_non_match.pkt = non_match;
 
-    daq_hdr.caplen = sizeof(match);
+    p_match.pktlen = sizeof(match);
+    p_non_match.pktlen = sizeof(match);
+
     daq_hdr.pktlen = sizeof(match);
 
     CaptureModule mod;

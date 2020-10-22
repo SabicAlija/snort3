@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -39,10 +39,10 @@ static const RuleMap auth_rules[] =
     { 0, nullptr }
 };
 
-class AuthModule : public CodecModule
+class AuthModule : public BaseCodecModule
 {
 public:
-    AuthModule() : CodecModule(CD_AUTH_NAME, CD_AUTH_HELP) { }
+    AuthModule() : BaseCodecModule(CD_AUTH_NAME, CD_AUTH_HELP) { }
 
     const RuleMap* get_rules() const override
     { return auth_rules; }
@@ -77,7 +77,7 @@ constexpr uint8_t MIN_AUTH_LEN = 16; // this is in minimum number of bytes ...
 } // anonymous namespace
 
 void AuthCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::AUTH); }
+{ v.emplace_back(ProtocolId::AUTH); }
 
 bool AuthCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
 {
@@ -104,7 +104,7 @@ bool AuthCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
     // must be called AFTER setting next_prot_id
     if (snort.ip_api.is_ip6())
     {
-        if ( SnortConfig::get_conf()->hit_ip6_maxopts(codec.ip6_extension_count) )
+        if ( codec.conf->hit_ip6_maxopts(codec.ip6_extension_count) )
         {
             codec_event(codec, DECODE_IP6_EXCESS_EXT_HDR);
             return false;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 #endif
 
 #include "app_forecast.h"
+#include "appid_inspector.h"
 
 #include "log/messages.h"
 #include "time/packet_time.h"
@@ -31,67 +32,29 @@
 
 using namespace snort;
 
-static std::unordered_map<AppId, AFElement> AF_indicators;     // list of "indicator apps"
-static THREAD_LOCAL std::map<AFActKey, AFActVal> *AF_actives;        // list of hosts to watch
-
-void appid_forecast_tinit()
+void check_session_for_AF_indicator(Packet* p, AppidSessionDirection dir, AppId indicator, const OdpContext& odp_ctxt)
 {
-    AF_actives = new std::map<AFActKey, AFActVal>;
-}
-
-void appid_forecast_tterm()
-{
-    if(nullptr != AF_actives)
-    {
-        AF_actives->clear();
-        delete AF_actives;
-        AF_actives = nullptr;
-    }
-}
-
-void appid_forecast_pterm()
-{
-    AF_indicators.clear();
-}
-
-void add_af_indicator(AppId indicator, AppId forecast, AppId target)
-{
-    if (AF_indicators.find(indicator) != AF_indicators.end())
-    {
-        ErrorMessage("LuaDetectorApi:Attempt to add more than one AFElement per appId %d",
-            indicator);
-        return;
-    }
-
-    AFElement val;
-    val.forecast = forecast;
-    val.target = target;
-    if (false == AF_indicators.insert({indicator, val}).second)
-        ErrorMessage("LuaDetectorApi:Failed to add AFElement for appId %d", indicator);
-}
-
-void check_session_for_AF_indicator(Packet* p, AppidSessionDirection dir, AppId indicator)
-{
+    const std::unordered_map<int, AFElement>& AF_indicators = odp_ctxt.get_af_indicators();
     auto af_indicator_entry = AF_indicators.find(indicator);
 
     if (af_indicator_entry == AF_indicators.end())
         return;
 
     AFElement ind_element = af_indicator_entry->second;
-    AFActKey master_key(p, dir, ind_element.forecast, master_key);
+    AFActKey master_key(p, dir, ind_element.forecast);
 
-    AFActVal new_active_value;
-    new_active_value.target = ind_element.target;
-    new_active_value.last = packet_time();
+    AFActVal new_active_value = AFActVal(ind_element.target, packet_time());
 
-    (*AF_actives)[master_key] = new_active_value;
+    odp_thread_local_ctxt->add_af_actives(master_key, new_active_value);
 }
 
 AppId check_session_for_AF_forecast(AppIdSession& asd, Packet* p, AppidSessionDirection dir, AppId forecast)
 {
-    AFActKey master_key(p, dir, forecast, master_key);
+    AFActKey master_key(p, dir, forecast);
 
     //get out if there is no value
+    std::map<AFActKey, AFActVal>* AF_actives = odp_thread_local_ctxt->get_af_actives();
+    assert(AF_actives);
     auto check_act_val = AF_actives->find(master_key);
     if (check_act_val == AF_actives->end())
         return APP_ID_UNKNOWN;
@@ -100,10 +63,10 @@ AppId check_session_for_AF_forecast(AppIdSession& asd, Packet* p, AppidSessionDi
     time_t age = packet_time() - check_act_val->second.last;
     if (age < 0 || age > 300)
     {
-        AF_actives->erase(master_key);
+        odp_thread_local_ctxt->erase_af_actives(master_key);
         return APP_ID_UNKNOWN;
     }
-    asd.payload.set_id(check_act_val->second.target);
+    asd.set_payload_id(check_act_val->second.target);
     return forecast;
 }
 

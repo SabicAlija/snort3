@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 // Copyright (C) 2000,2001 Andrew R. Baker <andrewb@uab.edu>
@@ -31,6 +31,7 @@
 #include "log/messages.h"
 #include "protocols/packet.h"
 #include "utils/util.h"
+#include "utils/util_cstring.h"
 
 using namespace snort;
 
@@ -109,7 +110,7 @@ public:
     { return false; }
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 };
 
 //-------------------------------------------------------------------------
@@ -135,7 +136,7 @@ static void get_alert_pkt(
     {
         us.alert.pkth.ts.tv_sec = (uint32_t)p->pkth->ts.tv_sec;
         us.alert.pkth.ts.tv_usec = (uint32_t)p->pkth->ts.tv_usec;
-        us.alert.pkth.caplen = p->pkth->caplen;
+        us.alert.pkth.caplen = p->pktlen;
         us.alert.pkth.len = p->pkth->pktlen;
         memmove(us.alert.pkt, (const void*)p->pkt, us.alert.pkth.caplen);
     }
@@ -212,7 +213,7 @@ static void OpenAlertSock()
     us.addr.sun_family = AF_UNIX;
 
     /* copy path over and preserve a null byte at the end */
-    strncpy(us.addr.sun_path, name.c_str(), sizeof(us.addr.sun_path)-1);
+    SnortStrncpy(us.addr.sun_path, name.c_str(), sizeof(us.addr.sun_path));
 
     if ( (us.socket = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0 )
         FatalError("socket() call failed: %s", get_error(errno));
@@ -270,7 +271,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* unix_sock_ctor(SnortConfig*, Module*)
+static Logger* unix_sock_ctor(Module*)
 { return new UnixSockLogger; }
 
 static void unix_sock_dtor(Logger* p)

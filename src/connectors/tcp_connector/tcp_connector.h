@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -81,7 +81,7 @@ public:
     int sock_fd;
 
 private:
-    bool run_thread;
+    bool run_thread = false;
     std::thread* receive_thread;
     void start_receive_thread();
     void stop_receive_thread();

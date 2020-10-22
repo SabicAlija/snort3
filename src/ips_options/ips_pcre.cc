@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 // Copyright (C) 2003 Brian Caswell <bmc@snort.org>
 // Copyright (C) 2003 Michael J. Pomraning <mjp@securepipe.com>
@@ -27,12 +27,17 @@
 
 #include <cassert>
 
+#include "detection/ips_context.h"
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "framework/parameter.h"
+#include "hash/hash_key_operations.h"
+#include "helpers/scratch_allocator.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
+#include "managers/ips_manager.h"
+#include "managers/module_manager.h"
 #include "profiler/profiler.h"
 #include "utils/util.h"
 
@@ -58,6 +63,7 @@ using namespace snort;
 #define SNORT_OVERRIDE_MATCH_LIMIT  0x00080 // Override default limits on match & match recursion
 
 #define s_name "pcre"
+#define mod_regex_name "regex"
 
 struct PcreData
 {
@@ -68,25 +74,17 @@ struct PcreData
     char* expression;
 };
 
-/*
- * we need to specify the vector length for our pcre_exec call.  we only care
- * about the first vector, which if the match is successful will include the
- * offset to the end of the full pattern match.  If we decide to store other
- * matches, make *SURE* that this is a multiple of 3 as pcre requires it.
- */
-// the wrong size caused the pcre lib to segfault but that has since been
-// fixed.  it may be that with the updated lib, the need to get the size
-// exactly correct is obviated and thus the need to reload as well.
-
-/* Since SO rules are loaded 1 time at startup, regardless of
- * configuration, we won't pcre_capture count again, so save the max.  */
-static int s_ovector_max = 0;
+// we need to specify the vector length for our pcre_exec call.  we only care
+// about the first vector, which if the match is successful will include the
+// offset to the end of the full pattern match.  if we decide to store other
+// matches, make *SURE* that this is a multiple of 3 as pcre requires it.
 
 // this is a temporary value used during parsing and set in snort conf
 // by verify; search uses the value in snort conf
-static int s_ovector_size = 0;
+static int s_ovector_max = -1;
 
 static unsigned scratch_index;
+static ScratchAllocator* scratcher = nullptr;
 
 static THREAD_LOCAL ProfileStats pcrePerfStats;
 
@@ -102,8 +100,8 @@ static void pcre_capture(
     pcre_fullinfo((const pcre*)code, (const pcre_extra*)extra,
         PCRE_INFO_CAPTURECOUNT, &tmp_ovector_size);
 
-    if (tmp_ovector_size > s_ovector_size)
-        s_ovector_size = tmp_ovector_size;
+    if (tmp_ovector_size > s_ovector_max)
+        s_ovector_max = tmp_ovector_size;
 }
 
 static void pcre_check_anchored(PcreData* pcre_data)
@@ -156,7 +154,7 @@ static void pcre_check_anchored(PcreData* pcre_data)
     }
 }
 
-static void pcre_parse(const char* data, PcreData* pcre_data)
+static void pcre_parse(const SnortConfig* sc, const char* data, PcreData* pcre_data)
 {
     const char* error;
     char* re, * free_me;
@@ -248,7 +246,10 @@ static void pcre_parse(const char* data, PcreData* pcre_data)
          * these are snort specific don't work with pcre or perl
          */
         case 'R':  pcre_data->options |= SNORT_PCRE_RELATIVE; break;
-        case 'O':  pcre_data->options |= SNORT_OVERRIDE_MATCH_LIMIT; break;
+        case 'O':
+            if ( sc->pcre_override )
+                pcre_data->options |= SNORT_OVERRIDE_MATCH_LIMIT;
+            break;
 
         default:
             ParseError("unknown/extra pcre option encountered");
@@ -272,56 +273,45 @@ static void pcre_parse(const char* data, PcreData* pcre_data)
 
     if (pcre_data->pe)
     {
-        if ((SnortConfig::get_pcre_match_limit() != -1) &&
+        if ((sc->get_pcre_match_limit() != 0) &&
             !(pcre_data->options & SNORT_OVERRIDE_MATCH_LIMIT))
         {
-            if (pcre_data->pe->flags & PCRE_EXTRA_MATCH_LIMIT)
-            {
-                pcre_data->pe->match_limit = SnortConfig::get_pcre_match_limit();
-            }
-            else
-            {
+            if ( !(pcre_data->pe->flags & PCRE_EXTRA_MATCH_LIMIT) )
                 pcre_data->pe->flags |= PCRE_EXTRA_MATCH_LIMIT;
-                pcre_data->pe->match_limit = SnortConfig::get_pcre_match_limit();
-            }
+
+            pcre_data->pe->match_limit = sc->get_pcre_match_limit();
         }
 
-        if ((SnortConfig::get_pcre_match_limit_recursion() != -1) &&
+        if ((sc->get_pcre_match_limit_recursion() != 0) &&
             !(pcre_data->options & SNORT_OVERRIDE_MATCH_LIMIT))
         {
-            if (pcre_data->pe->flags & PCRE_EXTRA_MATCH_LIMIT_RECURSION)
-            {
-                pcre_data->pe->match_limit_recursion =
-                    SnortConfig::get_pcre_match_limit_recursion();
-            }
-            else
-            {
+            if ( !(pcre_data->pe->flags & PCRE_EXTRA_MATCH_LIMIT_RECURSION) )
                 pcre_data->pe->flags |= PCRE_EXTRA_MATCH_LIMIT_RECURSION;
-                pcre_data->pe->match_limit_recursion =
-                    SnortConfig::get_pcre_match_limit_recursion();
-            }
+
+            pcre_data->pe->match_limit_recursion =
+                sc->get_pcre_match_limit_recursion();
         }
     }
     else
     {
         if (!(pcre_data->options & SNORT_OVERRIDE_MATCH_LIMIT) &&
-            ((SnortConfig::get_pcre_match_limit() != -1) ||
-             (SnortConfig::get_pcre_match_limit_recursion() != -1)))
+            ((sc->get_pcre_match_limit() != 0) ||
+             (sc->get_pcre_match_limit_recursion() != 0)))
         {
             pcre_data->pe = (pcre_extra*)snort_calloc(sizeof(pcre_extra));
             pcre_data->free_pe = true;
 
-            if (SnortConfig::get_pcre_match_limit() != -1)
+            if (sc->get_pcre_match_limit() != 0)
             {
                 pcre_data->pe->flags |= PCRE_EXTRA_MATCH_LIMIT;
-                pcre_data->pe->match_limit = SnortConfig::get_pcre_match_limit();
+                pcre_data->pe->match_limit = sc->get_pcre_match_limit();
             }
 
-            if (SnortConfig::get_pcre_match_limit_recursion() != -1)
+            if (sc->get_pcre_match_limit_recursion() != 0)
             {
                 pcre_data->pe->flags |= PCRE_EXTRA_MATCH_LIMIT_RECURSION;
                 pcre_data->pe->match_limit_recursion =
-                    SnortConfig::get_pcre_match_limit_recursion();
+                    sc->get_pcre_match_limit_recursion();
             }
         }
     }
@@ -353,6 +343,7 @@ syntax:
  * found_offset will be set to -1 when the find is unsuccessful OR the routine is inverted
  */
 static bool pcre_search(
+    Packet* p,
     const PcreData* pcre_data,
     const uint8_t* buf,
     unsigned len,
@@ -363,7 +354,7 @@ static bool pcre_search(
 
     found_offset = -1;
 
-    std::vector<void *> ss = SnortConfig::get_conf()->state[get_instance_id()];
+    std::vector<void *> ss = p->context->conf->state[get_instance_id()];
     assert(ss[scratch_index]);
 
     int result = pcre_exec(
@@ -374,7 +365,7 @@ static bool pcre_search(
         start_offset,   /* start at offset 0 in the subject */
         0,              /* options(handled at compile time */
         (int*)ss[scratch_index], /* vector for substring information */
-        SnortConfig::get_conf()->pcre_ovector_size); /* number of elements in the vector */
+        p->context->conf->pcre_ovector_size); /* number of elements in the vector */
 
     if (result >= 0)
     {
@@ -405,8 +396,19 @@ static bool pcre_search(
     {
         matched = false;
     }
+    else if (result == PCRE_ERROR_MATCHLIMIT)
+    {
+        pc.pcre_match_limit++;
+        matched = false;
+    }
+    else if (result == PCRE_ERROR_RECURSIONLIMIT)
+    {
+        pc.pcre_recursion_limit++;
+        matched = false;
+    }
     else
     {
+        pc.pcre_error++;
         return false;
     }
 
@@ -522,8 +524,9 @@ uint32_t PcreOption::hash() const
     }
 
     a += config->options;
+    b += IpsOption::hash();
 
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -547,12 +550,12 @@ bool PcreOption::operator==(const IpsOption& ips) const
     return false;
 }
 
-IpsOption::EvalStatus PcreOption::eval(Cursor& c, Packet*)
+IpsOption::EvalStatus PcreOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(pcrePerfStats);
+    RuleProfile profile(pcrePerfStats);
 
     // short circuit this for testing pcre performance impact
-    if ( SnortConfig::no_pcre() )
+    if ( p->context->conf->no_pcre() )
         return NO_MATCH;
 
     unsigned pos = c.get_delta();
@@ -566,7 +569,7 @@ IpsOption::EvalStatus PcreOption::eval(Cursor& c, Packet*)
 
     int found_offset = -1; // where is the ending location of the pattern
 
-    if ( pcre_search(config, c.buffer()+adj, c.size()-adj, pos, found_offset) )
+    if ( pcre_search(p, config, c.buffer()+adj, c.size()-adj, pos, found_offset) )
     {
         if ( found_offset > 0 )
         {
@@ -575,6 +578,7 @@ IpsOption::EvalStatus PcreOption::eval(Cursor& c, Packet*)
         }
         return MATCH;
     }
+
     return NO_MATCH;
 }
 
@@ -610,6 +614,29 @@ static const Parameter s_params[] =
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
+struct PcreStats
+{
+    PegCount pcre_rules;
+#ifdef HAVE_HYPERSCAN
+    PegCount pcre_to_hyper;
+#endif
+    PegCount pcre_native;
+    PegCount pcre_negated;
+};
+
+const PegInfo pcre_pegs[] =
+{
+    { CountType::SUM, "pcre_rules", "total rules processed with pcre option" },
+#ifdef HAVE_HYPERSCAN
+    { CountType::SUM, "pcre_to_hyper", "total pcre rules by hyperscan engine" },
+#endif
+    { CountType::SUM, "pcre_native", "total pcre rules compiled by pcre engine" },
+    { CountType::SUM, "pcre_negated", "total pcre rules using negation syntax" },
+    { CountType::END, nullptr, nullptr }
+};
+
+PcreStats pcre_stats;
+
 #define s_help \
     "rule option for matching payload data with pcre"
 
@@ -619,28 +646,43 @@ public:
     PcreModule() : Module(s_name, s_help, s_params)
     {
         data = nullptr;
-        scratch_index = SnortConfig::request_scratch(
-            PcreModule::scratch_setup, PcreModule::scratch_cleanup);
+        scratcher = new SimpleScratchAllocator(scratch_setup, scratch_cleanup);
+        scratch_index = scratcher->get_id();
     }
 
     ~PcreModule() override
-    { delete data; }
+    {
+        delete data;
+        delete scratcher;
+    }
 
+#ifdef HAVE_HYPERSCAN
     bool begin(const char*, int, SnortConfig*) override;
+#endif
     bool set(const char*, Value&, SnortConfig*) override;
+    bool end(const char*, int, SnortConfig*) override;
 
     ProfileStats* get_profile() const override
     { return &pcrePerfStats; }
+
+    const PegInfo* get_pegs() const override;
+    PegCount* get_counts() const override;
 
     PcreData* get_data();
 
     Usage get_usage() const override
     { return DETECT; }
 
+    Module* get_mod_regex() const
+    { return mod_regex; }
+
 private:
     PcreData* data;
-    static void scratch_setup(SnortConfig* sc);
-    static void scratch_cleanup(SnortConfig* sc);
+    Module* mod_regex = nullptr;
+    std::string re;
+
+    static bool scratch_setup(SnortConfig*);
+    static void scratch_cleanup(SnortConfig*);
 };
 
 PcreData* PcreModule::get_data()
@@ -650,30 +692,76 @@ PcreData* PcreModule::get_data()
     return tmp;
 }
 
-bool PcreModule::begin(const char*, int, SnortConfig*)
+const PegInfo* PcreModule::get_pegs() const
+{ return pcre_pegs; }
+
+PegCount* PcreModule::get_counts() const
+{ return (PegCount*)&pcre_stats; }
+
+#ifdef HAVE_HYPERSCAN
+bool PcreModule::begin(const char* name, int v, SnortConfig* sc)
 {
-    data = (PcreData*)snort_calloc(sizeof(*data));
+    if ( sc->pcre_to_regex )
+    {
+        if ( !mod_regex )
+            mod_regex = ModuleManager::get_module(mod_regex_name);
+
+        if( mod_regex )
+            mod_regex = mod_regex->begin(name, v, sc) ? mod_regex : nullptr;
+    }
     return true;
 }
+#endif
 
-bool PcreModule::set(const char*, Value& v, SnortConfig*)
+bool PcreModule::set(const char* name, Value& v, SnortConfig* sc)
 {
     if ( v.is("~re") )
-        pcre_parse(v.get_string(), data);
+    {
+        re = v.get_string();
 
+        if( mod_regex )
+            mod_regex = mod_regex->set(name, v, sc) ? mod_regex : nullptr;
+    }
     else
         return false;
 
     return true;
 }
 
-void PcreModule::scratch_setup(SnortConfig* sc)
+bool PcreModule::end(const char* name, int v, SnortConfig* sc)
 {
+    if( mod_regex )
+        mod_regex = mod_regex->end(name, v, sc) ? mod_regex : nullptr;
+
+    if ( !mod_regex )
+    {
+        data = (PcreData*)snort_calloc(sizeof(*data));
+        pcre_parse(sc, re.c_str(), data);
+    }
+
+    return true;
+}
+
+bool PcreModule::scratch_setup(SnortConfig* sc)
+{
+    if ( s_ovector_max < 0 )
+        return false;
+
+    // The pcre_fullinfo() function can be used to find out how many
+    // capturing subpatterns there are in a compiled pattern. The
+    // smallest size for ovector that will allow for n captured
+    // substrings, in addition to the offsets of the substring matched
+    // by the whole pattern is 3(n+1).
+
+    sc->pcre_ovector_size = 3 * (s_ovector_max + 1);
+    s_ovector_max = -1;
+
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
         std::vector<void *>& ss = sc->state[i];
-        ss[scratch_index] = snort_calloc(s_ovector_max, sizeof(int));
+        ss[scratch_index] = snort_calloc(sc->pcre_ovector_size, sizeof(int));
     }
+    return true;
 }
 
 void PcreModule::scratch_cleanup(SnortConfig* sc)
@@ -681,10 +769,7 @@ void PcreModule::scratch_cleanup(SnortConfig* sc)
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
         std::vector<void *>& ss = sc->state[i];
-
-        if ( ss[scratch_index] )
-            snort_free(ss[scratch_index]);
-
+        snort_free(ss[scratch_index]);
         ss[scratch_index] = nullptr;
     }
 }
@@ -694,43 +779,37 @@ void PcreModule::scratch_cleanup(SnortConfig* sc)
 //-------------------------------------------------------------------------
 
 static Module* mod_ctor()
-{
-    return new PcreModule;
-}
+{ return new PcreModule; }
 
 static void mod_dtor(Module* m)
-{
-    delete m;
-}
+{ delete m; }
 
-static IpsOption* pcre_ctor(Module* p, OptTreeNode*)
+static IpsOption* pcre_ctor(Module* p, OptTreeNode* otn)
 {
+    pcre_stats.pcre_rules++;
     PcreModule* m = (PcreModule*)p;
-    PcreData* d = m->get_data();
-    return new PcreOption(d);
+
+#ifdef HAVE_HYPERSCAN
+    Module* mod_regex = m->get_mod_regex();
+    if ( mod_regex )
+    {
+        pcre_stats.pcre_to_hyper++;
+        const IpsApi* opt_api = IpsManager::get_option_api(mod_regex_name);
+        return opt_api->ctor(mod_regex, otn);
+    }
+    else
+#else
+    UNUSED(otn);
+#endif
+    {
+        pcre_stats.pcre_native++;
+        PcreData* d = m->get_data();
+        return new PcreOption(d);
+    }
 }
 
 static void pcre_dtor(IpsOption* p)
-{
-    delete p;
-}
-
-static void pcre_verify(SnortConfig* sc)
-{
-    /* The pcre_fullinfo() function can be used to find out how many
-     * capturing subpatterns there are in a compiled pattern. The
-     * smallest size for ovector that will allow for n captured
-     * substrings, in addition to the offsets of the substring matched
-     * by the whole pattern, is (n+1)*3.  */
-    s_ovector_size += 1;
-    s_ovector_size *= 3;
-
-    if (s_ovector_size > s_ovector_max)
-        s_ovector_max = s_ovector_size;
-
-    sc->pcre_ovector_size = s_ovector_size;
-    s_ovector_size = 0;
-}
+{ delete p; }
 
 static const IpsApi pcre_api =
 {
@@ -754,7 +833,7 @@ static const IpsApi pcre_api =
     nullptr,
     pcre_ctor,
     pcre_dtor,
-    pcre_verify
+    nullptr
 };
 
 #ifdef BUILDING_SO

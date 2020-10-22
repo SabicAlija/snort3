@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,8 @@
 #ifdef UNIT_TEST
 #include "catch/snort_catch.h"
 #endif
+
+using namespace snort;
 
 static hwloc_topology_t topology = nullptr;
 static hwloc_cpuset_t process_cpuset = nullptr;
@@ -120,8 +122,11 @@ void ThreadConfig::term()
 
 ThreadConfig::~ThreadConfig()
 {
-    for (auto iter = thread_affinity.begin(); iter != thread_affinity.end(); iter++)
-        delete iter->second;
+    for (auto& iter : thread_affinity)
+        delete iter.second;
+
+    for (auto& iter : named_thread_affinity)
+        delete iter.second;
 }
 
 void ThreadConfig::set_thread_affinity(SThreadType type, unsigned id, CpuSet* cpuset)
@@ -136,7 +141,20 @@ void ThreadConfig::set_thread_affinity(SThreadType type, unsigned id, CpuSet* cp
         thread_affinity[key] = cpuset;
     }
     else
-        snort::ParseWarning(WARN_CONF, "This platform does not support setting thread affinity.\n");
+        ParseWarning(WARN_CONF, "This platform does not support setting thread affinity.\n");
+}
+
+void ThreadConfig::set_named_thread_affinity(const std::string& name, CpuSet* cpuset)
+{
+    if (topology_support->cpubind->set_thisthread_cpubind)
+    {
+        auto iter = named_thread_affinity.find(name);
+        if (iter != named_thread_affinity.end())
+            delete iter->second;
+        named_thread_affinity[name] = cpuset;
+    }
+    else
+        ParseWarning(WARN_CONF, "This platform does not support setting thread affinity.\n");
 }
 
 void ThreadConfig::implement_thread_affinity(SThreadType type, unsigned id)
@@ -153,21 +171,55 @@ void ThreadConfig::implement_thread_affinity(SThreadType type, unsigned id)
         desired_cpuset = iter->second->cpuset;
     else
         desired_cpuset = process_cpuset;
+
+    // A data race in this library function ensues from the usage of a static variable
+    // to dump chars when calculating string length. This does not affect functionality.
     hwloc_bitmap_list_asprintf(&s, desired_cpuset);
 
     current_cpuset = hwloc_bitmap_alloc();
     hwloc_get_cpubind(topology, current_cpuset, HWLOC_CPUBIND_THREAD);
     if (!hwloc_bitmap_isequal(current_cpuset, desired_cpuset))
-        snort::LogMessage("Binding thread %u (type %u) to %s.\n", id, type, s);
+        LogMessage("Binding thread %u (type %u) to %s.\n", id, type, s);
     hwloc_bitmap_free(current_cpuset);
 
     if (hwloc_set_cpubind(topology, desired_cpuset, HWLOC_CPUBIND_THREAD))
     {
-        snort::FatalError("Failed to pin thread %u (type %u) to %s: %s (%d)\n",
-                id, type, s, snort::get_error(errno), errno);
+        FatalError("Failed to pin thread %u (type %u) to %s: %s (%d)\n",
+            id, type, s, get_error(errno), errno);
     }
 
     free(s);
+}
+
+void ThreadConfig::implement_named_thread_affinity(const std::string& name)
+{
+    if (!topology_support->cpubind->set_thisthread_cpubind)
+        return;
+
+    auto iter = named_thread_affinity.find(name);
+    if (iter != named_thread_affinity.end())
+    {
+        char* s;
+
+        auto desired_cpuset = iter->second->cpuset;
+        hwloc_bitmap_list_asprintf(&s, desired_cpuset);
+
+        auto current_cpuset = hwloc_bitmap_alloc();
+        hwloc_get_cpubind(topology, current_cpuset, HWLOC_CPUBIND_THREAD);
+        if (!hwloc_bitmap_isequal(current_cpuset, desired_cpuset))
+            LogMessage("Binding thread %s to %s.\n", name.c_str(), s);
+        hwloc_bitmap_free(current_cpuset);
+
+        if (hwloc_set_cpubind(topology, desired_cpuset, HWLOC_CPUBIND_THREAD))
+        {
+            FatalError("Failed to pin thread %s to %s: %s (%d)\n",
+                name.c_str(), s, get_error(errno), errno);
+        }
+
+        free(s);
+    }
+    else
+        implement_thread_affinity(get_thread_type(), DEFAULT_THREAD_ID);
 }
 
 
@@ -223,6 +275,56 @@ TEST_CASE("Set and implement thread affinity", "[ThreadConfig]")
         tc.implement_thread_affinity(STHREAD_TYPE_MAIN, 0);
         hwloc_get_cpubind(topology, thread_cpuset, HWLOC_CPUBIND_THREAD);
         CHECK(hwloc_bitmap_isequal(thread_cpuset, process_cpuset));
+
+        hwloc_bitmap_free(thread_cpuset);
+    }
+}
+
+TEST_CASE("Named thread affinity configured", "[ThreadConfig]")
+{
+    if (topology_support->cpubind->set_thisthread_cpubind)
+    {
+        CpuSet* cpuset = new CpuSet(hwloc_bitmap_dup(process_cpuset));
+        ThreadConfig tc;
+
+        hwloc_cpuset_t thread_cpuset = hwloc_bitmap_alloc();
+
+        // Configure named thread.
+        hwloc_bitmap_singlify(cpuset->cpuset);
+        tc.set_named_thread_affinity("found", cpuset);
+
+        // The one in the named map, should have the specified cpuset.
+        tc.implement_named_thread_affinity("found");
+        hwloc_get_cpubind(topology, thread_cpuset, HWLOC_CPUBIND_THREAD);
+        CHECK(hwloc_bitmap_isequal(thread_cpuset, cpuset->cpuset));
+
+        // The one not in the named map, should have the process cpuset
+        // if no type has been configured for it.
+        tc.implement_named_thread_affinity("not found, no type configured");
+        hwloc_get_cpubind(topology, thread_cpuset, HWLOC_CPUBIND_THREAD);
+        CHECK(hwloc_bitmap_isequal(thread_cpuset, process_cpuset));
+
+        hwloc_bitmap_free(thread_cpuset);
+    }
+}
+
+TEST_CASE("Named thread affinity with type configured", "[ThreadConfig]")
+{
+    if (topology_support->cpubind->set_thisthread_cpubind)
+    {
+        CpuSet* type_cpuset = new CpuSet(hwloc_bitmap_dup(process_cpuset));
+        ThreadConfig tc;
+
+        hwloc_cpuset_t thread_cpuset = hwloc_bitmap_alloc();
+
+        // Configure type affinity, but not the named thread affinity.
+        hwloc_bitmap_singlify(type_cpuset->cpuset);
+        tc.set_thread_affinity(STHREAD_TYPE_MAIN, ThreadConfig::DEFAULT_THREAD_ID, type_cpuset);
+
+        // The named thread should inherit the type affinity.
+        tc.implement_named_thread_affinity("not found, type other");
+        hwloc_get_cpubind(topology, thread_cpuset, HWLOC_CPUBIND_THREAD);
+        CHECK(hwloc_bitmap_isequal(thread_cpuset, type_cpuset->cpuset));
 
         hwloc_bitmap_free(thread_cpuset);
     }

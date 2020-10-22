@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -55,7 +55,7 @@ public:
     { return DETECT; }
 
 public:
-    Target target;
+    Target target = Target::TARGET_NONE;
 };
 
 bool TargetModule::set(const char*, Value& v, SnortConfig*)
@@ -63,8 +63,8 @@ bool TargetModule::set(const char*, Value& v, SnortConfig*)
     if ( !v.is("~") )
         return false;
 
-    assert(v.get_long() >= 0 and v.get_long() <= TARGET_MAX);
-    target = static_cast<Target>(v.get_long() + 1);
+    assert(v.get_uint8() <= TARGET_MAX);
+    target = static_cast<Target>(v.get_uint8() + 1);
 
     return true;
 }

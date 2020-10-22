@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,6 +38,7 @@ namespace snort
 struct Packet;
 class Flow;
 class IpsContext;
+class IpsContextChain;
 class IpsContextData;
 
 class SO_PUBLIC DetectionEngine
@@ -55,38 +56,39 @@ public:
     static IpsContext* get_context();
 
     static Packet* get_current_packet();
+    static Packet* get_current_wire_packet();
     static Packet* set_next_packet(Packet* parent = nullptr);
     static uint8_t* get_next_buffer(unsigned& max);
 
-    static bool offloaded(Packet*);
     static bool offload(Packet*);
 
     static void onload(Flow*);
+    static void onload();
     static void idle();
 
     static void set_encode_packet(Packet*);
     static Packet* get_encode_packet();
 
-    static void set_file_data(const DataPointer&);
-    static void get_file_data(DataPointer&);
+    static void set_file_data(const DataPointer& dp);
+    static DataPointer& get_file_data(IpsContext*);
 
     static uint8_t* get_buffer(unsigned& max);
     static struct DataBuffer& get_alt_buffer(Packet*);
 
     static void set_data(unsigned id, IpsContextData*);
     static IpsContextData* get_data(unsigned id);
-    static IpsContextData* get_data(unsigned id, IpsContext* context);
+    static IpsContextData* get_data(unsigned id, IpsContext*);
 
     static void add_replacement(const std::string&, unsigned);
     static bool get_replacement(std::string&, unsigned&);
     static void clear_replacement();
 
     static bool detect(Packet*, bool offload_ok = false);
-    static void inspect(Packet*);
+    static bool inspect(Packet*);
 
     static int queue_event(const struct OptTreeNode*);
     static int queue_event(unsigned gid, unsigned sid, Actions::Type = Actions::NONE);
-    
+
     static void disable_all(Packet*);
     static bool all_disabled(Packet*);
 
@@ -100,14 +102,21 @@ public:
     static void set_check_tags(bool enable = true);
     static bool get_check_tags();
 
+    static void wait_for_context();
+
 private:
     static struct SF_EVENTQ* get_event_queue();
+    static bool do_offload(snort::Packet*);
     static void offload_thread(IpsContext*);
-    static void onload();
+    static void complete(snort::Packet*);
+    static void resume(snort::Packet*);
+    static void resume_ready_suspends(const IpsContextChain&);
 
     static int log_events(Packet*);
     static void clear_events(Packet*);
-    static void finish_packet(Packet*);
+    static void finish_inspect_with_latency(Packet*);
+    static void finish_inspect(Packet*, bool inspected);
+    static void finish_packet(Packet*, bool flow_deletion = false);
 
 private:
     IpsContext* context;
@@ -120,9 +129,7 @@ static inline void set_file_data(const uint8_t* p, unsigned n)
 }
 
 static inline void clear_file_data()
-{
-    set_file_data(nullptr, 0);
-}
+{ set_file_data(nullptr, 0); }
 
 } // namespace snort
 #endif

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,7 +26,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "protocols/packet.h"
 #include "profiler/profiler.h"
 
@@ -57,7 +57,7 @@ public:
     EvalStatus eval(Cursor&, Packet*) override;
 
 public:
-    // set n is for version n (named types can have 
+    // set n is for version n (named types can have
     // different codes in different versions)
     ByteBitSet types[MAX_GTP_VERSION_CODE + 1];
 };
@@ -76,15 +76,16 @@ uint32_t GtpTypeOption::hash() const
     uint32_t b = types[1].count();
     uint32_t c = types[2].count();
 
-    mix_str(a, b, c, get_name());
-    finalize(a,b,c);
+    mix(a, b, c);
+    a += IpsOption::hash();
 
+    finalize(a,b,c);
     return c;
 }
 
 bool GtpTypeOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const GtpTypeOption& rhs = (const GtpTypeOption&)ips;
@@ -98,7 +99,7 @@ bool GtpTypeOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus GtpTypeOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(gtp_type_prof);
+    RuleProfile profile(gtp_type_prof);
 
     if ( !p or !p->flow )
         return NO_MATCH;

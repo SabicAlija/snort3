@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,17 +31,19 @@
 
 #include "decode_buffer.h"
 
+using namespace snort;
+
 void QPDecode::reset_decode_state()
 {
     reset_decoded_bytes();
     buffer->reset_saved();
 }
 
-DecodeResult QPDecode::decode_data(const uint8_t* start, const uint8_t* end)
+DecodeResult QPDecode::decode_data(const uint8_t* start, const uint8_t* end, uint8_t *decode_buf)
 {
     uint32_t act_encode_size = 0, act_decode_size = 0, bytes_read = 0;
 
-    if (!buffer->check_restore_buffer())
+    if (!buffer->check_restore_buffer() || !decode_buf)
     {
         reset_decode_state();
         return DECODE_EXCEEDED;
@@ -49,7 +51,7 @@ DecodeResult QPDecode::decode_data(const uint8_t* start, const uint8_t* end)
 
     uint32_t encode_avail = buffer->get_encode_avail() - buffer->get_prev_encoded_bytes();
 
-    if (snort::sf_strip_LWS(start, (end-start), buffer->get_encode_buff() + buffer->get_prev_encoded_bytes(),
+    if (sf_strip_LWS(start, (end-start), buffer->get_encode_buff() + buffer->get_prev_encoded_bytes(),
         encode_avail, &act_encode_size) != 0)
     {
         reset_decode_state();
@@ -59,8 +61,8 @@ DecodeResult QPDecode::decode_data(const uint8_t* start, const uint8_t* end)
     act_encode_size = act_encode_size + buffer->get_prev_encoded_bytes();
 
     if (sf_qpdecode((char *)buffer->get_encode_buff(), act_encode_size,
-        (char *)buffer->get_decode_buff(), buffer->get_decode_avail(),
-        &bytes_read, &act_decode_size) != 0)
+        (char *)decode_buf, buffer->get_decode_avail(), &bytes_read,
+        &act_decode_size) != 0)
     {
         reset_decode_state();
         return DECODE_FAIL;
@@ -80,7 +82,7 @@ DecodeResult QPDecode::decode_data(const uint8_t* start, const uint8_t* end)
         buffer->reset_saved();
 
     decoded_bytes = act_decode_size;
-    decodePtr = buffer->get_decode_buff();
+    decodePtr = decode_buf;
     buffer->update_buffer(act_encode_size, act_decode_size);
     decode_bytes_read = buffer->get_decode_bytes_read();
     return DECODE_SUCCESS;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -49,7 +49,7 @@ public:
 } // namespace
 
 void Icmp4IpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::IP_EMBEDDED_IN_ICMP4); }
+{ v.emplace_back(ProtocolId::IP_EMBEDDED_IN_ICMP4); }
 
 bool Icmp4IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
 {
@@ -150,8 +150,8 @@ void Icmp4IpCodec::log(TextLog* const text_log, const uint8_t* raw_pkt,
     // COPIED DIRECTLY FROM ipv4 CODEC.  This is specifically replicated since
     //      the two are not necessarily the same.
 
-    // FIXIT-H this does NOT obfuscate correctly
-    if (SnortConfig::obfuscate())
+    // FIXIT-RC this does NOT obfuscate correctly
+    if (SnortConfig::get_conf()->obfuscate())
     {
         TextLog_Print(text_log, "xxx.xxx.xxx.xxx -> xxx.xxx.xxx.xxx");
     }

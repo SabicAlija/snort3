@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,11 +22,10 @@
 #ifndef CLIENT_DISCOVERY_H
 #define CLIENT_DISCOVERY_H
 
-#include "appid_discovery.h"
-
 #include "flow/flow.h"
 #include "log/messages.h"
 
+#include "appid_discovery.h"
 #include "appid_types.h"
 
 class ClientDetector;
@@ -39,27 +38,23 @@ struct ClientAppMatch
     const ClientDetector* detector = nullptr;
 };
 
-extern THREAD_LOCAL ClientAppMatch* match_free_list;
-
 class ClientDiscovery : public AppIdDiscovery
 {
 public:
-    ~ClientDiscovery() override;
-    static ClientDiscovery& get_instance(AppIdInspector* ins = nullptr);
-    static void release_instance();
+    void initialize() override;
+    void reload() override;
 
-    void finalize_client_plugins();
-    void release_thread_resources();
-    bool do_client_discovery(AppIdSession&, snort::Packet*, AppidSessionDirection direction);
+    void finalize_client_patterns();
+    void reload_client_patterns();
+    bool do_client_discovery(AppIdSession&, snort::Packet*,
+        AppidSessionDirection direction, AppidChangeBits& change_bits);
 
 private:
-    ClientDiscovery(AppIdInspector& ins);
-    void initialize() override;
-    int exec_client_detectors(AppIdSession&, snort::Packet*, AppidSessionDirection direction);
-    ClientAppMatch* find_detector_candidates(const snort::Packet* pkt, IpProtocol);
+    void exec_client_detectors(AppIdSession&, snort::Packet*,
+        AppidSessionDirection direction, AppidChangeBits& change_bits);
+    ClientAppMatch* find_detector_candidates(const snort::Packet* pkt, const AppIdSession&);
     void create_detector_candidates_list(AppIdSession&, snort::Packet*);
     int get_detector_candidates_list(AppIdSession&, snort::Packet*, AppidSessionDirection direction);
-    static ClientDiscovery* discovery_manager;
 };
 
 #endif

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,9 +30,16 @@
 
 #include <string>
 
-#include "app_info_table.h"
-#include "appid_module.h"
-#include "appid_peg_counts.h"
+#include "protocols/packet.h"
+#include "pub_sub/appid_events.h"
+#include "utils/util.h"
+
+#include "appid_types.h"
+#include "application_ids.h"
+
+class AppIdDetector;
+class AppIdSession;
+class OdpContext;
 
 class ApplicationDescriptor
 {
@@ -43,45 +50,29 @@ public:
     virtual void reset()
     {
         my_id = APP_ID_NONE;
-        my_vendor.clear();
         my_version.clear();
     }
 
-    virtual void update(AppId id, char* vendor, char* version)
+    virtual void update(AppId id, AppidChangeBits& change_bits, char* version)
     {
         set_id(id);
-        set_vendor(vendor);
-        set_version(version);
+        set_version(version, change_bits);
     }
 
-    virtual void update_stats(AppId id) = 0;
+    virtual void update_stats(AppId id, bool increment = true) = 0;
 
     AppId get_id() const
     {
         return my_id;
     }
 
-    virtual void set_id(AppId app_id)
-    {
-        if ( my_id != app_id )
-        {
-            my_id = app_id;
-            if ( app_id > APP_ID_NONE )
-                update_stats(app_id);
-            else if ( app_id == APP_ID_UNKNOWN )
-                appid_stats.appid_unknown++;
-        }
-    }
+    virtual void set_id(AppId app_id);
 
-    const char* get_vendor() const
-    {
-        return my_vendor.empty() ? nullptr : my_vendor.c_str();
-    }
+    virtual void set_id(const snort::Packet& p, AppIdSession& asd, AppidSessionDirection dir, AppId app_id, AppidChangeBits& change_bits);
 
-    void set_vendor(const char* vendor)
+    void set_overwritten_id(AppId app_id)
     {
-        if ( vendor )
-            my_vendor = vendor;
+        overwritten_id = app_id;
     }
 
     const char* get_version() const
@@ -89,67 +80,110 @@ public:
         return my_version.empty() ? nullptr : my_version.c_str();
     }
 
-    void set_version(const char* version)
+    void set_version(const char* version, AppidChangeBits& change_bits)
     {
         if ( version )
+        {
             my_version = version;
+            change_bits.set(APPID_VERSION_BIT);
+        }
     }
 
 private:
     AppId my_id = APP_ID_NONE;
-    std::string my_vendor;
+    AppId overwritten_id = APP_ID_NONE;
     std::string my_version;
+};
+
+struct AppIdServiceSubtype
+{
+    AppIdServiceSubtype* next = nullptr;
+    std::string service;
+    std::string vendor;
+    std::string version;
 };
 
 class ServiceAppDescriptor : public ApplicationDescriptor
 {
 public:
     ServiceAppDescriptor() = default;
-
-    void set_id(AppId app_id) override
+    ~ServiceAppDescriptor() override
     {
-        if (get_id() != app_id)
+        AppIdServiceSubtype* tmp_subtype = subtype;
+        while (tmp_subtype)
         {
-            ApplicationDescriptor::set_id(app_id);
-            AppInfoManager* app_info_mgr = &AppInfoManager::get_instance();
-            deferred = app_info_mgr->get_app_info_flags(app_id, APPINFO_FLAG_DEFER);
+            subtype = tmp_subtype->next;
+            delete tmp_subtype;
+            tmp_subtype = subtype;
         }
     }
+
+    void set_id(AppId app_id, OdpContext& odp_ctxt);
 
     void reset() override
     {
         ApplicationDescriptor::reset();
+        my_vendor.clear();
         port_service_id = APP_ID_NONE;
+
+        AppIdServiceSubtype* tmp_subtype = subtype;
+        while (tmp_subtype)
+        {
+            subtype = tmp_subtype->next;
+            delete tmp_subtype;
+            tmp_subtype = subtype;
+        }
     }
 
-    void update_stats(AppId id) override
-    {
-        AppIdPegCounts::inc_service_count(id);
-    }
+    void update_stats(AppId id, bool increment = true) override;
 
     AppId get_port_service_id() const
     {
         return port_service_id;
     }
 
-    void set_port_service_id(AppId id)
+    void set_port_service_id(AppId id);
+
+    bool get_deferred() const
     {
-        if ( id != port_service_id )
+        return deferred;
+    }
+
+    const char* get_vendor() const
+    {
+        return my_vendor.empty() ? nullptr : my_vendor.c_str();
+    }
+
+    void set_vendor(const char* vendor, AppidChangeBits& change_bits)
+    {
+        if ( vendor )
         {
-            port_service_id = id;
-            if ( id > APP_ID_NONE )
-                AppIdPegCounts::inc_service_count(id);
+            my_vendor = vendor;
+            change_bits.set(APPID_SERVICE_VENDOR_BIT);
         }
     }
 
-    bool get_deferred()
+    void add_subtype(AppIdServiceSubtype& more_subtype, AppidChangeBits& change_bits)
     {
-        return deferred;
+        AppIdServiceSubtype** tmp_subtype;
+
+        for (tmp_subtype = &subtype; *tmp_subtype; tmp_subtype = &(*tmp_subtype)->next)
+            ;
+        *tmp_subtype = &more_subtype;
+        change_bits.set(APPID_SERVICE_SUBTYPE_BIT);
+    }
+
+    const AppIdServiceSubtype* get_subtype() const
+    {
+        return subtype;
     }
 
 private:
     AppId port_service_id = APP_ID_NONE;
     bool deferred = false;
+    using ApplicationDescriptor::set_id;
+    std::string my_vendor;
+    AppIdServiceSubtype* subtype = nullptr;
 };
 
 class ClientAppDescriptor : public ApplicationDescriptor
@@ -164,18 +198,7 @@ public:
         my_user_id = APP_ID_NONE;
     }
 
-    void update_user(AppId app_id, const char* username)
-    {
-        if ( my_username != username )
-            my_username = username;
-
-        if ( my_user_id != app_id )
-        {
-            my_user_id = app_id;
-            if ( app_id > APP_ID_NONE )
-                AppIdPegCounts::inc_user_count(app_id);
-        }
-    }
+    void update_user(AppId app_id, const char* username, AppidChangeBits& change_bits);
 
     AppId get_user_id() const
     {
@@ -187,10 +210,7 @@ public:
         return my_username.empty() ? nullptr : my_username.c_str();
     }
 
-    void update_stats(AppId id) override
-    {
-        AppIdPegCounts::inc_client_count(id);
-    }
+    void update_stats(AppId id, bool increment = true) override;
 
 private:
     std::string my_username;
@@ -207,10 +227,7 @@ public:
         ApplicationDescriptor::reset();
     }
 
-    void update_stats(AppId id) override
-    {
-        AppIdPegCounts::inc_payload_count(id);
-    }
+    void update_stats(AppId id, bool increment = true) override;
 };
 
 #endif

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -17,7 +17,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// client_detector.h author Sourcefire Inc.
+// appid_detector.h author Sourcefire Inc.
 
 #ifndef APPID_DETECTOR_H
 #define APPID_DETECTOR_H
@@ -31,7 +31,7 @@
 #include "application_ids.h"
 #include "service_state.h"
 
-class AppIdConfig;
+class AppIdContext;
 class LuaStateDescriptor;
 
 namespace snort
@@ -75,8 +75,9 @@ typedef std::vector<ServiceDetectorPort> ServiceDetectorPorts;
 class AppIdDiscoveryArgs
 {
 public:
-    AppIdDiscoveryArgs(const uint8_t* data, uint16_t size, AppidSessionDirection dir, AppIdSession& asd,
-        snort::Packet* p) : data(data), size(size), dir(dir), asd(asd), pkt(p), config(asd.config)
+    AppIdDiscoveryArgs(const uint8_t* data, uint16_t size, AppidSessionDirection dir,
+        AppIdSession& asd, snort::Packet* p, AppidChangeBits& cb) : data(data),
+        size(size), dir(dir), asd(asd), pkt(p), change_bits(cb)
     {}
 
     const uint8_t* data;
@@ -84,7 +85,7 @@ public:
     AppidSessionDirection dir;
     AppIdSession& asd;
     snort::Packet* pkt;
-    const AppIdConfig* config = nullptr;
+    AppidChangeBits& change_bits;
 };
 
 // These numbers are what Lua (VDB/ODP) gives us. If these numbers are ever changed,
@@ -110,18 +111,26 @@ public:
     virtual ~AppIdDetector() = default;
 
     virtual int initialize();
-    virtual void do_custom_init() = 0;
-    virtual void release_thread_resources() = 0;
+    virtual void reload();
+    virtual void do_custom_init() { }
+    virtual void do_custom_reload() { }
     virtual int validate(AppIdDiscoveryArgs&) = 0;
-    virtual void register_appid(AppId, unsigned extractsInfo) = 0;
+    virtual void register_appid(AppId, unsigned extractsInfo, OdpContext& odp_ctxt) = 0;
 
     virtual void* data_get(AppIdSession&);
     virtual int data_add(AppIdSession&, void*, AppIdFreeFCN);
-    virtual void add_info(AppIdSession&, const char*);
-    virtual void add_user(AppIdSession&, const char*, AppId, bool);
+    virtual void add_user(AppIdSession&, const char*, AppId, bool, AppidChangeBits&);
     virtual void add_payload(AppIdSession&, AppId);
-    virtual void add_app(AppIdSession&, AppId, AppId, const char*);
-    virtual void finalize() {}
+    virtual void add_app(AppIdSession& asd, AppId service_id, AppId client_id, const char* version, AppidChangeBits& change_bits)
+    {
+        if ( version )
+            asd.set_client_version(version, change_bits);
+
+        asd.set_client_detected();
+        asd.client_inferred_service_id = service_id;
+        asd.set_client_id(client_id);
+    }
+    virtual void add_app(const snort::Packet&, AppIdSession&, AppidSessionDirection, AppId, AppId, const char*, AppidChangeBits&);
     const char* get_code_string(APPID_STATUS_CODE) const;
 
     const std::string& get_name() const
@@ -170,14 +179,6 @@ protected:
     FlowApplicationInfo appid_registry;
     ServiceDetectorPorts service_ports;
 };
-
-#if defined(WORDS_BIGENDIAN)
-#define LETOHS(p)   BYTE_SWAP_16(*((const uint16_t*)(p)))
-#define LETOHL(p)   BYTE_SWAP_32(*((const uint32_t*)(p)))
-#else
-#define LETOHS(p)   (*((const uint16_t*)(p)))
-#define LETOHL(p)   (*((const uint32_t*)(p)))
-#endif
 
 #endif
 

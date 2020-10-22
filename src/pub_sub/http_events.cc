@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -60,8 +60,13 @@ const uint8_t* HttpEvent::get_cookie(int32_t& length)
 
 const uint8_t* HttpEvent::get_host(int32_t& length)
 {
-    return get_header(HttpEnums::HTTP_BUFFER_HEADER, HttpEnums::HEAD_HOST,
-        length);
+    // Use Host header when available
+    const uint8_t* host_header = get_header(HttpEnums::HTTP_BUFFER_HEADER,
+        HttpEnums::HEAD_HOST, length);
+    if (length > 0)
+        return host_header;
+    // Otherwise use authority
+    return get_header(HttpEnums::HTTP_BUFFER_URI, HttpEnums::UC_HOST, length);
 }
 
 const uint8_t* HttpEvent::get_location(int32_t& length)
@@ -85,6 +90,21 @@ const uint8_t* HttpEvent::get_server(int32_t& length)
 {
     return get_header(HttpEnums::HTTP_BUFFER_HEADER, HttpEnums::HEAD_SERVER,
         length);
+}
+
+const uint8_t* HttpEvent::get_trueip_addr(int32_t& length)
+{
+    const Field& field = http_msg_header->get_true_ip_addr();
+    if (field.length() > 0)
+    {
+        length = field.length();
+        return field.start();
+    }
+    else
+    {
+        length = 0;
+        return nullptr;
+    }
 }
 
 const uint8_t* HttpEvent::get_uri(int32_t& length)
@@ -117,3 +137,12 @@ bool HttpEvent::contains_webdav_method()
     return HttpMsgRequest::is_webdav(method);
 }
 
+bool HttpEvent::get_is_http2() const
+{
+    return is_http2;
+}
+
+uint32_t HttpEvent::get_http2_stream_id() const
+{
+    return http2_stream_id;
+}

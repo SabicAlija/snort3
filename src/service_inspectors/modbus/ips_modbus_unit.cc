@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "protocols/packet.h"
 #include "profiler/profiler.h"
 
@@ -58,9 +58,9 @@ public:
 
 uint32_t ModbusUnitOption::hash() const
 {
-    uint32_t a = unit, b = 0, c = 0;
+    uint32_t a = unit, b = IpsOption::hash(), c = 0;
 
-    mix_str(a, b, c, get_name());
+    mix(a, b, c);
     finalize(a,b,c);
 
     return c;
@@ -68,7 +68,7 @@ uint32_t ModbusUnitOption::hash() const
 
 bool ModbusUnitOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const ModbusUnitOption& rhs = (const ModbusUnitOption&)ips;
@@ -77,7 +77,7 @@ bool ModbusUnitOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ModbusUnitOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(modbus_unit_prof);
+    RuleProfile profile(modbus_unit_prof);
 
     if ( !p->flow )
         return NO_MATCH;
@@ -131,7 +131,7 @@ bool ModbusUnitModule::set(const char*, Value& v, SnortConfig*)
     if ( !v.is("~") )
         return false;
 
-    unit = v.get_long();
+    unit = v.get_uint8();
     return true;
 }
 

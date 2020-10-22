@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -49,14 +49,16 @@ bool Ipv6NoNextCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
     if (raw.len < ip::MIN_EXT_LEN)
         return false;
 
-    if ( SnortConfig::get_conf()->hit_ip6_maxopts(codec.ip6_extension_count) )
+    if ( codec.conf->hit_ip6_maxopts(codec.ip6_extension_count) )
     {
         codec_event(codec, DECODE_IP6_EXCESS_EXT_HDR);
         return false;
     }
 
-    // FIXIT-H what if the packet's data is non-zero?  For example, some
-    //          regression pcaps have the following: eth:ipv4:nonext:data
+    // FIXIT-M what if the packet's data is non-zero?  For example, some
+    // regression pcaps have the following: eth:ipv4:nonext:data.
+    // We should raise an alert, optionally normalize / trim, and if we
+    // don't trim, support detection on the data.
 
     // The size of this packet's data should be zero.  So, set this layer's
     // length and the packet's remaining length to the same number.
@@ -68,7 +70,7 @@ bool Ipv6NoNextCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 }
 
 void Ipv6NoNextCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::NONEXT); }
+{ v.emplace_back(ProtocolId::NONEXT); }
 
 //-------------------------------------------------------------------------
 // api

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -64,9 +64,24 @@ void FilePolicy::set_file_capture(bool enabled)
     capture_enabled = enabled;
 }
 
+bool FilePolicy::get_file_type() const
+{
+    return type_enabled;
+}
+
+bool FilePolicy::get_file_signature() const
+{
+    return signature_enabled;
+}
+
+bool FilePolicy::get_file_capture() const
+{
+    return capture_enabled;
+}
+
 void FilePolicy::insert_file_rule(FileRule& rule)
 {
-    file_rules.push_back(rule);
+    file_rules.emplace_back(rule);
 
     if (!rule.when.sha256.empty())
     {
@@ -86,26 +101,26 @@ void FilePolicy::insert_file_rule(FileRule& rule)
     }
 
     // Enable file type for all other features
-    snort::FileService::enable_file_type();
+    FileService::enable_file_type();
     type_enabled = true;
 
     if (rule.use.signature_enabled)
-        snort::FileService::enable_file_signature();
+        FileService::enable_file_signature();
 
     if (rule.use.capture_enabled)
-        snort::FileService::enable_file_capture();
+        FileService::enable_file_capture();
 }
 
 void FilePolicy::load()
 {
     if (type_enabled)
-        snort::FileService::enable_file_type();
+        FileService::enable_file_type();
 
     if (signature_enabled)
-        snort::FileService::enable_file_signature();
+        FileService::enable_file_signature();
 
     if (capture_enabled)
-        snort::FileService::enable_file_capture();
+        FileService::enable_file_capture();
 
     // Use default global setting
     emptyRule.use.type_enabled = type_enabled;
@@ -159,7 +174,7 @@ void FilePolicy::policy_check(Flow*, FileInfo* file)
     file->config_file_capture(capture_enabled);
 }
 
-FileVerdict FilePolicy::type_lookup(Flow*, FileInfo* file)
+FileVerdict FilePolicy::type_lookup(Packet*, FileInfo* file)
 {
     FileRule rule = match_file_rule(nullptr, file);
     file->config_file_signature(rule.use.signature_enabled);
@@ -167,9 +182,9 @@ FileVerdict FilePolicy::type_lookup(Flow*, FileInfo* file)
     return rule.use.verdict;
 }
 
-FileVerdict FilePolicy::signature_lookup(Flow*, FileInfo* file)
+FileVerdict FilePolicy::signature_lookup(Packet*, FileInfo* file)
 {
-    FileRule& rule = match_file_rule(nullptr, file);
+    const FileRule& rule = match_file_rule(nullptr, file);
 
     if (rule.use.capture_enabled)
     {
@@ -179,6 +194,10 @@ FileVerdict FilePolicy::signature_lookup(Flow*, FileInfo* file)
             captured->store_file_async();
         else
             delete captured;
+
+        FileState state = file->get_file_state();
+        if (state.sig_state == FILE_SIG_DEPTH_FAIL)
+            return FILE_VERDICT_LOG;
     }
 
     return match_file_signature(nullptr, file);

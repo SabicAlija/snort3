@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -132,6 +132,7 @@ enum class ProtocolId : std::uint16_t
     ETHERNET_802_3 = 0x0105,
     ETHERNET_802_11 = 0x0106,
     ETHERNET_LLC = 0x0107,
+    VXLAN = 0x0108,
 
     /*
      * Below is a partial list of ethertypes.

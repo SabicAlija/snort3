@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -16,7 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// tcp_reassemblers.h author davis mcpherson <davmcphe@@cisco.com>
+// tcp_reassemblers.h author davis mcpherson <davmcphe@cisco.com>
 // Created on: Oct 9, 2015
 
 #ifndef TCP_REASSEMBLERS_H
@@ -27,11 +27,17 @@
 class TcpReassemblerFactory
 {
 public:
-    static TcpReassembler* create(StreamPolicy);
+    static void initialize();
+    static void term();
+    static TcpReassembler* get_instance(StreamPolicy);
+
+private:
+    TcpReassemblerFactory() = delete;
+
+    static TcpReassembler* reassemblers[StreamPolicy::OS_END_OF_LIST];
 };
 
 class TcpReassemblerPolicy
-
 {
 public:
     TcpReassemblerPolicy() = default;
@@ -40,13 +46,25 @@ public:
     void init(TcpSession* ssn, TcpStreamTracker* trk, StreamPolicy pol, bool server);
     void reset();
 
-    int queue_packet_for_reassembly(TcpSegmentDescriptor& tsd)
-    { return reassembler->queue_packet_for_reassembly(trs, tsd); }
+    void queue_packet_for_reassembly(TcpSegmentDescriptor& tsd)
+    { reassembler->queue_packet_for_reassembly(trs, tsd); }
+
+    bool add_alert(uint32_t gid, uint32_t sid)
+    { return reassembler->add_alert(trs, gid, sid); }
+
+    bool check_alerted(uint32_t gid, uint32_t sid)
+    { return reassembler->check_alerted(trs, gid, sid); }
+
+    int update_alert(uint32_t gid, uint32_t sid, uint32_t event_id, uint32_t event_second)
+    { return reassembler->update_alert(trs, gid, sid, event_id, event_second); }
+
+    void purge_alerts()
+    { reassembler->purge_alerts(trs); }
 
     void purge_segment_list()
     { reassembler->purge_segment_list(trs); }
 
-    int purge_flushed_ackd()
+    void purge_flushed_ackd()
     { return reassembler->purge_flushed_ackd(trs); }
 
     int flush_stream(snort::Packet* p, uint32_t dir, bool final_flush = false)
@@ -63,9 +81,6 @@ public:
 
     int flush_on_ack_policy(snort::Packet* p)
     { return reassembler->flush_on_ack_policy(trs, p); }
-
-    void trace_segments()
-    { reassembler->trace_segments(trs); }
 
     void set_seglist_base_seq(uint32_t seglist_base_seq)
     { trs.sos.seglist_base_seq = seglist_base_seq; }
@@ -97,15 +112,31 @@ public:
     uint32_t get_seg_bytes_logical() const
     { return trs.sos.seg_bytes_logical; }
 
-    ReassemblyPolicy get_reassembly_policy() const
+    StreamPolicy get_reassembly_policy() const
     { return trs.sos.reassembly_policy; }
 
     void set_norm_mode_test()
     { trs.sos.tcp_ips_data = NORM_MODE_TEST; }
 
+    void reset_paf_segment()
+    { trs.sos.seglist.cur_pseg = nullptr; }
+
+    uint32_t perform_partial_flush(snort::Flow* flow)
+    { return reassembler->perform_partial_flush(trs, flow); }
+
+    void reset_paf()
+    { paf_reset(&trs.paf_state); }
+
+    void clear_paf()
+    { paf_clear(&trs.paf_state); }
+
+    void setup_paf()
+    { paf_setup(&trs.paf_state); }
+
 private:
     TcpReassembler* reassembler = nullptr;
     TcpReassemblerState trs;
+    friend inline void TraceSegments(const TcpReassemblerPolicy&, const snort::Packet* p);
 };
 #endif
 

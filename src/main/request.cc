@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,28 +26,24 @@
 #include "main.h"
 #include "utils/util.h"
 
+using namespace snort;
+using namespace std;
+
 //-------------------------------------------------------------------------
 // request foo
 //-------------------------------------------------------------------------
 
-Request::Request(int f)
-{
-    fd = f;
-    bytes_read = 0;
-}
-
-bool Request::read(int& f)
+bool Request::read()
 {
     bool newline_found = false;
     char buf;
     ssize_t n = 0;
 
-    fd = f;
     while ( (bytes_read < sizeof(read_buf)) and ((n = ::read(fd, &buf, 1)) > 0) )
     {
-        read_buf[bytes_read++] = buf; 
+        read_buf[bytes_read++] = buf;
 
-        if (buf == '\n') 
+        if (buf == '\n')
         {
             newline_found = true;
             break;
@@ -55,10 +51,7 @@ bool Request::read(int& f)
     }
 
     if ( n <= 0 and errno != EAGAIN and errno != EINTR )
-    {
-        f = -1;
         return false;
-    }
 
     if ( bytes_read == sizeof(read_buf) )
         bytes_read = 0;
@@ -84,17 +77,22 @@ bool Request::write_response(const char* s) const
 
 // FIXIT-L supporting only simple strings for now
 // could support var args formats
-void Request::respond(const char* s, bool queue_response)
+void Request::respond(const char* s, bool queue_response, bool remote_only)
 {
+    if (remote_only && (fd == STDOUT_FILENO))
+        return;
+
     if ( fd < 1 )
     {
-        snort::LogMessage("%s", s);
+        if (!remote_only)
+            LogMessage("%s", s);
         return;
     }
 
     if ( queue_response )
     {
-        queued_response = s;
+        lock_guard<mutex> lock(queued_response_mutex);
+        queued_response.emplace(s);
         return;
     }
     write_response(s);
@@ -103,13 +101,14 @@ void Request::respond(const char* s, bool queue_response)
 #ifdef SHELL
 bool Request::send_queued_response()
 {
-    bool ret = true;
-    if ( queued_response )
+    const char* qr;
     {
-        ret = write_response(queued_response);
-        queued_response = nullptr;
+        lock_guard<mutex> lock(queued_response_mutex);
+        if ( queued_response.empty() )
+            return false;
+        qr = queued_response.front();
+        queued_response.pop();
     }
-
-    return ret;
+    return write_response(qr);
 }
 #endif

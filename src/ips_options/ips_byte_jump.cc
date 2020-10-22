@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -81,7 +81,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -141,33 +141,29 @@ private:
 
 uint32_t ByteJumpOption::hash() const
 {
-    uint32_t a,b,c;
-    const ByteJumpData* data = &config;
-
-    a = data->bytes_to_grab;
-    b = data->offset;
-    c = data->base;
+    uint32_t a = config.bytes_to_grab;
+    uint32_t b = config.offset;
+    uint32_t c = config.base;
 
     mix(a,b,c);
 
-    a += (data->relative_flag << 24 |
-        data->data_string_convert_flag << 16 |
-        data->from_beginning_flag << 8 |
-        data->align_flag);
-    b += data->endianness;
-    c += data->multiplier;
+    a += (config.relative_flag << 24 |
+        config.data_string_convert_flag << 16 |
+        config.from_beginning_flag << 8 |
+        config.align_flag);
+    b += config.endianness;
+    c += config.multiplier;
 
     mix(a,b,c);
 
-    a += data->post_offset;
-    b += data->from_end_flag << 16 | (uint32_t) data->offset_var << 8 | data->post_offset_var;
-    c += data->bitmask_val;
+    a += config.post_offset;
+    b += config.from_end_flag << 16 | (uint32_t) config.offset_var << 8 | config.post_offset_var;
+    c += config.bitmask_val;
 
     mix(a,b,c);
-    mix_str(a,b,c,get_name());
+    a += IpsOption::hash();
 
     finalize(a,b,c);
-
     return c;
 }
 
@@ -203,7 +199,7 @@ bool ByteJumpOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ByteJumpOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(byteJumpPerfStats);
+    RuleProfile profile(byteJumpPerfStats);
 
     ByteJumpData* bjd = (ByteJumpData*)&config;
 
@@ -303,15 +299,15 @@ IpsOption::EvalStatus ByteJumpOption::eval(Cursor& c, Packet* p)
     uint32_t pos;
 
     if ( bjd->from_beginning_flag )
-        pos = jump;
+        pos = 0;
 
     else if ( bjd->from_end_flag )
-        pos = c.size() + jump;
+        pos = c.size();
 
     else
-        pos = c.get_pos() + offset + payload_bytes_grabbed + jump;
+        pos = (base_ptr - start_ptr) + payload_bytes_grabbed;
 
-    pos += post_offset;
+    pos += jump + post_offset;
 
     if ( !c.set_pos(pos) )
         return NO_MATCH;
@@ -383,7 +379,7 @@ static const Parameter s_params[] =
 class ByteJumpModule : public Module
 {
 public:
-    ByteJumpModule() : Module(s_name, s_help, s_params) { }
+    ByteJumpModule() : Module(s_name, s_help, s_params) { data.multiplier = 1; }
 
     bool begin(const char*, int, SnortConfig*) override;
     bool end(const char*, int, SnortConfig*) override;
@@ -396,7 +392,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteJumpData data;
+    ByteJumpData data = {};
     string var;
     string post_var;
 };
@@ -465,7 +461,7 @@ bool ByteJumpModule::end(const char*, int, SnortConfig*)
 bool ByteJumpModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~count") )
-        data.bytes_to_grab = v.get_long();
+        data.bytes_to_grab = v.get_uint8();
 
     else if ( v.is("~offset") )
     {
@@ -485,7 +481,7 @@ bool ByteJumpModule::set(const char*, Value& v, SnortConfig*)
         data.align_flag = 1;
 
     else if ( v.is("multiplier") )
-        data.multiplier = v.get_long();
+        data.multiplier = v.get_uint16();
 
     else if ( v.is("post_offset") )
     {
@@ -522,8 +518,8 @@ bool ByteJumpModule::set(const char*, Value& v, SnortConfig*)
         data.from_end_flag = 1;
 
     else if ( v.is("bitmask") )
-        data.bitmask_val = v.get_long();
-    
+        data.bitmask_val = v.get_uint32();
+
     else
         return false;
 

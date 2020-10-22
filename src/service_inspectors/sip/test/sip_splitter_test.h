@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,31 +36,31 @@ const uint8_t no_lf_cr = '\t';
 //characters recognized by isspace() as spaces
 const uint8_t spaces[] = {' ', '\t', '\n', '\v', '\f', '\r'};
 
-//character recognized by isblanck() as seperators 
+//character recognized by isblank() as separators
 const uint8_t blanks[] = {' ', '\t' };
 
 class SipSplitterUT
 {
 public:
-    SipSplitterUT(SipSplitter ss) : ss(ss) { };
+    SipSplitterUT(const SipSplitter& ss) : ss(ss) { }
 
     bool splitter_is_paf()
-    { 
+    {
         return ss.is_paf();
     }
 
     void splitter_reset_states()
-    { 
+    {
         ss.reset_states();
     }
 
     SipPafStates splitter_get_paf_state()
-    { 
-        return ss.paf_state; 
+    {
+        return ss.paf_state;
     }
 
     SipPafBodyStatus splitter_get_body_state()
-    { 
+    {
         return ss.body_state;
     }
 
@@ -119,10 +119,10 @@ public:
         ss.process_command(ch);
     }
 
-    snort::StreamSplitter::Status splitter_scan(snort::Flow *flow, const uint8_t* data,
+    snort::StreamSplitter::Status splitter_scan(snort::Packet* pkt, const uint8_t* data,
                                 uint32_t len, uint32_t flags, uint32_t* fp)
     {
-        return ss.scan(flow, data, len, flags, fp);
+        return ss.scan(pkt, data, len, flags, fp);
     }
 
     bool is_init()

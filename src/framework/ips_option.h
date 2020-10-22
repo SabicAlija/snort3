@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -52,6 +52,12 @@ enum CursorActionType
     CAT_ADJUST,
     CAT_SET_OTHER,
     CAT_SET_RAW,
+    CAT_SET_COOKIE,
+    CAT_SET_STAT_MSG,
+    CAT_SET_STAT_CODE,
+    CAT_SET_METHOD,
+    CAT_SET_RAW_HEADER,
+    CAT_SET_RAW_KEY,
     CAT_SET_FILE,
     CAT_SET_BODY,
     CAT_SET_HEADER,
@@ -81,7 +87,6 @@ public:
 
     // packet threads
     virtual bool is_relative() { return false; }
-    virtual bool fp_research() { return false; }
     virtual bool retry(Cursor&) { return false; }
     virtual void action(Packet*) { }
 
@@ -102,12 +107,6 @@ public:
     virtual PatternMatchData* get_alternate_pattern()
     { return nullptr; }
 
-    static int eval(void* v, Cursor& c, Packet* p)
-    {
-        IpsOption* opt = (IpsOption*)v;
-        return opt->eval(c, p);
-    }
-
     static void set_buffer(const char*);
 
 protected:
@@ -127,7 +126,7 @@ enum RuleOptType
     OPT_TYPE_MAX
 };
 
-typedef void (* IpsOptFunc)(SnortConfig*);
+typedef void (* IpsOptFunc)(const SnortConfig*);
 
 typedef IpsOption* (* IpsNewFunc)(Module*, OptTreeNode*);
 typedef void (* IpsDelFunc)(IpsOption*);

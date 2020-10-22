@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@
 
 #include <cstring>
 
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 
 /*
  * Trim spaces non-destructively on both sides of string : '', \t, \n, \r

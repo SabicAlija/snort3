@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -181,7 +181,7 @@ sfvt_expand_value_error:
     return nullptr;
 }
 
-// XXX this implementation is just used to support
+// this implementation is just used to support
 // Snort's underlying implementation better
 SfIpRet sfvt_define(vartable_t* table, const char* name, const char* value)
 {
@@ -195,7 +195,7 @@ SfIpRet sfvt_define(vartable_t* table, const char* name, const char* value)
 
     len = strlen(name) + strlen(value) + 2;
     buf = (char*)snort_alloc(len);
-    snort::SnortSnprintf(buf, len, "%s %s", name, value);
+    SnortSnprintf(buf, len, "%s %s", name, value);
 
     ret = sfvt_add_str(table, buf, &ipret);
     if ((ret == SFIP_SUCCESS) || (ret == SFIP_DUPLICATE))
@@ -293,7 +293,7 @@ SfIpRet sfvt_add_str(vartable_t* table, const char* str, sfip_var_t** ipret)
 
 /* Adds the variable described by "src" to the variable "dst",
  * using the vartable for looking variables used within "src".
- * If vartable is null variables are not supported. 
+ * If vartable is null variables are not supported.
  */
 SfIpRet sfvt_add_to_var(vartable_t* table, sfip_var_t* dst, const char* src)
 {
@@ -321,12 +321,10 @@ sfip_var_t* sfvt_lookup_var(vartable_t* table, const char* name)
     if (*name == '$')
         name++;
 
-    /* XXX should I assume there will be trailing garbage or
+    /* should I assume there will be trailing garbage or
      * should I automatically find where the variable ends? */
-    for (end=name;
-        *end && !isspace((int)*end) && *end != '\\' && *end != ']';
-        end++)
-        ;
+    for (end=name; *end && !isspace((int)*end) && *end != '\\' && *end != ']'; end++);
+
     len = end - name;
 
     for (p=table->head; len && p; p=p->next)
@@ -363,7 +361,7 @@ TEST_CASE("SfVarTable_Kitchen_Sink", "[SfVarTable]")
 {
     vartable_t* table;
     sfip_var_t* var;
-    snort::SfIp* ip;
+    SfIp* ip;
     SfIpRet status;
 
     table = sfvt_alloc_table();
@@ -390,7 +388,7 @@ TEST_CASE("SfVarTable_Kitchen_Sink", "[SfVarTable]")
 
     /* Containment tests */
     var = sfvt_lookup_var(table, "goo");
-    ip = (snort::SfIp *)snort_alloc(sizeof(snort::SfIp));
+    ip = (SfIp *)snort_alloc(sizeof(SfIp));
     status = ip->set("192.168.248.255");
     CHECK(SFIP_SUCCESS == status);
     CHECK((sfvar_ip_in(var, ip) == false));
@@ -406,12 +404,12 @@ TEST_CASE("SfVarTable_Kitchen_Sink", "[SfVarTable]")
     /* Check boundary cases */
     var = sfvt_lookup_var(table, "goo");
     snort_free(ip);
-    ip = (snort::SfIp *)snort_alloc(sizeof(snort::SfIp));
+    ip = (SfIp *)snort_alloc(sizeof(SfIp));
     status = ip->set("192.168.0.3");
     CHECK(SFIP_SUCCESS == status);
     CHECK((sfvar_ip_in(var, ip) == false));
     snort_free(ip);
-    ip = (snort::SfIp *)snort_alloc(sizeof(snort::SfIp));
+    ip = (SfIp *)snort_alloc(sizeof(SfIp));
     status = ip->set("192.168.0.2");
     CHECK(SFIP_SUCCESS == status);
     CHECK((sfvar_ip_in(var, ip) == true));

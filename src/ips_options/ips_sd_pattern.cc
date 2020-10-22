@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,10 +28,12 @@
 #include <hs_runtime.h>
 
 #include "detection/pattern_match_data.h"
+#include "detection/treenodes.h"
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
+#include "helpers/hyper_scratch_allocator.h"
 #include "log/messages.h"
 #include "log/obfuscator.h"
 #include "main/snort_config.h"
@@ -49,15 +51,7 @@ using namespace snort;
 #define SD_SOCIAL_NODASHES_PATTERN R"(\d{9})"
 #define SD_CREDIT_PATTERN_ALL      R"(\d{4}\D?\d{4}\D?\d{2}\D?\d{2}\D?\d{3,4})"
 
-// we need to update scratch in the main thread as each pattern is processed
-// and then clone to thread specific after all rules are loaded.  s_scratch is
-// a prototype that is large enough for all uses.
-
-// FIXIT-L Determine if it's worthwhile to use a single scratch space for both
-// "regex" and "sd_pattern" keywords.
-// FIXIT-L See ips_regex.cc for more information.
-static hs_scratch_t* s_scratch = nullptr;
-static unsigned scratch_index;
+static HyperScratchAllocator* scratcher = nullptr;
 
 struct SdStats
 {
@@ -129,19 +123,15 @@ public:
     EvalStatus eval(Cursor&, Packet* p) override;
 
 private:
-    unsigned SdSearch(Cursor&, Packet*);
+    unsigned SdSearch(const Cursor&, Packet*);
     SdPatternConfig config;
 };
 
 SdPatternOption::SdPatternOption(const SdPatternConfig& c) :
     IpsOption(s_name, RULE_OPTION_TYPE_BUFFER_USE), config(c)
 {
-    if ( hs_error_t err = hs_alloc_scratch(config.db, &s_scratch) )
-    {
-        // FIXIT-L why is this failing but everything is working?
-        ParseError("can't initialize sd_pattern for %s (%d) %p",
-            config.pii.c_str(), err, (void*)s_scratch);
-    }
+    if ( !scratcher->allocate(config.db) )
+        ParseError("can't allocate scratch for sd_pattern '%s'", config.pii.c_str());
 
     config.pmd.pattern_buf = config.pii.c_str();
     config.pmd.pattern_size = config.pii.size();
@@ -157,10 +147,16 @@ SdPatternOption::~SdPatternOption()
 
 uint32_t SdPatternOption::hash() const
 {
-    uint32_t a = 0, b = 0, c = config.threshold;
+    uint32_t a = config.pmd.pattern_size;
+    uint32_t b = config.pmd.pm_type;
+    uint32_t c = config.threshold;
+
+    mix(a, b, c);
+    a += IpsOption::hash();
+
     mix_str(a, b, c, config.pii.c_str());
-    mix_str(a, b, c, get_name());
     finalize(a, b, c);
+
     return c;
 }
 
@@ -171,7 +167,7 @@ bool SdPatternOption::operator==(const IpsOption& ips) const
 
     const SdPatternOption& rhs = static_cast<const SdPatternOption&>(ips);
 
-    if ( config == rhs.config )
+    if ( config == rhs.config )  // FIXIT-H seems incorrect
         return true;
 
     return false;
@@ -246,19 +242,16 @@ static int hs_match(unsigned int /*id*/, unsigned long long from,
     return 0;
 }
 
-unsigned SdPatternOption::SdSearch(Cursor& c, Packet* p)
+unsigned SdPatternOption::SdSearch(const Cursor& c, Packet* p)
 {
     const uint8_t* const start = c.buffer();
     const uint8_t* buf = c.start();
     unsigned int buflen = c.length();
 
-    std::vector<void *> ss = SnortConfig::get_conf()->state[get_instance_id()];
-    assert(ss[scratch_index]);
-
     hsContext ctx(config, p, start, buf, buflen);
 
     hs_error_t stat = hs_scan(config.db, (const char*)buf, buflen, 0,
-        (hs_scratch_t*)ss[scratch_index], hs_match, (void*)&ctx);
+        scratcher->get(), hs_match, (void*)&ctx);
 
     if ( stat == HS_SCAN_TERMINATED )
         ++s_stats.terminated;
@@ -268,7 +261,7 @@ unsigned SdPatternOption::SdSearch(Cursor& c, Packet* p)
 
 IpsOption::EvalStatus SdPatternOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(sd_pattern_perf_stats);
+    RuleProfile profile(sd_pattern_perf_stats);
 
     unsigned matches = SdSearch(c, p);
 
@@ -293,7 +286,7 @@ static const Parameter s_params[] =
     { "~pattern", Parameter::PT_STRING, nullptr, nullptr,
       "The pattern to search for" },
 
-    { "threshold", Parameter::PT_INT, "1", nullptr,
+    { "threshold", Parameter::PT_INT, "1:max32", "1",
       "number of matches before alerting" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -303,10 +296,10 @@ class SdPatternModule : public Module
 {
 public:
     SdPatternModule() : Module(s_name, s_help, s_params)
-    {
-        scratch_index = SnortConfig::request_scratch(
-            SdPatternModule::scratch_setup, SdPatternModule::scratch_cleanup);
-    }
+    { scratcher = new HyperScratchAllocator; }
+
+    ~SdPatternModule() override
+    { delete scratcher; }
 
     bool begin(const char*, int, SnortConfig*) override;
     bool set(const char*, Value& v, SnortConfig*) override;
@@ -329,9 +322,6 @@ public:
 
 private:
     SdPatternConfig config;
-
-    static void scratch_setup(SnortConfig* sc);
-    static void scratch_cleanup(SnortConfig* sc);
 };
 
 bool SdPatternModule::begin(const char*, int, SnortConfig*)
@@ -340,7 +330,7 @@ bool SdPatternModule::begin(const char*, int, SnortConfig*)
     return true;
 }
 
-bool SdPatternModule::set(const char*, Value& v, SnortConfig* sc)
+bool SdPatternModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~pattern") )
     {
@@ -350,28 +340,29 @@ bool SdPatternModule::set(const char*, Value& v, SnortConfig* sc)
         config.pii.erase(config.pii.length()-1, 1);
     }
     else if ( v.is("threshold") )
-        config.threshold = v.get_long();
+        config.threshold = v.get_uint32();
     else
         return false;
 
     // Check if built-in pattern should be used.
+    IpsPolicy* p = get_ips_policy();
     if (config.pii == "credit_card")
     {
         config.pii = SD_CREDIT_PATTERN_ALL;
         config.validate = SdLuhnAlgorithm;
-        config.obfuscate_pii = sc->obfuscate_pii;
+        config.obfuscate_pii = p->obfuscate_pii;
         config.forced_boundary = true;
     }
     else if (config.pii == "us_social")
     {
         config.pii = SD_SOCIAL_PATTERN;
-        config.obfuscate_pii = sc->obfuscate_pii;
+        config.obfuscate_pii = p->obfuscate_pii;
         config.forced_boundary = true;
     }
     else if (config.pii == "us_social_nodashes")
     {
         config.pii = SD_SOCIAL_NODASHES_PATTERN;
-        config.obfuscate_pii = sc->obfuscate_pii;
+        config.obfuscate_pii = p->obfuscate_pii;
         config.forced_boundary = true;
     }
 
@@ -400,37 +391,6 @@ bool SdPatternModule::end(const char*, int, SnortConfig*)
 }
 
 //-------------------------------------------------------------------------
-// public methods
-//-------------------------------------------------------------------------
-
-void SdPatternModule::scratch_setup(SnortConfig* sc)
-{
-    for ( unsigned i = 0; i < sc->num_slots; ++i )
-    {
-        std::vector<void *>& ss = sc->state[i];
-
-        if ( s_scratch )
-            hs_clone_scratch(s_scratch, (hs_scratch_t**)&ss[scratch_index]);
-        else
-            ss[scratch_index] = nullptr;
-    }
-}
-
-void SdPatternModule::scratch_cleanup(SnortConfig* sc)
-{
-    for ( unsigned i = 0; i < sc->num_slots; ++i )
-    {
-        std::vector<void *>& ss = sc->state[i];
-
-        if ( ss[scratch_index] )
-        {
-            hs_free_scratch((hs_scratch_t*)ss[scratch_index]);
-            ss[scratch_index] = nullptr;
-        }
-    }
-}
-
-//-------------------------------------------------------------------------
 // api methods
 //-------------------------------------------------------------------------
 
@@ -444,11 +404,12 @@ static void mod_dtor(Module* p)
     delete p;
 }
 
-static IpsOption* sd_pattern_ctor(Module* m, OptTreeNode*)
+static IpsOption* sd_pattern_ctor(Module* m, OptTreeNode* otn)
 {
     SdPatternModule* mod = (SdPatternModule*)m;
     SdPatternConfig c;
     mod->get_data(c);
+    c.pmd.pm_type = otn->sticky_buf;
     return new SdPatternOption(c);
 }
 
@@ -491,4 +452,3 @@ const BaseApi* ips_sd_pattern[] =
     &sd_pattern_api.base,
     nullptr
 };
-

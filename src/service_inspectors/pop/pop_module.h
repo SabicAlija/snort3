@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,6 +33,7 @@
 #define POP_B64_DECODING_FAILED    4
 #define POP_QP_DECODING_FAILED     5
 #define POP_UU_DECODING_FAILED     7
+#define POP_FILE_DECOMP_FAILED     8
 
 #define POP_NAME "pop"
 #define POP_HELP "pop inspection"
@@ -64,6 +65,9 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    bool is_bindable() const override
+    { return true; }
 
     POP_PROTO_CONF* get_data();
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,7 +26,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -79,18 +79,16 @@ private:
 
 uint32_t RpcOption::hash() const
 {
-    uint32_t a,b,c;
-    const RpcCheckData* data = &config;
-
-    a = data->program;
-    b = data->version;
-    c = data->procedure;
+    uint32_t a = config.program;
+    uint32_t b = config.version;
+    uint32_t c = config.procedure;
 
     mix(a,b,c);
 
-    a += data->flags;
+    a += config.flags;
+    b += IpsOption::hash();
 
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -98,7 +96,7 @@ uint32_t RpcOption::hash() const
 
 bool RpcOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const RpcOption& rhs = (const RpcOption&)ips;
@@ -118,7 +116,7 @@ bool RpcOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus RpcOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(rpcCheckPerfStats);
+    RuleProfile profile(rpcCheckPerfStats);
 
     if ( !is_valid(p) )
         return NO_MATCH;
@@ -225,7 +223,7 @@ bool RpcOption::check_procedure(uint32_t procedure)
 
 static const Parameter s_params[] =
 {
-    { "~app", Parameter::PT_INT, nullptr, nullptr,
+    { "~app", Parameter::PT_INT, "0:max32", nullptr,
       "application number" },
 
     { "~ver", Parameter::PT_STRING, nullptr, nullptr,
@@ -251,13 +249,13 @@ public:
     ProfileStats* get_profile() const override
     { return &rpcCheckPerfStats; }
 
-    bool set(Value&, uint32_t& field, int flag);
+    bool set(const Value&, uint32_t& field, int flag);
 
     Usage get_usage() const override
     { return DETECT; }
 
 public:
-    RpcCheckData data;
+    RpcCheckData data = {};
 };
 
 bool RpcModule::begin(const char*, int, SnortConfig*)
@@ -269,7 +267,7 @@ bool RpcModule::begin(const char*, int, SnortConfig*)
 bool RpcModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~app") )
-        data.program = (uint32_t)v.get_long();
+        data.program = v.get_uint32();
 
     else if ( v.is("~ver") )
         return set(v, data.version, RPC_CHECK_VERSION);
@@ -283,7 +281,7 @@ bool RpcModule::set(const char*, Value& v, SnortConfig*)
     return true;
 }
 
-bool RpcModule::set(Value& v, uint32_t& field, int flag)
+bool RpcModule::set(const Value& v, uint32_t& field, int flag)
 {
     if ( flag and !strcmp(v.get_string(), "*") )
         return true;

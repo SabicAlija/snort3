@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -46,12 +46,11 @@ bool HttpInspectServer::convert(std::istringstream& data_stream)
 {
     std::string keyword;
     bool retval = true;
-    bool ports_set = false;
+    bool default_binding = true;
     bool simplify = false;
     bool slash_dir_set = false;
     auto& bind = cv.make_binder();
 
-    bind.set_when_proto("tcp");
     bind.set_use_type("http_inspect");
 
     if (!(data_stream >> keyword) || keyword != "server")
@@ -230,7 +229,7 @@ bool HttpInspectServer::convert(std::istringstream& data_stream)
             parse_deleted_option("chunk_length", data_stream);
 
         else if (keyword == "oversize_dir_length")
-            tmpval = parse_int_option("oversize_dir_length", data_stream, false);
+            tmpval = parse_max_int_option("oversize_dir_length", data_stream, 65535, false);
 
         else if (keyword == "max_header_length")
             parse_deleted_option("max_header_length", data_stream);
@@ -278,20 +277,27 @@ bool HttpInspectServer::convert(std::istringstream& data_stream)
 
         else if (keyword == "ports")
         {
-            table_api.add_diff_option_comment("ports", "bindings");
-
-            if ((data_stream >> keyword) && keyword == "{")
-            {
-                while (data_stream >> keyword && keyword != "}")
-                {
-                    ports_set = true;
-                    bind.add_when_port(keyword);
-                }
-            }
+            if (!cv.get_bind_port())
+                default_binding = parse_bracketed_unsupported_list("ports", data_stream);
             else
             {
-                data_api.failed_conversion(data_stream, "ports <bracketed_port_list>");
-                retval = false;
+                table_api.add_diff_option_comment("ports", "bindings");
+
+                if ((data_stream >> keyword) && keyword == "{")
+                {
+                    bind.set_when_proto("tcp");
+                    while (data_stream >> keyword && keyword != "}")
+                    {
+                        default_binding = false;
+                        bind.set_when_role("server");
+                        bind.add_when_port(keyword);
+                    }
+                }
+                else
+                {
+                    data_api.failed_conversion(data_stream, "ports <bracketed_port_list>");
+                    retval = false;
+                }
             }
         }
         else if (keyword == "small_chunk_length")
@@ -323,7 +329,7 @@ bool HttpInspectServer::convert(std::istringstream& data_stream)
         else if (keyword == "profile")
             parse_deleted_option("profile", data_stream);
         else if ( keyword == "xff_headers" )
-            parse_bracketed_unsupported_list("xff_headers", data_stream);
+            tmpval = parse_bracketed_unsupported_list("xff_headers", data_stream);
         else
         {
             tmpval = false;
@@ -345,9 +351,10 @@ bool HttpInspectServer::convert(std::istringstream& data_stream)
         }
     }
 
-    if (!ports_set)
-        bind.add_when_port("80");
-
+    if (default_binding)
+    {
+        bind.set_when_service("http");
+    }
     return retval;
 }
 

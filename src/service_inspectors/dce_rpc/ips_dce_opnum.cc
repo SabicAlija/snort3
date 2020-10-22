@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "utils/util.h"
 
@@ -342,7 +342,7 @@ static DCE2_Ret DCE2_OpnumParse(char* args, DCE2_Opnum* opnum)
 class Dce2OpnumOption : public IpsOption
 {
 public:
-    Dce2OpnumOption(DCE2_Opnum& src_opnum) : IpsOption(s_name)
+    Dce2OpnumOption(const DCE2_Opnum& src_opnum) : IpsOption(s_name)
     { opnum = src_opnum; }
     uint32_t hash() const override;
     bool operator==(const IpsOption&) const override;
@@ -357,7 +357,7 @@ uint32_t Dce2OpnumOption::hash() const
 {
     uint32_t a = opnum.opnum_lo, b = opnum.opnum_hi, c = opnum.mask_size;
 
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
 
     if (opnum.mask_size != 0)
     {
@@ -368,6 +368,7 @@ uint32_t Dce2OpnumOption::hash() const
 
         mix(a,b,c);
     }
+    a += IpsOption::hash();
 
     finalize(a, b, c);
 
@@ -376,7 +377,7 @@ uint32_t Dce2OpnumOption::hash() const
 
 bool Dce2OpnumOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const Dce2OpnumOption& rhs = (const Dce2OpnumOption&)ips;
@@ -400,7 +401,7 @@ bool Dce2OpnumOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus Dce2OpnumOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(dce2_opnum_perf_stats);
+    RuleProfile profile(dce2_opnum_perf_stats);
 
     if (p->dsize == 0)
     {

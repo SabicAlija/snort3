@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@
 
 #include "appid_types.h"
 
-class AppIdConfig;
 class AppIdSession;
 class ServiceDetector;
 class ServiceDiscoveryState;
@@ -53,7 +52,7 @@ enum SERVICE_HOST_INFO_CODE
     SERVICE_HOST_INFO_NETBIOS_NAME = 1
 };
 
-/* Service state stored per flow, which acts based on global SERVICE_ID_STATE
+/* Service state stored per flow, which acts based on global ServiceState
  * at the beginning of the flow, then independently do service discovery, and
  * synchronize findings at the end of service discovery by the flow.
  */
@@ -68,25 +67,26 @@ enum SESSION_SERVICE_SEARCH_STATE
 class ServiceDiscovery : public AppIdDiscovery
 {
 public:
-    static ServiceDiscovery& get_instance(AppIdInspector* ins = nullptr);
-    static void release_instance();
-
+    ~ServiceDiscovery() override { }
+    void initialize() override;
+    void reload() override;
     void finalize_service_patterns();
+    void reload_service_patterns();
     int add_service_port(AppIdDetector*, const ServiceDetectorPort&) override;
 
     AppIdDetectorsIterator get_detector_iterator(IpProtocol);
     ServiceDetector* get_next_tcp_detector(AppIdDetectorsIterator&);
     ServiceDetector* get_next_udp_detector(AppIdDetectorsIterator&);
 
-    bool do_service_discovery(AppIdSession&, snort::Packet*, AppidSessionDirection dir);
-    int identify_service(AppIdSession&, snort::Packet*, AppidSessionDirection dir);
+    bool do_service_discovery(AppIdSession&, snort::Packet*, AppidSessionDirection dir,
+        AppidChangeBits& change_bits);
+    int identify_service(AppIdSession&, snort::Packet*, AppidSessionDirection, AppidChangeBits&);
     int fail_service(AppIdSession&, const snort::Packet*, AppidSessionDirection dir, ServiceDetector*, ServiceDiscoveryState* sds = nullptr);
     int incompatible_data(AppIdSession&, const snort::Packet*, AppidSessionDirection dir, ServiceDetector*);
     static int add_ftp_service_state(AppIdSession&);
-    void release_thread_resources();
+    static void clear_ftp_service_state();
+
 private:
-    ServiceDiscovery(AppIdInspector& ins);
-    void initialize() override;
     void get_next_service(const snort::Packet*, const AppidSessionDirection dir, AppIdSession&);
     void get_port_based_services(IpProtocol, uint16_t port, AppIdSession&);
     void match_by_pattern(AppIdSession&, const snort::Packet*, IpProtocol);

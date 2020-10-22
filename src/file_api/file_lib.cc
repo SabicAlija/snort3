@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -38,6 +38,8 @@
 #include "framework/data_bus.h"
 #include "main/snort_config.h"
 #include "managers/inspector_manager.h"
+#include "packet_tracer/packet_tracer.h"
+#include "protocols/packet.h"
 #include "utils/util.h"
 #include "utils/util_utf.h"
 
@@ -112,6 +114,7 @@ void FileInfo::copy(const FileInfo& other)
     file_signature_enabled = other.file_signature_enabled;
     file_capture_enabled = other.file_capture_enabled;
     file_state = other.file_state;
+    pending_expire_time = other.pending_expire_time;
     // only one copy of file capture
     file_capture = nullptr;
 }
@@ -250,6 +253,11 @@ FileCaptureState FileInfo::reserve_file(FileCapture*& dest)
     return state;
 }
 
+int64_t FileInfo::get_max_file_capture_size()
+{
+    return (file_capture ? file_capture->get_max_file_capture_size() : 0);
+}
+
 FileContext::FileContext ()
 {
     file_type_context = nullptr;
@@ -269,31 +277,6 @@ FileContext::~FileContext ()
     if (file_segments)
         delete file_segments;
     InspectorManager::release(inspector);
-}
-
-inline int FileContext::get_data_size_from_depth_limit(FileProcessType type, int
-    data_size)
-{
-    uint64_t max_depth;
-
-    switch (type)
-    {
-    case SNORT_FILE_TYPE_ID:
-        max_depth = config->file_type_depth;
-        break;
-    case SNORT_FILE_SHA256:
-        max_depth = config->file_signature_depth;
-        break;
-    default:
-        return data_size;
-    }
-
-    if (processed_bytes > max_depth)
-        data_size = -1;
-    else if (processed_bytes + data_size > max_depth)
-        data_size = (int)(max_depth - processed_bytes);
-
-    return data_size;
 }
 
 /* stop file type identification */
@@ -339,29 +322,40 @@ void FileContext::log_file_event(Flow* flow, FilePolicyBase* policy)
     }
 }
 
-FileVerdict FileContext::file_signature_lookup(Flow* flow)
+FileVerdict FileContext::file_signature_lookup(Packet* p)
 {
+    Flow* flow = p->flow;
+
     if (get_file_sig_sha256())
     {
         FilePolicyBase* policy = FileFlows::get_file_policy(flow);
 
         if (policy)
-            return policy->signature_lookup(flow, this);
+            return policy->signature_lookup(p, this);
     }
 
     return FILE_VERDICT_UNKNOWN;
 }
 
-void FileContext::finish_signature_lookup(Flow* flow, bool final_lookup, FilePolicyBase* policy)
+void FileContext::finish_signature_lookup(Packet* p, bool final_lookup, FilePolicyBase* policy)
 {
+    Flow* flow = p->flow;
+
     if (get_file_sig_sha256())
     {
-        verdict = policy->signature_lookup(flow, this);
+        verdict = policy->signature_lookup(p, this);
         if ( verdict != FILE_VERDICT_UNKNOWN || final_lookup )
         {
             FileCache* file_cache = FileService::get_file_cache();
             if (file_cache)
-                file_cache->apply_verdict(flow, this, verdict, false, policy);
+                file_cache->apply_verdict(p, this, verdict, false, policy);
+
+            if ( PacketTracer::is_active() and ( verdict == FILE_VERDICT_BLOCK
+                    or verdict == FILE_VERDICT_REJECT ))
+            {
+                PacketTracer::log("File: signature lookup verdict %s\n",
+                    verdict == FILE_VERDICT_BLOCK ? "block" : "reject");
+            }
             log_file_event(flow, policy);
             config_file_signature(false);
             file_stats->signatures_processed[get_file_type()][get_file_direction()]++;
@@ -402,9 +396,10 @@ void FileContext::check_policy(Flow* flow, FileDirection dir, FilePolicyBase* po
  *    true: continue processing/log/block this file
  *    false: ignore this file
  */
-bool FileContext::process(Flow* flow, const uint8_t* file_data, int data_size,
+bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
     FilePosition position, FilePolicyBase* policy)
 {
+    Flow* flow = p->flow;
 
     if ( config->trace_stream )
     {
@@ -417,12 +412,18 @@ bool FileContext::process(Flow* flow, const uint8_t* file_data, int data_size,
     if ((!is_file_type_enabled()) and (!is_file_signature_enabled()))
     {
         update_file_size(data_size, position);
+        processing_complete = true;
+        if (PacketTracer::is_active())
+            PacketTracer::log("File: Type and Sig not enabled\n");
         return false;
     }
 
-    if ((FileService::get_file_cache()->cached_verdict_lookup(flow, this,
-        policy) != FILE_VERDICT_UNKNOWN))
+    if (cacheable and (FileService::get_file_cache()->cached_verdict_lookup(p, this, policy) !=
+        FILE_VERDICT_UNKNOWN))
+    {
+        processing_complete = true;
         return true;
+    }
 
     /*file type id*/
     if (is_file_type_enabled())
@@ -435,21 +436,34 @@ bool FileContext::process(Flow* flow, const uint8_t* file_data, int data_size,
             config_file_type(false);
             config_file_signature(false);
             update_file_size(data_size, position);
+            processing_complete = true;
             stop_file_capture();
+            if (PacketTracer::is_active())
+                PacketTracer::log("File: Type unknown\n");
             return false;
         }
 
         if (get_file_type() != SNORT_FILE_TYPE_CONTINUE)
         {
+            if (PacketTracer::is_active())
+                PacketTracer::log("File: Type-%s found\n",
+                    file_type_name(get_file_type()).c_str());
             config_file_type(false);
             file_stats->files_processed[get_file_type()][get_file_direction()]++;
             //Check file type based on file policy
-            FileVerdict v = policy->type_lookup(flow, this);
+            FileVerdict v = policy->type_lookup(p, this);
             if ( v != FILE_VERDICT_UNKNOWN )
             {
                 FileCache* file_cache = FileService::get_file_cache();
                 if (file_cache)
-                    file_cache->apply_verdict(flow, this, v, false, policy);
+                    file_cache->apply_verdict(p, this, v, false, policy);
+
+                if ( PacketTracer::is_active() and ( v == FILE_VERDICT_BLOCK
+                        or v == FILE_VERDICT_REJECT ))
+                {
+                    PacketTracer::log("File: file type verdict %s\n",
+                        v == FILE_VERDICT_BLOCK ? "block" : "reject");
+                }
             }
 
             log_file_event(flow, policy);
@@ -476,7 +490,26 @@ bool FileContext::process(Flow* flow, const uint8_t* file_data, int data_size,
             process_file_capture(file_data, data_size, position);
         }
 
-        finish_signature_lookup(flow, ( file_state.sig_state != FILE_SIG_FLUSH ), policy);
+        finish_signature_lookup(p, ( file_state.sig_state != FILE_SIG_FLUSH ), policy);
+
+        if (file_state.sig_state == FILE_SIG_DEPTH_FAIL)
+        {
+            verdict = policy->signature_lookup(p, this);
+            if ( verdict != FILE_VERDICT_UNKNOWN )
+            {
+                FileCache* file_cache = FileService::get_file_cache();
+                if (file_cache)
+                    file_cache->apply_verdict(p, this , verdict, false, policy);
+
+                log_file_event(flow, policy);
+            }
+            else
+            {
+                if (PacketTracer::is_active())
+                    PacketTracer::log("File: Sig depth exceeded\n");
+                return false;
+            }
+        }
     }
     else
     {
@@ -486,12 +519,12 @@ bool FileContext::process(Flow* flow, const uint8_t* file_data, int data_size,
     return true;
 }
 
-bool FileContext::process(Flow* flow, const uint8_t* file_data, int data_size,
-    uint64_t offset, FilePolicyBase* policy)
+bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
+    uint64_t offset, FilePolicyBase* policy, FilePosition position)
 {
     if (!file_segments)
         file_segments = new FileSegments(this);
-    return file_segments->process(flow, file_data, data_size, offset, policy);
+    return file_segments->process(p, file_data, data_size, offset, policy, position);
 }
 
 /*
@@ -504,40 +537,33 @@ bool FileContext::process(Flow* flow, const uint8_t* file_data, int data_size,
  * 3) file magics are exhausted in depth
  *
  */
-void FileContext::process_file_type(const uint8_t* file_data, int size, FilePosition position)
+void FileContext::process_file_type(const uint8_t* file_data, int data_size, FilePosition position)
 {
-    int data_size;
-
-    /* file type already found and no magics to continue*/
+    /* file type already found and no magics to continue */
     if (file_type_id && !file_type_context)
         return;
 
-    /* Check whether file type depth is reached*/
-    data_size = get_data_size_from_depth_limit(SNORT_FILE_TYPE_ID, size);
+    bool depth_exhausted = false;
 
-    if (data_size < 0)
+    if ((int64_t)processed_bytes + data_size >= config->file_type_depth)
     {
-        finalize_file_type();
-        return;
+        data_size = config->file_type_depth - processed_bytes;
+        assert(data_size > 0);
+        depth_exhausted = true;
     }
 
     file_type_id =
         config->find_file_type_id(file_data, data_size, processed_bytes, &file_type_context);
 
-    /* Check whether file transfer is done or type depth is reached*/
-    if ( (position == SNORT_FILE_END)  || (position == SNORT_FILE_FULL) ||
-        (data_size != size) )
-    {
+    /* Check whether file transfer is done or type depth is reached */
+    if ( (position == SNORT_FILE_END) || (position == SNORT_FILE_FULL) || depth_exhausted )
         finalize_file_type();
-    }
 }
 
-void FileContext::process_file_signature_sha256(const uint8_t* file_data, int size,
+void FileContext::process_file_signature_sha256(const uint8_t* file_data, int data_size,
     FilePosition position)
 {
-    int data_size = get_data_size_from_depth_limit(SNORT_FILE_SHA256, size);
-
-    if (data_size != size)
+    if ((int64_t)processed_bytes + data_size > config->file_signature_depth)
     {
         file_state.sig_state = FILE_SIG_DEPTH_FAIL;
         return;
@@ -638,6 +664,7 @@ void FileContext::update_file_size(int data_size, FilePosition position)
     {
         file_size = processed_bytes;
         processed_bytes = 0;
+        processing_complete = true;
     }
 }
 
@@ -800,4 +827,3 @@ bool file_IDs_from_group(const void *conf, const char *group,
     return get_ids_from_group(conf, group, ids, count);
 }
  **/
-

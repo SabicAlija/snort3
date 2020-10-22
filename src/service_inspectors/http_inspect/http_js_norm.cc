@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,8 @@
 #include "utils/util_jsnorm.h"
 #include "utils/safec.h"
 
+#include "http_enum.h"
+
 using namespace HttpEnums;
 using namespace snort;
 
@@ -44,8 +46,8 @@ void HttpJsNorm::configure()
     if ( javascript_search_mpse || htmltype_search_mpse )
         return;
 
-    javascript_search_mpse = new snort::SearchTool;
-    htmltype_search_mpse = new snort::SearchTool;
+    javascript_search_mpse = new SearchTool;
+    htmltype_search_mpse = new SearchTool;
 
     javascript_search_mpse->add(script_start, script_start_length, JS_JAVASCRIPT);
     javascript_search_mpse->prep();
@@ -145,6 +147,7 @@ void HttpJsNorm::normalize(const Field& input, Field& output, HttpInfractions* i
             JSNormalizeDecode(js_start, (uint16_t)(end-js_start), (char*)buffer+index,
                 (uint16_t)(input.length() - index), &ptr, &bytes_copied, &js,
                 uri_param.iis_unicode ? uri_param.unicode_map : nullptr);
+
             index += bytes_copied;
         }
         else

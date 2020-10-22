@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,20 +25,25 @@
 
 #include <cstring>
 
-#include "http_enum.h"
+#include "http_common.h"
+
+int32_t str_to_code(const char* text, const StrCode table[])
+{
+    return str_to_code((const uint8_t*)text, strlen(text), table);
+}
 
 // Need to replace this simple algorithm for better performance FIXIT-P
 int32_t str_to_code(const uint8_t* text, const int32_t text_len, const StrCode table[])
 {
     for (int32_t k=0; table[k].name != nullptr; k++)
     {
-        if ((text_len == (int)strlen(table[k].name)) && (memcmp(text, table[k].name, text_len) ==
-            0))
+        if ((text_len == (int)strlen(table[k].name)) &&
+            (memcmp(text, table[k].name, text_len) == 0))
         {
             return table[k].code;
         }
     }
-    return HttpEnums::STAT_OTHER;
+    return HttpCommon::STAT_OTHER;
 }
 
 int32_t substr_to_code(const uint8_t* text, const int32_t text_len, const StrCode table[])
@@ -52,6 +57,6 @@ int32_t substr_to_code(const uint8_t* text, const int32_t text_len, const StrCod
             return table[k].code;
         }
     }
-    return HttpEnums::STAT_OTHER;
+    return HttpCommon::STAT_OTHER;
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "main/snort_config.h"
-#include "packet_io/active.h"
 
 using namespace snort;
 
@@ -41,10 +40,10 @@ static const RuleMap gtp_rules[] =
     { 0, nullptr }
 };
 
-class GtpModule : public CodecModule
+class GtpModule : public BaseCodecModule
 {
 public:
-    GtpModule() : CodecModule(CD_GTP_NAME, CD_GTP_HELP) { }
+    GtpModule() : BaseCodecModule(CD_GTP_NAME, CD_GTP_HELP) { }
 
     const RuleMap* get_rules() const override
     { return gtp_rules; }
@@ -81,7 +80,7 @@ static const uint32_t GTP_V1_HEADER_LEN = 12;
 
 void GtpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::GTP);
+    v.emplace_back(ProtocolId::GTP);
 }
 
 bool GtpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& dd)
@@ -175,8 +174,8 @@ bool GtpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& dd)
         return false;
     }
 
-    if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_GTP) )
-        Active::set_tunnel_bypass();
+    if ( codec.conf->tunnel_bypass_enabled(TUNNEL_GTP) )
+        codec.tunnel_bypass = true;
 
     codec.lyr_len = len;
     codec.proto_bits |= PROTO_BIT__GTP;

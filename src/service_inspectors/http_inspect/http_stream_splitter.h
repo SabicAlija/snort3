@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,8 @@
 
 #include "stream/stream_splitter.h"
 
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_flow_data.h"
 #include "http_test_manager.h"
 
@@ -35,13 +37,15 @@ public:
     HttpStreamSplitter(bool is_client_to_server, HttpInspect* my_inspector_) :
         snort::StreamSplitter(is_client_to_server),
         my_inspector(my_inspector_),
-        source_id(is_client_to_server ? HttpEnums::SRC_CLIENT : HttpEnums::SRC_SERVER) {}
-    Status scan(snort::Flow* flow, const uint8_t* data, uint32_t length, uint32_t not_used,
+        source_id(is_client_to_server ? HttpCommon::SRC_CLIENT : HttpCommon::SRC_SERVER) {}
+    Status scan(snort::Packet* pkt, const uint8_t* data, uint32_t length, uint32_t not_used,
         uint32_t* flush_offset) override;
     const snort::StreamBuffer reassemble(snort::Flow* flow, unsigned total, unsigned, const
         uint8_t* data, unsigned len, uint32_t flags, unsigned& copied) override;
     bool finish(snort::Flow* flow) override;
+    bool init_partial_flush(snort::Flow* flow) override;
     bool is_paf() override { return true; }
+    static StreamSplitter::Status status_value(StreamSplitter::Status ret_val, bool http2 = false);
 
     // FIXIT-M should return actual packet buffer size
     unsigned max(snort::Flow*) override { return HttpEnums::MAX_OCTETS; }
@@ -49,7 +53,7 @@ public:
 private:
     void prepare_flush(HttpFlowData* session_data, uint32_t* flush_offset, HttpEnums::SectionType
         section_type, uint32_t num_flushed, uint32_t num_excess, int32_t num_head_lines,
-        bool is_broken_chunk, uint32_t num_good_chunks, uint32_t octets_seen, bool strict_length)
+        bool is_broken_chunk, uint32_t num_good_chunks, uint32_t octets_seen)
         const;
     HttpCutter* get_cutter(HttpEnums::SectionType type, const HttpFlowData* session) const;
     void chunk_spray(HttpFlowData* session_data, uint8_t* buffer, const uint8_t* data,
@@ -57,9 +61,10 @@ private:
     static void decompress_copy(uint8_t* buffer, uint32_t& offset, const uint8_t* data,
         uint32_t length, HttpEnums::CompressId& compression, z_stream*& compress_stream,
         bool at_start, HttpInfractions* infractions, HttpEventGen* events);
+    static void detain_packet(snort::Packet* pkt);
 
     HttpInspect* const my_inspector;
-    const HttpEnums::SourceId source_id;
+    const HttpCommon::SourceId source_id;
 };
 
 #endif

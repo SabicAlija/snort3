@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,9 +29,12 @@
 #include <list>
 #include <vector>
 
-#include "hash/ghash.h"
-
 #include "file_lib.h"
+
+namespace snort
+{
+class GHash;
+}
 
 #define MAX_BRANCH (UINT8_MAX + 1)
 
@@ -85,11 +88,12 @@ class FileIdentifier
 {
 public:
     ~FileIdentifier();
-    uint32_t memory_usage() { return memory_used; }
+    uint32_t memory_usage() const { return memory_used; }
     void insert_file_rule(FileMagicRule& rule);
     uint32_t find_file_type_id(const uint8_t* buf, int len, uint64_t offset, void** context);
-    FileMagicRule* get_rule_from_id(uint32_t);
-    void get_magic_rule_ids_from_type(const std::string&, const std::string&, snort::FileTypeBitSet&);
+    const FileMagicRule* get_rule_from_id(uint32_t) const;
+    void get_magic_rule_ids_from_type(const std::string&, const std::string&,
+        snort::FileTypeBitSet&) const;
 
 private:
     void init_merge_hash();

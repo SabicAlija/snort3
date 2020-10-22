@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -38,11 +38,11 @@
 
 #include "file_api.h"
 
+class FileMemPool;
+
 namespace snort
 {
 class FileInfo;
-}
-class FileMemPool;
 
 struct FileCaptureBlock
 {
@@ -50,7 +50,7 @@ struct FileCaptureBlock
     FileCaptureBlock* next;  /* next block of file data */
 };
 
-class FileCapture
+class SO_PUBLIC FileCapture
 {
 public:
     FileCapture(int64_t capture_min_size, int64_t capture_max_size);
@@ -93,6 +93,10 @@ public:
 
     snort::FileInfo* get_file_info() { return file_info; }
 
+    int64_t get_max_file_capture_size() { return capture_max_size; }
+    int64_t get_file_capture_size() { return capture_size; }
+    void get_file_reset() { current_block = head; }
+
 private:
 
     static void init_mempool(int64_t max_file_mem, int64_t block_size);
@@ -121,6 +125,7 @@ private:
     int64_t capture_min_size;
     int64_t capture_max_size;
 };
+}
 
 #endif
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,54 +24,50 @@
 #include "tp_appid_module_api.h"
 #include "tp_appid_session_api.h"
 
-class AppIdModuleConfig;
+class AppIdConfig;
+class OdpContext;
 
-// Class responsible for loading/reloading the thirdparty.so library and
-// for holding pointers to objects that live inside thirdparty.so.
+// This needs to be exported by any third party .so library.
+// Must return NULL if it fails to create the object.
+typedef ThirdPartyAppIdContext* (* TpAppIdCreateCtxt)(ThirdPartyConfig& );
+typedef ThirdPartyAppIdSession* (* TpAppIdCreateSession)(ThirdPartyAppIdContext& ctxt);
+typedef int (* TpAppIdPfini)();
+typedef int (* TpAppIdTfini)();
+
+// Class responsible for loading/reloading the thirdparty.so library
 class TPLibHandler
 {
 public:
-
-    static bool have_tp()
-    {
-        return self and self->tp_appid_module != nullptr;
-    }
-
     static TPLibHandler* get()
     {
         if (self)
             return self;
         else
-            return (self=new TPLibHandler());
+            return (self = new TPLibHandler());
     }
 
-    // called from appid_inspector.cc appid_inspector_pinit() / pterm()
-    static void pinit(const AppIdModuleConfig* config);
-    static void pfini(bool print_stats_flag=0);
+    static ThirdPartyAppIdContext* create_tp_appid_ctxt(const AppIdConfig& config,
+        const OdpContext& odp_ctxt);
+    static void tfini();
+    static void pfini();
 
-    // called from AppIdInspector tinit/tterm via
-    // AppIdConfig::tp_appid_module_tinit/tterm.
-    static void tinit() { if ( have_tp() ) self->tp_appid_module->tinit(); }
-    static void tterm() { if ( have_tp() ) self->tp_appid_module->tfini(); }
-
-    CreateThirdPartyAppIDSession_t tpsession_factory() const
+    TpAppIdCreateSession tpsession_factory() const
     {
-        return createThirdPartyAppIDSession;
+        return tp_appid_create_session;
     }
 
 private:
-
     TPLibHandler() = default;
     ~TPLibHandler() = default;
 
     static TPLibHandler* self;
     void* tp_so_handle = nullptr;   // output of dlopen(thirdparty.so)
-    ThirdPartyAppIDModule* tp_appid_module = nullptr;
-    CreateThirdPartyAppIDSession_t createThirdPartyAppIDSession;
+    TpAppIdCreateCtxt tp_appid_create_ctxt = nullptr;
+    TpAppIdCreateSession tp_appid_create_session = nullptr;
+    TpAppIdPfini tp_appid_pfini = nullptr;
+    TpAppIdTfini tp_appid_tfini = nullptr;
 
-    ThirdPartyConfig tp_config;
-
-    int LoadCallback(const char* path, int);
+    bool load_callback(const char* path);
 };
 
 #endif

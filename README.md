@@ -1,11 +1,10 @@
 # Snort++
 
-The Snort++ project has been hard at work for a while now and we have
-released the fourth alpha of the next generation Snort IPS (Intrusion
-Prevention System).  This file will show you what Snort++ has to offer and
-guide you through the steps from download to demo.  If you are unfamiliar
-with Snort you should take a look at the Snort documentation first. We will
-cover the following topics:
+Snort 3 is the next generation Snort IPS (Intrusion Prevention System).
+This file will show you what Snort++ has to offer and guide you through the
+steps from download to demo.  If you are unfamiliar with Snort you should
+take a look at the Snort documentation first. We will cover the following
+topics:
 
 ---
 
@@ -25,8 +24,7 @@ below:
 
     Project = Snort++
     Binary = snort
-    Version = 3.0.0-a4 build 235
-    Base = 2.9.8 build 383
+    Version = 3.0.0 (Build 250) from 2.9.11
 
 Here are some key features of Snort++:
 
@@ -53,10 +51,10 @@ Additional features on the roadmap include:
 If you already build Snort, you may have everything you need.  If not, grab
 the latest:
 
-* autotools or cmake to build from source
-* daq from http://www.snort.org for packet IO
+* cmake to build from source
+* daq from https://github.com/snort3/libdaq for packet IO
 * dnet from https://github.com/dugsong/libdnet.git for network utility functions
-* g++ >= 4.8 or other C++11 compiler
+* g++ >= 5 or other C++14 compiler
 * hwloc from https://www.open-mpi.org/projects/hwloc/ for CPU affinity management
 * LuaJIT from http://luajit.org for configuration and scripting
 * OpenSSL from https://www.openssl.org/source/ for SHA and MD5 file signatures,
@@ -76,7 +74,7 @@ There is a source tarball available in the Downloads section on snort.org:
 
 You can also get the code with:
 
-    git clone git://github.com/snortadmin/snort3.git
+    git clone git://github.com/snort3/snort3.git
 
 There are separate extras packages for cmake that provide additional
 features and demonstrate how to build plugins. The source for extras
@@ -125,16 +123,9 @@ Follow these steps:
 
 # RUN SNORT
 
-First set up the environment:
+Here are some examples.
 
-```shell
-export LUA_PATH=$my_path/include/snort/lua/\?.lua\;\;
-export SNORT_LUA_PATH=$my_path/etc/snort
-```
-
-Then give it a go:
-
-* Snort++ provides lots of help from the command line.  Here are some examples:
+* Snort++ provides lots of help from the command line, including:
 
     ```shell
     $my_path/bin/snort --help

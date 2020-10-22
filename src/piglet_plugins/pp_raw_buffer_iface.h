@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,9 @@ inline const uint8_t* get_data(RawBuffer& rb)
 
 inline uint8_t* get_mutable_data(RawBuffer& rb)
 { return const_cast<uint8_t*>(get_data(rb)); }
+
+inline size_t get_data_length(RawBuffer& rb)
+{ return rb.size(); }
 
 extern const struct Lua::TypeInterface<RawBuffer> RawBufferIface;
 

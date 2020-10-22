@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -54,13 +54,13 @@ struct MobileIPV6Header  // RFC 6275
 
 void MobilityCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::MOBILITY_IPV6);
+    v.emplace_back(ProtocolId::MOBILITY_IPV6);
 }
 
 bool MobilityCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {
     const MobileIPV6Header* const mip6 = reinterpret_cast<const MobileIPV6Header*>(raw.data);
-    if ( SnortConfig::get_conf()->hit_ip6_maxopts(codec.ip6_extension_count) )
+    if ( codec.conf->hit_ip6_maxopts(codec.ip6_extension_count) )
     {
         codec_event(codec, DECODE_IP6_EXCESS_EXT_HDR);
         return false;
@@ -85,7 +85,7 @@ bool MobilityCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
     // must be called AFTER setting next_prot_id
     // Mobility Header must always be the last header in the header chain of an IPv6 packet
     CheckIPv6ExtensionOrder(codec, IpProtocol::MOBILITY_IPV6);
-    
+
     return true;
 }
 

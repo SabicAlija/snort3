@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -45,8 +45,8 @@ private:
 };
 
 IpsOptionPiglet::IpsOptionPiglet(
-    Lua::State& state, const std::string& target, Module* m) :
-    BasePlugin(state, target, m)
+    Lua::State& state, const std::string& tgt, Module* m) :
+    BasePlugin(state, tgt, m)
 {
     if ( !module )
         return;
@@ -56,7 +56,7 @@ IpsOptionPiglet::IpsOptionPiglet(
     if ( !otn )
         return;
 
-    wrapper = IpsManager::instantiate(target.c_str(), m, otn);
+    wrapper = IpsManager::instantiate(tgt.c_str(), m, otn);
 }
 
 IpsOptionPiglet::~IpsOptionPiglet()

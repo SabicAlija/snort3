@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,10 +37,10 @@ static const RuleMap fabricpath_rules[] =
     { 0, nullptr }
 };
 
-class FabricPathModule : public CodecModule
+class FabricPathModule : public BaseCodecModule
 {
 public:
-    FabricPathModule() : CodecModule(CD_FABRICPATH_NAME, CD_FABRICPATH_HELP) { }
+    FabricPathModule() : BaseCodecModule(CD_FABRICPATH_NAME, CD_FABRICPATH_HELP) { }
 
     const RuleMap* get_rules() const override
     { return fabricpath_rules; }
@@ -70,7 +70,7 @@ constexpr uint8_t FABRICPATH_HEADER_LEN = 16;
 } // anonymous namespace
 
 void FabricPathCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ETHERTYPE_FPATH); }
+{ v.emplace_back(ProtocolId::ETHERTYPE_FPATH); }
 
 bool FabricPathCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {

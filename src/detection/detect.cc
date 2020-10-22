@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -50,21 +50,21 @@
 
 using namespace snort;
 
-THREAD_LOCAL ProfileStats detectPerfStats;
 THREAD_LOCAL ProfileStats eventqPerfStats;
-THREAD_LOCAL ProfileStats rebuiltPacketPerfStats;
 
-void snort_ignore(Packet*) { }
+bool snort_ignore(Packet*) { return true; }
 
-void snort_log(Packet* p)
+bool snort_log(Packet* p)
 {
     pc.log_pkts++;
     EventManager::call_loggers(nullptr, p, nullptr, nullptr);
+
+    return true;
 }
 
 void CallLogFuncs(Packet* p, ListHead* head, Event* event, const char* msg)
 {
-    event->event_id = event_id | SnortConfig::get_event_log_id();
+    event->event_id = event_id | p->context->conf->get_event_log_id();
 
     DetectionEngine::set_check_tags(false);
     pc.log_pkts++;
@@ -81,14 +81,14 @@ void CallLogFuncs(Packet* p, const OptTreeNode* otn, ListHead* head)
     event.sig_info = const_cast<SigInfo*>(&otn->sigInfo);
     event.ref_time.tv_sec = p->pkth->ts.tv_sec;
     event.ref_time.tv_usec = p->pkth->ts.tv_usec;
-    event.event_id = event_id | SnortConfig::get_event_log_id();
+    event.event_id = event_id | p->context->conf->get_event_log_id();
     event.event_reference = event.event_id;
 
     DetectionEngine::set_check_tags(false);
     pc.log_pkts++;
 
     OutputSet* idx = head ? head->LogList : nullptr;
-    EventManager::call_loggers(idx, p, otn->sigInfo.message, &event);
+    EventManager::call_loggers(idx, p, otn->sigInfo.message.c_str(), &event);
 }
 
 void CallAlertFuncs(Packet* p, const OptTreeNode* otn, ListHead* head)
@@ -98,13 +98,13 @@ void CallAlertFuncs(Packet* p, const OptTreeNode* otn, ListHead* head)
     event.sig_info = const_cast<SigInfo*>(&otn->sigInfo);
     event.ref_time.tv_sec = p->pkth->ts.tv_sec;
     event.ref_time.tv_usec = p->pkth->ts.tv_usec;
-    event.event_id = event_id | SnortConfig::get_event_log_id();
+    event.event_id = event_id | p->context->conf->get_event_log_id();
     event.event_reference = event.event_id;
 
     pc.total_alert_pkts++;
 
 #if 0
-    // FIXIT-M this should be a generic feature of otn
+    // FIXIT-RC DELETE THIS this should be a generic feature of otn
     if ( otn->sigInfo.gid != GID_REPUTATION )
     {
         /* Don't include IP Reputation events in count */
@@ -113,7 +113,7 @@ void CallAlertFuncs(Packet* p, const OptTreeNode* otn, ListHead* head)
 #endif
 
     OutputSet* idx = head ? head->AlertList : nullptr;
-    EventManager::call_alerters(idx, p, otn->sigInfo.message, event);
+    EventManager::call_alerters(idx, p, otn->sigInfo.message.c_str(), event);
 }
 
 /*

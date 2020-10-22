@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,17 +24,22 @@
 #include "http_msg_status.h"
 
 #include "http_api.h"
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_msg_header.h"
 #include "stream/stream.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 HttpMsgStatus::HttpMsgStatus(const uint8_t* buffer, const uint16_t buf_size,
-    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, snort::Flow* flow_,
+    HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, Flow* flow_,
     const HttpParaList* params_) :
     HttpMsgStart(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_)
 {
     transaction->set_status(this);
+    get_related_sections();
 }
 
 void HttpMsgStatus::parse_start_line()
@@ -148,7 +153,7 @@ void HttpMsgStatus::gen_events()
         }
     }
 
-    if (!transaction->get_request() && (trans_num == 1))
+    if (!request && (trans_num == 1))
     {
         if (flow->is_pdu_inorder(SSN_DIR_FROM_SERVER))
         {
@@ -162,8 +167,8 @@ void HttpMsgStatus::gen_events()
     {
         // Verify that 206 Partial Content is in response to a Range request. Unsolicited 206
         // responses indicate content is being fragmented for no good reason.
-        HttpMsgHeader* const req_header = transaction->get_header(SRC_CLIENT);
-        if ((req_header != nullptr) && (req_header->get_header_count(HEAD_RANGE) == 0))
+        if ((header[SRC_CLIENT] != nullptr) &&
+            (header[SRC_CLIENT]->get_header_count(HEAD_RANGE) == 0))
         {
             add_infraction(INF_206_WITHOUT_RANGE);
             create_event(EVENT_206_WITHOUT_RANGE);
@@ -177,29 +182,26 @@ void HttpMsgStatus::update_flow()
     {
         session_data->half_reset(source_id);
         session_data->type_expected[source_id] = SEC_ABORT;
+        return;
     }
-    else
+    session_data->type_expected[source_id] = SEC_HEADER;
+    session_data->version_id[source_id] = version_id;
+    session_data->status_code_num = status_code_num;
+    // 100 response means the next response message will be added to this transaction instead
+    // of being part of another transaction. As implemented it is possible for multiple 100
+    // responses to all be included in the same transaction. It's not obvious whether that is
+    // the best way to handle what should be a highly abnormal situation.
+    if (status_code_num == 100)
     {
-        session_data->type_expected[source_id] = SEC_HEADER;
-        session_data->version_id[source_id] = version_id;
-        session_data->status_code_num = status_code_num;
-        // 100 response means the next response message will be added to this transaction instead
-        // of being part of another transaction. As implemented it is possible for multiple 100
-        // responses to all be included in the same transaction. It's not obvious whether that is
-        // the best way to handle what should be a highly abnormal situation.
-        if (status_code_num == 100)
+        // Were we "Expect"-ing this?
+        if ((header[SRC_CLIENT] != nullptr) &&
+            (header[SRC_CLIENT]->get_header_count(HEAD_EXPECT) == 0))
         {
-            // Were we "Expect"-ing this?
-            HttpMsgHeader* const req_header = transaction->get_header(SRC_CLIENT);
-            if ((req_header != nullptr) && (req_header->get_header_count(HEAD_EXPECT) == 0))
-            {
-                add_infraction(INF_UNEXPECTED_100_RESPONSE);
-                create_event(EVENT_UNEXPECTED_100_RESPONSE);
-            }
-            transaction->set_one_hundred_response();
+            add_infraction(INF_UNEXPECTED_100_RESPONSE);
+            create_event(EVENT_UNEXPECTED_100_RESPONSE);
         }
+        transaction->set_one_hundred_response();
     }
-    session_data->section_type[source_id] = SEC__NOT_COMPUTE;
 }
 
 #ifdef REG_TEST

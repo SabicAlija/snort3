@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,6 +22,8 @@
 #endif
 
 #include "ftp_splitter.h"
+#include "protocols/ssl.h"
+#include "protocols/packet.h"
 
 #include <cstring>
 
@@ -32,11 +34,16 @@ FtpSplitter::FtpSplitter(bool c2s) : StreamSplitter(c2s) { }
 // flush at last line feed in data
 // preproc will deal with any pipelined commands
 StreamSplitter::Status FtpSplitter::scan(
-    Flow*, const uint8_t* data, uint32_t len,
+    Packet* p, const uint8_t* data, uint32_t len,
     uint32_t, uint32_t* fp)
 {
+    if(IsSSL(data, len, p->packet_flags))
+    {
+        *fp = len;
+        return FLUSH;
+    }
 #ifdef HAVE_MEMRCHR
-    uint8_t* lf =  (uint8_t*)memrchr(data, '\n', len);
+    const uint8_t* lf =  (const uint8_t*)memrchr(data, '\n', len);
 #else
     uint32_t n = len;
     const uint8_t* lf = nullptr, * tmp = data;

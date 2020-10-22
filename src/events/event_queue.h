@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -28,8 +28,8 @@
 
 struct EventQueueConfig
 {
-    int max_events;
-    int log_events;
+    unsigned max_events;
+    unsigned log_events;
     int order;
     int process_all_events;
 };

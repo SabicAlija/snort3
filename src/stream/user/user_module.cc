@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,11 +24,12 @@
 #include "user_module.h"
 
 #include "stream_user.h"
+#include "trace/trace.h"
 
 using namespace snort;
 using namespace std;
 
-Trace TRACE_NAME(stream_user);
+THREAD_LOCAL const Trace* stream_user_trace = nullptr;
 
 //-------------------------------------------------------------------------
 // stream_user module
@@ -36,14 +37,13 @@ Trace TRACE_NAME(stream_user);
 
 static const Parameter s_params[] =
 {
-    { "session_timeout", Parameter::PT_INT, "1:86400", "30",
+    { "session_timeout", Parameter::PT_INT, "1:max31", "30",
       "session tracking timeout" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
-StreamUserModule::StreamUserModule() :
-    Module(MOD_NAME, MOD_HELP, s_params, false, &TRACE_NAME(stream_user))
+StreamUserModule::StreamUserModule() : Module(MOD_NAME, MOD_HELP, s_params)
 {
     config = nullptr;
 }
@@ -61,13 +61,19 @@ StreamUserConfig* StreamUserModule::get_data()
     return temp;
 }
 
-bool StreamUserModule::set(const char* fqn, Value& v, SnortConfig* sc)
+void StreamUserModule::set_trace(const Trace* trace) const
+{ stream_user_trace = trace; }
+
+const TraceOption* StreamUserModule::get_trace_options() const
+{
+    static const TraceOption stream_user_trace_options(nullptr, 0, nullptr);
+    return &stream_user_trace_options;
+}
+
+bool StreamUserModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("session_timeout") )
-        config->session_timeout = v.get_long();
-
-    else
-        return Module::set(fqn, v, sc);
+        config->session_timeout = v.get_uint32();
 
     return true;
 }
@@ -77,11 +83,6 @@ bool StreamUserModule::begin(const char*, int, SnortConfig*)
     if ( !config )
         config = new StreamUserConfig;
 
-    return true;
-}
-
-bool StreamUserModule::end(const char*, int, SnortConfig*)
-{
     return true;
 }
 

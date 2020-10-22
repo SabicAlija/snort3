@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,33 +22,32 @@
 
 // used to make thread local, pointer-based config swaps by packet threads
 
+#include "main/snort_types.h"
+
 namespace snort
 {
 struct SnortConfig;
 }
 
-struct tTargetBasedConfig;
+class Analyzer;
 
-class Swapper
+class SO_PUBLIC Swapper
 {
 public:
-    Swapper(snort::SnortConfig*, tTargetBasedConfig*);
-    Swapper(snort::SnortConfig*, snort::SnortConfig*);
-    Swapper(snort::SnortConfig*, snort::SnortConfig*, tTargetBasedConfig*, tTargetBasedConfig*);
-    Swapper(tTargetBasedConfig*, tTargetBasedConfig*);
+    Swapper(snort::SnortConfig*);
+    Swapper(const snort::SnortConfig* sold, snort::SnortConfig* snew);
+    Swapper();
     ~Swapper();
 
-    void apply();
+    void apply(Analyzer&);
+    snort::SnortConfig* get_new_conf() { return new_conf; }
 
     static bool get_reload_in_progress() { return reload_in_progress; }
     static void set_reload_in_progress(bool rip) { reload_in_progress = rip; }
 
 private:
-    snort::SnortConfig* old_conf;
+    const snort::SnortConfig* old_conf;
     snort::SnortConfig* new_conf;
-
-    tTargetBasedConfig* old_attribs;
-    tTargetBasedConfig* new_attribs;
 
     static bool reload_in_progress;
 };

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -45,49 +45,55 @@ void Binder::add_to_configuration()
     table_api.open_top_level_table("binder");
     table_api.open_table(true);
 
-    table_api.open_table("when", true);
+    if (use_type != "wizard")
+    {
+        table_api.open_table("when", true);
 
-    //FIXIT-M this needs to be split out into ips, network, and inspection
-    if ( has_ips_policy_id() )
-        table_api.add_option("ips_policy_id", when_ips_policy_id);
+        //FIXIT-M this needs to be split out into ips, network, and inspection
+        if ( has_ips_policy_id() )
+            table_api.add_option("ips_policy_id", when_ips_policy_id);
 
-    for ( const auto& s : vlans )
-        table_api.add_list("vlans", s);
+        for ( const auto& s : vlans )
+            table_api.add_list("vlans", s);
 
-    if ( has_service() )
-        table_api.add_option("service", when_service);
+        if ( has_service() )
+            table_api.add_option("service", when_service);
 
-    for ( const auto& n : src_nets )
-        table_api.add_list("src_nets", n);
+        for ( const auto& n : src_nets )
+            table_api.add_list("src_nets", n);
 
-    for ( const auto& n : dst_nets )
-        table_api.add_list("dst_nets", n);
+        for ( const auto& n : dst_nets )
+            table_api.add_list("dst_nets", n);
 
-    for ( const auto& n : nets )
-        table_api.add_list("nets", n);
+        for ( const auto& n : nets )
+            table_api.add_list("nets", n);
 
-    for ( const auto& p : src_ports )
-        table_api.add_list("src_ports", p);
+        for ( const auto& p : src_ports )
+            table_api.add_list("src_ports", p);
 
-    for ( const auto& p : dst_ports )
-        table_api.add_list("dst_ports", p);
+        for ( const auto& p : dst_ports )
+            table_api.add_list("dst_ports", p);
 
-    for ( const auto& p : ports )
-        table_api.add_list("ports", p);
+        for ( const auto& p : ports )
+            table_api.add_list("ports", p);
 
-    if ( has_src_zone() )
-        table_api.add_option("src_zone", std::stoi(when_src_zone));
+        for ( const auto& p : when_src_zone )
+            table_api.add_list("src_zone", p);
 
-    if ( has_dst_zone() )
-        table_api.add_option("dst_zone", std::stoi(when_dst_zone));
+        for ( const auto& p : when_dst_zone )
+            table_api.add_list("dst_zone", p);
 
-    if ( has_proto() )
-        table_api.add_option("proto", when_proto);
+        for ( const auto& p : zones )
+            table_api.add_list("zones", p);
 
-    if ( has_role() )
-        table_api.add_option("role", when_role);
+        if ( has_proto() )
+            table_api.add_option("proto", when_proto);
 
-    table_api.close_table(); // "when"
+        if ( has_role() )
+            table_api.add_option("role", when_role);
+
+        table_api.close_table(); // "when"
+    }
 
     table_api.open_table("use", true);
 
@@ -112,10 +118,6 @@ void Binder::add_to_configuration()
                 opt_name = "ips_policy";
                 break;
 
-            case IT_NETWORK:
-                opt_name = "network_policy";
-                break;
-            
             default:
                 // This should always be set explicitly if a file name exists.
                 assert(false);
@@ -178,10 +180,13 @@ void Binder::add_when_port(const std::string& port)
 { ports.push_back(port); }
 
 void Binder::set_when_src_zone(const std::string& zone)
-{ when_src_zone = zone; }
+{ when_src_zone.push_back(zone); }
 
 void Binder::set_when_dst_zone(const std::string& zone)
-{ when_dst_zone = zone; }
+{ when_dst_zone.push_back(zone); }
+
+void Binder::add_when_zone(const std::string& zone)
+{ zones.push_back(zone); }
 
 void Binder::clear_ports()
 { ports.clear(); }
@@ -241,27 +246,27 @@ bool operator<(const shared_ptr<Binder>& left, const shared_ptr<Binder>& right)
     }
 
     // By predetermined order
-    FIRST_IF_LT(left->get_priority(), right->get_priority());
+    FIRST_IF_LT(left->get_priority(), right->get_priority())
 
     // By priorities of options
     FIRST_IF_GT(left->has_ips_policy_id(), right->has_ips_policy_id())
-    
+
     auto left_zone_specs = left->has_src_zone() + left->has_dst_zone();
     auto right_zone_specs = right->has_src_zone() + right->has_dst_zone();
-    FIRST_IF_GT(left_zone_specs, right_zone_specs);
+    FIRST_IF_GT(left_zone_specs, right_zone_specs)
 
     FIRST_IF_GT(left->has_vlans(), right->has_vlans())
     FIRST_IF_GT(left->has_service(), right->has_service())
 
     auto left_net_specs = left->has_src_nets() + left->has_dst_nets();
     auto right_net_specs = right->has_src_nets() + right->has_dst_nets();
-    FIRST_IF_GT(left_net_specs, right_net_specs);
+    FIRST_IF_GT(left_net_specs, right_net_specs)
 
     FIRST_IF_GT(left->has_nets(), right->has_nets())
 
     auto left_port_specs = left->has_src_ports() + left->has_dst_ports();
     auto right_port_specs = right->has_src_ports() + right->has_dst_ports();
-    FIRST_IF_GT(left_port_specs, right_port_specs);
+    FIRST_IF_GT(left_port_specs, right_port_specs)
 
     FIRST_IF_GT(left->has_ports(), right->has_ports())
     FIRST_IF_GT(left->has_proto(), right->has_proto())
@@ -301,7 +306,7 @@ bool operator<(const shared_ptr<Binder>& left, const shared_ptr<Binder>& right)
 
 void print_binder_priorities()
 {
-    static unsigned const num_combos = 2 << 12; 
+    static unsigned const num_combos = 2 << 12;
     vector<shared_ptr<Binder>> binders;
     TableApi t;
 
@@ -344,9 +349,12 @@ void print_binder_priorities()
             binders.back()->add_when_port("a");
 
         if ( i & (1 << 11) )
-            binders.back()->set_when_proto("a");
+            binders.back()->add_when_zone("a");
 
         if ( i & (1 << 12) )
+            binders.back()->set_when_proto("a");
+
+        if ( i & (1 << 13) )
             binders.back()->set_when_role("a");
     }
 

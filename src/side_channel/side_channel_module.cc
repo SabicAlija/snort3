@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -98,7 +98,7 @@ bool SideChannelModule::set(const char*, Value& v, SnortConfig*)
     assert(config);
 
     if ( v.is("connector") )
-        config->connectors.push_back(std::move(v.get_string()));
+        config->connectors.emplace_back(std::move(v.get_string()));
 
     else if ( v.is("ports") )
     {

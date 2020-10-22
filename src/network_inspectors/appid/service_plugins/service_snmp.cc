@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,12 +25,15 @@
 
 #include "service_snmp.h"
 
+#include "detection/ips_context.h"
 #include "log/messages.h"
 #include "protocols/packet.h"
 
 #include "app_info_table.h"
 #include "appid_debug.h"
 #include "appid_inspector.h"
+
+using namespace snort;
 
 #define SNMP_PORT   161
 
@@ -71,20 +74,6 @@ enum SNMPPDUType
     SNMP_PDU_INFORM_REQUEST,
     SNMP_PDU_TRAPV2
 };
-
-#pragma pack(1)
-
-struct ServiceSNMPHeader
-{
-    uint16_t opcode;
-    union
-    {
-        uint16_t block;
-        uint16_t errorcode;
-    } d;
-};
-
-#pragma pack()
 
 static const uint8_t SNMP_PATTERN_2[] = { 0x02, 0x01, 0x00, 0x04 };
 static const uint8_t SNMP_PATTERN_3[] = { 0x02, 0x01, 0x01, 0x04 };
@@ -406,8 +395,6 @@ int SnmpServiceDetector::validate(AppIdDiscoveryArgs& args)
     const char* version_str = nullptr;
     const uint8_t* data = args.data;
     uint16_t size = args.size;
-    //FIXIT-M - Avoid thread locals
-    static THREAD_LOCAL SnortProtocolId snmp_snort_protocol_id = UNKNOWN_PROTOCOL_ID;
 
     if (!size)
         goto inprocess;
@@ -423,7 +410,7 @@ int SnmpServiceDetector::validate(AppIdDiscoveryArgs& args)
     if (snmp_verify_packet(&data, data+size, &pdu, &version))
     {
         if (appidDebug->is_active())
-            snort::LogMessage("AppIdDbg %s SNMP payload verify failed\n", appidDebug->get_debug_session());
+            LogMessage("AppIdDbg %s SNMP payload verify failed\n", appidDebug->get_debug_session());
         if (args.asd.get_session_flags(APPID_SESSION_UDP_REVERSED))
         {
             if (args.dir == APP_ID_FROM_RESPONDER)
@@ -441,7 +428,7 @@ int SnmpServiceDetector::validate(AppIdDiscoveryArgs& args)
     }
 
     if (appidDebug->is_active())
-        snort::LogMessage("AppIdDbg %s SNMP state %d\n", appidDebug->get_debug_session(), sd->state);
+        LogMessage("AppIdDbg %s SNMP state %d\n", appidDebug->get_debug_session(), sd->state);
 
     switch (sd->state)
     {
@@ -470,19 +457,18 @@ int SnmpServiceDetector::validate(AppIdDiscoveryArgs& args)
         {
             args.asd.set_session_flags(APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_NOT_A_SERVICE);
             args.asd.clear_session_flags(APPID_SESSION_CONTINUE);
-            args.asd.service.set_id(APP_ID_SNMP);
+            args.asd.set_service_id(APP_ID_SNMP, args.asd.get_odp_ctxt());
             break;
         }
         sd->state = SNMP_STATE_RESPONSE;
 
         /*adding expected connection in case the server doesn't send from 161*/
-        if(snmp_snort_protocol_id == UNKNOWN_PROTOCOL_ID)
-            snmp_snort_protocol_id = snort::SnortConfig::get_conf()->proto_ref->find("snmp");
+        const SfIp* dip = args.pkt->ptrs.ip_api.get_dst();
+        const SfIp* sip = args.pkt->ptrs.ip_api.get_src();
+        AppIdSession* pf = AppIdSession::create_future_session(args.pkt,
+            dip, 0, sip, args.pkt->ptrs.sp, args.asd.protocol,
+            args.asd.config.snort_proto_ids[PROTO_INDEX_SNMP]);
 
-        const snort::SfIp* dip = args.pkt->ptrs.ip_api.get_dst();
-        const snort::SfIp* sip = args.pkt->ptrs.ip_api.get_src();
-        AppIdSession* pf = AppIdSession::create_future_session(args.pkt, dip, 0, sip,
-            args.pkt->ptrs.sp, args.asd.protocol, snmp_snort_protocol_id, 0, handler->get_inspector());
         if (pf)
         {
             tmp_sd = (ServiceSNMPData*)snort_calloc(sizeof(ServiceSNMPData));
@@ -495,10 +481,10 @@ int SnmpServiceDetector::validate(AppIdDiscoveryArgs& args)
                 tmp_sd->state = SNMP_STATE_ERROR;
                 return APPID_ENULL;
             }
-            initialize_expected_session(args.asd, *pf, APPID_SESSION_EXPECTED_EVALUATE, APP_ID_APPID_SESSION_DIRECTION_MAX);
+            args.asd.initialize_future_session(*pf, APPID_SESSION_EXPECTED_EVALUATE, APP_ID_APPID_SESSION_DIRECTION_MAX);
             pf->service_disco_state = APPID_DISCO_STATE_STATEFUL;
             pf->scan_flags |= SCAN_HOST_PORT_FLAG;
-            pf->common.initiator_ip = *sip;
+            pf->set_initiator_ip(*sip);
         }
     }
     break;
@@ -572,7 +558,8 @@ success:
         version_str = nullptr;
         break;
     }
-    return add_service(args.asd, args.pkt, args.dir, APP_ID_SNMP, SNMP_VENDOR_STR, version_str, nullptr);
+    return add_service(args.change_bits, args.asd, args.pkt, args.dir, APP_ID_SNMP,
+        SNMP_VENDOR_STR, version_str, nullptr);
 
 bail:
     incompatible_data(args.asd, args.pkt, args.dir);

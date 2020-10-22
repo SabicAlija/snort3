@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,13 +30,13 @@
 #define FILTER_SPEC_BUF_LEN (40)
 #define PARSE_STACK_LEN     (12)
 
-/* FIXIT-L Other than the API prototypes, the other parts of this header should
+/* FIXIT-RC Other than the API prototypes, the other parts of this header should
    be private to file_decomp_pdf. */
 
 enum fd_PDF_States
 {
     PDF_STATE_NEW,
-    PDF_STATE_LOCATE_STREAM,     /* Found sig bytes, looking for dictionary & stream*/
+    PDF_STATE_LOCATE_STREAM,     /* Found sig bytes, looking for dictionary & stream */
     PDF_STATE_INIT_STREAM,       /* Init stream */
     PDF_STATE_PROCESS_STREAM     /* Processing stream */
 };
@@ -79,21 +79,16 @@ struct fd_PDF_t
     uint8_t State;
 };
 
-// FIXIT-L don't obfuscate pointers
-typedef fd_PDF_Parse_Stack_t* fd_PDF_Parse_Stack_p_t;
-typedef fd_PDF_Parse_t* fd_PDF_Parse_p_t;
-typedef fd_PDF_t* fd_PDF_p_t;
-
 /* API Functions */
 
 /* Init the PDF decompressor */
 fd_status_t File_Decomp_Init_PDF(fd_session_t*);
 
 /* Run the incremental PDF file parser/decompressor */
-fd_status_t File_Decomp_End_PDF(fd_session_t*);
+fd_status_t File_Decomp_PDF(fd_session_t*);
 
 /* End the decompressor */
-fd_status_t File_Decomp_PDF(fd_session_t*);
+fd_status_t File_Decomp_End_PDF(fd_session_t*);
 
 #endif
 

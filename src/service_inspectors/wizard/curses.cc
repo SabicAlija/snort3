@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -193,7 +193,8 @@ static bool dce_smb_curse(const uint8_t* data, unsigned len, CurseTracker* track
 {
     const uint32_t dce_smb_id = 0xff534d42;  /* \xffSMB */
     const uint32_t dce_smb2_id = 0xfe534d42;  /* \xfeSMB */
-    const uint8_t nbss_type_message = 0;
+    const uint8_t session_request = 0x81, session_response = 0x82,
+                  session_message = 0x00;
 
     uint32_t n = 0;
     while (n < len)
@@ -202,22 +203,40 @@ static bool dce_smb_curse(const uint8_t* data, unsigned len, CurseTracker* track
         {
         case STATE_0:
         {
-            if (data[n] != nbss_type_message)
+            if (data[n] == session_message)
             {
-                tracker->state = STATE_8;
+                tracker->state = (DCE_States)((int)tracker->state + 2);
+                break;
+            }
+
+            if (data[n] == session_request || data[n] == session_response)
+            {
+                tracker->state = (DCE_States)((int)tracker->state + 1);
                 return false;
             }
-            tracker->state = (DCE_States)((int)tracker->state + 1);
-            break;
+
+            tracker->state = STATE_9;
+            return false;
         }
-        case STATE_4:
+        case STATE_1:
+        {
+            if (data[n] == session_message)
+            {
+                tracker->state = (DCE_States)((int)tracker->state + 1);
+                break;
+            }
+
+            tracker->state = STATE_9;
+            return false;
+        }
+        case STATE_5:
         {
             tracker->helper = data[n];
             tracker->state = (DCE_States)((int)tracker->state + 1);
             break;
         }
-        case STATE_5:
         case STATE_6:
+        case STATE_7:
         {
             tracker->helper <<= 8;
             tracker->helper |= data[n];
@@ -225,7 +244,7 @@ static bool dce_smb_curse(const uint8_t* data, unsigned len, CurseTracker* track
             break;
         }
 
-        case STATE_7:
+        case STATE_8:
         {
             tracker->helper <<= 8;
             tracker->helper |= data[n];
@@ -236,7 +255,7 @@ static bool dce_smb_curse(const uint8_t* data, unsigned len, CurseTracker* track
             break;
         }
 
-        case STATE_8:
+        case STATE_9:
             // no match
             return false;
 
@@ -266,9 +285,9 @@ bool CurseBook::add_curse(const char* key)
         if (curse.name == key)
         {
             if (curse.is_tcp)
-                tcp_curses.push_back(&curse);
+                tcp_curses.emplace_back(&curse);
             else
-                non_tcp_curses.push_back(&curse);
+                non_tcp_curses.emplace_back(&curse);
             return true;
         }
     }

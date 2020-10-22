@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2007-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -41,7 +41,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -115,14 +115,11 @@ private:
 
 uint32_t CvsOption::hash() const
 {
-    uint32_t a,b,c;
-    const CvsRuleOption* data = &config;
+    uint32_t a = config.type;
+    uint32_t b = IpsOption::hash();
+    uint32_t c = 0;
 
-    a = data->type;
-    b = 0;
-    c = 0;
-
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -130,7 +127,7 @@ uint32_t CvsOption::hash() const
 
 bool CvsOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const CvsOption& rhs = (const CvsOption&)ips;
@@ -332,7 +329,7 @@ static int CvsValidateEntry(const uint8_t* entry_arg, const uint8_t* end_arg)
         }
         if (*entry_arg != '/')
         {
-            entry_arg = (uint8_t*)memchr(entry_arg, '/', end_arg - entry_arg);
+            entry_arg = (const uint8_t*)memchr(entry_arg, '/', end_arg - entry_arg);
             if (entry_arg == nullptr)
                 break;
         }
@@ -359,7 +356,7 @@ static int CvsValidateEntry(const uint8_t* entry_arg, const uint8_t* end_arg)
 static void CvsGetEOL(const uint8_t* ptr, const uint8_t* end,
     const uint8_t** eol, const uint8_t** eolm)
 {
-    *eolm = (uint8_t*)memchr(ptr, CVS_COMMAND_DELIMITER, end - ptr);
+    *eolm = (const uint8_t*)memchr(ptr, CVS_COMMAND_DELIMITER, end - ptr);
     if (*eolm == nullptr)
     {
         *eolm = end;
@@ -401,7 +398,7 @@ public:
     { return DETECT; }
 
 public:
-    CvsRuleOption data;
+    CvsRuleOption data = {};
 };
 
 bool CvsModule::begin(const char*, int, SnortConfig*)

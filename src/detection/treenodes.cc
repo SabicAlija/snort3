@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -27,6 +27,8 @@
 #include "framework/ips_option.h"
 #include "utils/util.h"
 
+using namespace snort;
+
 OptFpList* AddOptFuncToList(RuleOptEvalFunc ro_eval_func, OptTreeNode* otn)
 {
     OptFpList* ofp = (OptFpList*)snort_calloc(sizeof(OptFpList));
@@ -49,7 +51,7 @@ OptFpList* AddOptFuncToList(RuleOptEvalFunc ro_eval_func, OptTreeNode* otn)
     return ofp;
 }
 
-bool otn_set_agent(OptTreeNode* otn, snort::IpsOption* opt)
+bool otn_set_agent(OptTreeNode* otn, IpsOption* opt)
 {
     if ( otn->agent )
         return false;
@@ -58,7 +60,7 @@ bool otn_set_agent(OptTreeNode* otn, snort::IpsOption* opt)
     return true;
 }
 
-void otn_trigger_actions(const OptTreeNode* otn, snort::Packet* p)
+void otn_trigger_actions(const OptTreeNode* otn, Packet* p)
 {
     if ( otn->agent )
         otn->agent->action(p);

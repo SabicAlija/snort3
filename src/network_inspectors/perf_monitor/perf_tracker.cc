@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -62,7 +62,7 @@ static inline bool check_file_size(FILE* fh, uint64_t max_file_size)
 
 PerfTracker::PerfTracker(PerfConfig* config, const char* tracker_name)
 {
-    this->config = config;
+    max_file_size = config->max_file_size;
 
     switch (config->format)
     {
@@ -75,7 +75,9 @@ PerfTracker::PerfTracker(PerfConfig* config, const char* tracker_name)
 #ifdef UNIT_TEST
         case PerfFormat::MOCK: formatter = new MockFormatter(tracker_name); break;
 #endif
-        default: break;
+        default:
+            FatalError("Perfmonitor: Can't initialize output format\n");
+            break;
     }
 
     if ( config->output == PerfOutput::TO_FILE )
@@ -97,6 +99,15 @@ PerfTracker::~PerfTracker()
         fclose(fh);
 }
 
+void PerfTracker::close()
+{
+    if (fh && fh != stdout)
+    {
+        fclose(fh);
+        fh = nullptr;
+    }
+}
+
 bool PerfTracker::open(bool append)
 {
     if (fname.length())
@@ -108,12 +119,12 @@ bool PerfTracker::open(bool append)
         const char* file_name = fname.c_str();
         bool existed = false;
 
-        /*Check file before change permission*/
+        // Check file before change permission
         if (stat(file_name, &pt) == 0)
         {
             existed = true;
 
-            /*Only change permission for file owned by root*/
+            // Only change permission for file owned by root
             if ((0 == pt.st_uid) || (0 == pt.st_gid))
             {
                 if (chmod(file_name, mode) != 0)
@@ -123,13 +134,13 @@ bool PerfTracker::open(bool append)
                         file_name, mode, get_error(errno));
                 }
 
-                if (chown(file_name, snort::SnortConfig::get_uid(),
-                    snort::SnortConfig::get_gid()) != 0)
+                const SnortConfig* sc = SnortConfig::get_conf();
+
+                if (chown(file_name, sc->get_uid(), sc->get_gid()) != 0)
                 {
                     WarningMessage("perfmonitor: Unable to change permissions of "
                         "stats file '%s' to user:%d and group:%d: %s.\n",
-                        file_name, snort::SnortConfig::get_uid(), snort::SnortConfig::get_gid(),
-                        get_error(errno));
+                        file_name, sc->get_uid(), sc->get_gid(), get_error(errno));
                 }
             }
         }
@@ -342,7 +353,7 @@ bool PerfTracker::rotate()
 {
     if (fh && fh != stdout)
     {
-        if (!rotate_file(fname.c_str(), fh, config->max_file_size))
+        if (!rotate_file(fname.c_str(), fh, max_file_size))
             return false;
 
         return open(false);
@@ -352,7 +363,7 @@ bool PerfTracker::rotate()
 
 bool PerfTracker::auto_rotate()
 {
-    if (fh && fh != stdout && check_file_size(fh, config->max_file_size))
+    if (fh && fh != stdout && check_file_size(fh, max_file_size))
         return rotate();
 
     return true;

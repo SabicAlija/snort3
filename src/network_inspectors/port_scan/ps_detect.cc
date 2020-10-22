@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,6 +33,7 @@
 
 #include "ps_detect.h"
 
+#include "hash/hash_defs.h"
 #include "hash/xhash.h"
 #include "log/messages.h"
 #include "protocols/icmp4.h"
@@ -44,6 +45,7 @@
 #include "utils/stats.h"
 
 #include "ps_inspect.h"
+#include "ps_pegs.h"
 
 using namespace snort;
 
@@ -56,7 +58,33 @@ struct PS_HASH_KEY
 };
 PADDING_GUARD_END
 
-static THREAD_LOCAL XHash* portscan_hash = nullptr;
+class PortScanCache : public XHash
+{
+public:
+    PortScanCache(unsigned rows, unsigned key_len, unsigned datasize, unsigned memcap)
+        : XHash(rows, key_len, datasize, memcap)
+    { }
+
+    bool is_node_recovery_ok(HashNode* hnode) override
+    {
+        PS_TRACKER* tracker = (PS_TRACKER*)hnode->data;
+
+        if ( !tracker->priority_node )
+            return true;
+
+        /*
+         **  Cycle through the protos to see if it's past the time.
+         **  We only get here if we ARE a priority node.
+         */
+        if ( tracker->proto.window >= packet_time() )
+            return false;
+
+        return true;
+    }
+};
+
+static THREAD_LOCAL PortScanCache* portscan_hash = nullptr;
+extern THREAD_LOCAL PsPegStats spstats;
 
 PS_PKT::PS_PKT(Packet* p)
 {
@@ -82,37 +110,11 @@ PortscanConfig::~PortscanConfig()
         ipset_free(watch_ip);
 }
 
-/*
-**  This function is passed into the hash algorithm, so that
-**  we only reuse nodes that aren't priority nodes.  We have to make
-**  sure that we only track so many priority nodes, otherwise we could
-**  have all priority nodes and not be able to allocate more.
-*/
-static int ps_tracker_free(void* key, void* data)
-{
-    if (!key || !data)
-        return 0;
-
-    PS_TRACKER* tracker = (PS_TRACKER*)data;
-
-    if (!tracker->priority_node)
-        return 0;
-
-    /*
-    **  Cycle through the protos to see if it's past the time.
-    **  We only get here if we ARE a priority node.
-    */
-    if (tracker->proto.window >= packet_time())
-        return 1;
-
-    return 0;
-}
-
 void ps_cleanup()
 {
     if ( portscan_hash )
     {
-        xhash_delete(portscan_hash);
+        delete portscan_hash;
         portscan_hash = nullptr;
     }
 }
@@ -120,24 +122,37 @@ void ps_cleanup()
 unsigned ps_node_size()
 { return sizeof(PS_HASH_KEY) + sizeof(PS_TRACKER); }
 
-void ps_init_hash(unsigned long memcap)
+bool ps_init_hash(unsigned long memcap)
 {
     if ( portscan_hash )
-        return;
+    {
+        bool need_pruning = (memcap < portscan_hash->get_mem_used());
+        portscan_hash->set_memcap(memcap);
+        return need_pruning;
+    }
 
     int rows = memcap / ps_node_size();
+    portscan_hash = new PortScanCache(rows, sizeof(PS_HASH_KEY), sizeof(PS_TRACKER),
+        memcap);
 
-    portscan_hash = xhash_new(rows, sizeof(PS_HASH_KEY), sizeof(PS_TRACKER),
-        memcap, 1, ps_tracker_free, nullptr, 1);
+    return false;
+}
 
+bool ps_prune_hash(unsigned work_limit)
+{
     if ( !portscan_hash )
-        FatalError("Failed to initialize portscan hash table.\n");
+        return true;
+
+    unsigned num_pruned = 0;
+    int result = portscan_hash->tune_memory_resources(work_limit, num_pruned);
+    spstats.reload_prunes += num_pruned;
+    return result != HASH_PENDING;
 }
 
 void ps_reset()
 {
     if ( portscan_hash )
-        xhash_make_empty(portscan_hash);
+        portscan_hash->clear_hash();
 }
 
 //  Check scanner and scanned ips to see if we can filter them out.
@@ -277,15 +292,20 @@ bool PortScan::ps_filter_ignore(PS_PKT* ps_pkt)
 */
 static PS_TRACKER* ps_tracker_get(PS_HASH_KEY* key)
 {
-    PS_TRACKER* ht = (PS_TRACKER*)xhash_find(portscan_hash, (void*)key);
+    PS_TRACKER* ht = (PS_TRACKER*)portscan_hash->get_user_data((void*)key);
 
     if ( ht )
         return ht;
 
-    if ( xhash_add(portscan_hash, (void*)key, nullptr) != XHASH_OK )
+    auto prev_count = portscan_hash->get_num_nodes();
+    if ( portscan_hash->insert((void*)key, nullptr) != HASH_OK )
         return nullptr;
 
-    ht = (PS_TRACKER*)xhash_mru(portscan_hash);
+    ++spstats.trackers;
+    if ( prev_count == portscan_hash->get_num_nodes() )
+        ++spstats.alloc_prunes;
+
+    ht = (PS_TRACKER*)portscan_hash->get_mru_user_data();
 
     if ( ht )
         memset(ht, 0x00, sizeof(PS_TRACKER));
@@ -314,9 +334,9 @@ bool PortScan::ps_tracker_lookup(
         key.scanner.clear();
 
         if (ps_pkt->reverse_pkt)
-            key.scanned.set(*p->ptrs.ip_api.get_src());
+            key.scanned = *p->ptrs.ip_api.get_src();
         else
-            key.scanned.set(*p->ptrs.ip_api.get_dst());
+            key.scanned = *p->ptrs.ip_api.get_dst();
 
         *scanned = ps_tracker_get(&key);
     }
@@ -327,9 +347,9 @@ bool PortScan::ps_tracker_lookup(
         key.scanned.clear();
 
         if (ps_pkt->reverse_pkt)
-            key.scanner.set(*p->ptrs.ip_api.get_dst());
+            key.scanner = *p->ptrs.ip_api.get_dst();
         else
-            key.scanner.set(*p->ptrs.ip_api.get_src());
+            key.scanner = *p->ptrs.ip_api.get_src();
 
         *scanner = ps_tracker_get(&key);
     }
@@ -418,11 +438,11 @@ void PortScan::ps_proto_update_window(unsigned interval, PS_PROTO* proto, time_t
 **  @param PS_PROTO pointer to structure to update
 **  @param int      number to increment portscan counter
 **  @param u_long   IP address of other host
-**  @param u_short  port/ip_proto to track
+**  @param unsigned short  port/ip_proto to track
 **  @param time_t   time the packet was received. update windows.
 */
 int PortScan::ps_proto_update(PS_PROTO* proto, int ps_cnt, int pri_cnt,
-    unsigned window, const SfIp* ip, u_short port, time_t pkt_time)
+    unsigned window, const SfIp* ip, unsigned short port, time_t pkt_time)
 {
     if (!proto)
         return 0;
@@ -470,7 +490,7 @@ int PortScan::ps_proto_update(PS_PROTO* proto, int ps_cnt, int pri_cnt,
     if (!proto->u_ips.equals(*ip, false))
     {
         proto->u_ip_count++;
-        proto->u_ips.set(*ip);
+        proto->u_ips = *ip;
     }
 
     /* we need to do the IP comparisons in host order */
@@ -478,21 +498,21 @@ int PortScan::ps_proto_update(PS_PROTO* proto, int ps_cnt, int pri_cnt,
     if (proto->low_ip.is_set())
     {
         if (proto->low_ip.greater_than(*ip))
-            proto->low_ip.set(*ip);
+            proto->low_ip = *ip;
     }
     else
     {
-        proto->low_ip.set(*ip);
+        proto->low_ip = *ip;
     }
 
     if (proto->high_ip.is_set())
     {
         if (proto->high_ip.less_than(*ip))
-            proto->high_ip.set(*ip);
+            proto->high_ip = *ip;
     }
     else
     {
-        proto->high_ip.set(*ip);
+        proto->high_ip = *ip;
     }
 
     if (proto->u_ports != port)
@@ -557,7 +577,6 @@ void PortScan::ps_tracker_update_tcp(PS_PKT* ps_pkt, PS_TRACKER* scanner,
     PS_TRACKER* scanned)
 {
     Packet* p = (Packet*)ps_pkt->pkt;
-    uint32_t session_flags = 0x0;
     unsigned win = config->tcp_window;
 
     SfIp cleared;
@@ -580,11 +599,11 @@ void PortScan::ps_tracker_update_tcp(PS_PKT* ps_pkt, PS_TRACKER* scanner,
     **  picked up midstream, then we don't care about the MIDSTREAM flag.
     **  Otherwise, only consider streams not picked up midstream.
     */
-    // FIXIT-H using SSNFLAG_COUNTED_INITIALIZE is a hack to get parity with 2.X
+    // FIXIT-E using SSNFLAG_COUNTED_INITIALIZE is a hack to get parity with 2.X
     // this should be completely redone and port_scan should require stream_tcp
     if ( p->flow and (p->flow->ssn_state.session_flags & SSNFLAG_COUNTED_INITIALIZE) )
     {
-        session_flags = p->flow->get_session_flags();
+        uint32_t session_flags = p->flow->get_session_flags();
 
         if ((session_flags & SSNFLAG_SEEN_CLIENT) &&
             !(session_flags & SSNFLAG_SEEN_SERVER) &&
@@ -734,12 +753,12 @@ void PortScan::ps_tracker_update_ip(PS_PKT* ps_pkt, PS_TRACKER* scanner,
 
     if (scanned)
     {
-        ps_proto_update(&scanned->proto, 1, 0, win, &cleared, (u_short)p->get_ip_proto_next(), 0);
+        ps_proto_update(&scanned->proto, 1, 0, win, &cleared, (unsigned short)p->get_ip_proto_next(), 0);
     }
 
     if (scanner)
     {
-        ps_proto_update(&scanner->proto, 1, 0, win, &cleared, (u_short)p->get_ip_proto_next(), 0);
+        ps_proto_update(&scanner->proto, 1, 0, win, &cleared, (unsigned short)p->get_ip_proto_next(), 0);
     }
 }
 
@@ -804,9 +823,6 @@ void PortScan::ps_tracker_update_icmp(
     Packet* p = (Packet*)ps_pkt->pkt;
     unsigned win = config->icmp_window;
 
-    SfIp cleared;
-    cleared.clear();
-
     if (p->ptrs.icmph)
     {
         switch (p->ptrs.icmph->type)
@@ -815,13 +831,22 @@ void PortScan::ps_tracker_update_icmp(
         case ICMP_TIMESTAMP:
         case ICMP_ADDRESS:
         case ICMP_INFO_REQUEST:
-            ps_proto_update(&scanner->proto, 1, 0, win,
-                p->ptrs.ip_api.get_dst(), 0, packet_time());
+            if (scanner)
+            {
+                ps_proto_update(&scanner->proto, 1, 0, win,
+                    p->ptrs.ip_api.get_dst(), 0, packet_time());
+            }
             break;
 
         case ICMP_DEST_UNREACH:
-            ps_proto_update(&scanner->proto, 0, 1, win, &cleared, 0, 0);
-            scanner->priority_node = 1;
+            if (scanner)
+            {
+                SfIp cleared;
+                cleared.clear();
+
+                ps_proto_update(&scanner->proto, 0, 1, win, &cleared, 0, 0);
+                scanner->priority_node = 1;
+            }
             break;
 
         default:

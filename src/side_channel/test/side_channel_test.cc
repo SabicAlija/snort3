@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,7 +26,6 @@
 #include "side_channel/side_channel.h"
 
 #include "log/messages.h"
-#include "main/snort_debug.h"
 #include "managers/connector_manager.h"
 
 #include <CppUTest/CommandLineTestRunner.h>
@@ -147,15 +146,12 @@ TEST_GROUP(side_channel)
 {
     void setup() override
     {
-        // FIXIT-L workaround for issue with CppUTest memory leak detection
-        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         SideChannelManager::pre_config_init();
-
         SCConnectors test_connectors;
         PortBitSet test_ports;
 
-        test_connectors.push_back("R");
-        test_connectors.push_back("T");
+        test_connectors.emplace_back("R");
+        test_connectors.emplace_back("T");
         test_ports.set(1);
 
         SideChannelManager::instantiate(&test_connectors, &test_ports);
@@ -163,7 +159,7 @@ TEST_GROUP(side_channel)
         test_connectors.clear();
         test_ports.reset(1);
 
-        test_connectors.push_back("R");
+        test_connectors.emplace_back("R");
         test_ports.set(2);
 
         SideChannelManager::instantiate(&test_connectors, &test_ports);
@@ -171,7 +167,7 @@ TEST_GROUP(side_channel)
         test_connectors.clear();
         test_ports.reset(2);
 
-        test_connectors.push_back("T");
+        test_connectors.emplace_back("T");
         test_ports.set(3);
 
         SideChannelManager::instantiate(&test_connectors, &test_ports);
@@ -186,7 +182,7 @@ TEST_GROUP(side_channel)
         test_connectors.clear();
         test_ports.reset(4);
 
-        test_connectors.push_back("D");
+        test_connectors.emplace_back("D");
         test_ports.set(5);
 
         SideChannelManager::instantiate(&test_connectors, &test_ports);
@@ -201,7 +197,6 @@ TEST_GROUP(side_channel)
     {
         SideChannelManager::thread_term();
         SideChannelManager::term();
-        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
 
@@ -284,7 +279,6 @@ TEST(side_channel, test_connector_receive_process_dispatch_discard)
 {
     SideChannel* sc = SideChannelManager::get_side_channel(1);
     CHECK(sc != nullptr);
-
     sc->register_receive_handler(receive_handler);
 
     bool success = sc->process(1);

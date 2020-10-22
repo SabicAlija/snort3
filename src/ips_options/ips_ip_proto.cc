@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -73,14 +73,11 @@ private:
 
 uint32_t IpProtoOption::hash() const
 {
-    uint32_t a,b,c;
-    const IpProtoData* data = &config;
+    uint32_t a = to_utype(config.protocol);
+    uint32_t b = config.comparison_flag;
+    uint32_t c = IpsOption::hash();
 
-    a = to_utype(data->protocol);
-    b = data->comparison_flag;
-    c = 0;
-
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -88,7 +85,7 @@ uint32_t IpProtoOption::hash() const
 
 bool IpProtoOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const IpProtoOption& rhs = (const IpProtoOption&)ips;
@@ -106,7 +103,7 @@ bool IpProtoOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus IpProtoOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(ipProtoPerfStats);
+    RuleProfile profile(ipProtoPerfStats);
 
     IpProtoData* ipd = &config;
 
@@ -239,7 +236,7 @@ public:
     { return DETECT; }
 
 public:
-    IpProtoData data;
+    IpProtoData data = {};
 };
 
 bool IpProtoModule::begin(const char*, int, SnortConfig*)

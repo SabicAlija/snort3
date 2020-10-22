@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@
 #include "protocols/packet.h"
 #include "target_based/snort_protocols.h"
 #include "utils/util.h"
+#include "utils/util_cstring.h"
 
 using namespace snort;
 using namespace std;
@@ -67,10 +68,10 @@ typedef vector<RuleId> RuleVector;
 
 static const Parameter rule_params[] =
 {
-    { "gid", Parameter::PT_INT, "1:", "1",
+    { "gid", Parameter::PT_INT, "1:max32", "1",
       "rule generator ID" },
 
-    { "sid", Parameter::PT_INT, "1:", "1",
+    { "sid", Parameter::PT_INT, "1:max32", "1",
       "rule signature ID" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -100,12 +101,12 @@ public:
     bool end(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
     string file;
     RuleVector rulez;
-    RuleId rule;
+    RuleId rule = {};
 };
 
 bool SfSocketModule::set(const char*, Value& v, SnortConfig*)
@@ -114,10 +115,10 @@ bool SfSocketModule::set(const char*, Value& v, SnortConfig*)
         file = v.get_string();
 
     else if ( v.is("gid") )
-        rule.gid = v.get_long();
+        rule.gid = v.get_uint32();
 
     else if ( v.is("sid") )
-        rule.sid = v.get_long();
+        rule.sid = v.get_uint32();
 
     return true;
 }
@@ -132,7 +133,7 @@ bool SfSocketModule::begin(const char*, int, SnortConfig*)
 bool SfSocketModule::end(const char* fqn, int, SnortConfig*)
 {
     if ( !strcmp(fqn, "alert_sfsocket.rules") )
-        rulez.push_back(rule);
+        rulez.emplace_back(rule);
 
     return true;
 }
@@ -173,7 +174,7 @@ static void sock_init(const char* args)
 
     memset(&context.addr, 0, sizeof(context.addr));
     context.addr.sun_family = AF_UNIX;
-    memcpy(context.addr.sun_path + 1, name.c_str(), strlen(name.c_str()));
+    SnortStrncpy(context.addr.sun_path, name.c_str(), sizeof(context.addr.sun_path));
 
     if (AlertSFSocket_Connect() == 0)
         context.connected = 1;
@@ -248,9 +249,11 @@ static OptTreeNode* OptTreeNode_Search(uint32_t, uint32_t sid)
     if (sid == 0)
         return nullptr;
 
-    for (hashNode = ghash_findfirst(SnortConfig::get_conf()->otn_map);
+    const SnortConfig* sc = SnortConfig::get_conf();
+
+    for (hashNode = sc->otn_map->find_first();
         hashNode;
-        hashNode = ghash_findnext(SnortConfig::get_conf()->otn_map))
+        hashNode = sc->otn_map->find_next())
     {
         OptTreeNode* otn = (OptTreeNode*)hashNode->data;
         RuleTreeNode* rtn = getRuntimeRtnFromOtn(otn);
@@ -383,7 +386,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* sf_sock_ctor(SnortConfig*, Module* mod)
+static Logger* sf_sock_ctor(Module* mod)
 { return new SfSocketLogger((SfSocketModule*)mod); }
 
 static void sf_sock_dtor(Logger* p)

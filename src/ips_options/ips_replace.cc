@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -22,12 +22,12 @@
 #include "config.h"
 #endif
 
-#include "actions/act_replace.h"
+#include "detection/detection_engine.h"
 #include "detection/treenodes.h"
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
 #include "main/thread_config.h"
@@ -50,9 +50,9 @@ static void replace_parse(const char* args, string& s)
         ParseError("can't negate replace string");
 }
 
-static bool replace_ok()
+static bool replace_ok(const SnortConfig* sc)
 {
-    if ( SnortConfig::inline_mode() and SFDAQ::can_replace() )
+    if ( sc->inline_mode() and SFDAQ::can_replace() )
         return true;
 
     static THREAD_LOCAL bool warned = false;
@@ -77,7 +77,7 @@ static THREAD_LOCAL ProfileStats replacePerfStats;
 class ReplaceOption : public IpsOption
 {
 public:
-    ReplaceOption(string&);
+    ReplaceOption(const string&);
     ~ReplaceOption() override;
 
     EvalStatus eval(Cursor&, Packet*) override;
@@ -106,7 +106,7 @@ private:
     int* offset; /* >=0 is offset to start of replace */
 };
 
-ReplaceOption::ReplaceOption(string& s) : IpsOption(s_name)
+ReplaceOption::ReplaceOption(const string& s) : IpsOption(s_name)
 {
     unsigned n = ThreadConfig::get_instance_max();
     offset = new int[n];
@@ -124,18 +124,12 @@ ReplaceOption::~ReplaceOption()
 
 uint32_t ReplaceOption::hash() const
 {
-    uint32_t a,b,c;
-
-    const char* s = repl.c_str();
-    unsigned n = repl.size();
-
-    a = 0;
-    b = n;
-    c = 0;
+    uint32_t a = IpsOption::hash();
+    uint32_t b = repl.size();
+    uint32_t c = 0;
 
     mix(a,b,c);
-    mix_str(a,b,c,s,n);
-    mix_str(a,b,c,get_name());
+    mix_str(a,b,c,repl.c_str());
     finalize(a,b,c);
 
     return c;
@@ -143,7 +137,7 @@ uint32_t ReplaceOption::hash() const
 
 bool ReplaceOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const ReplaceOption& rhs = (const ReplaceOption&)ips;
@@ -156,7 +150,7 @@ bool ReplaceOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ReplaceOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(replacePerfStats);
+    RuleProfile profile(replacePerfStats);
 
     if ( p->is_cooked() )
         return NO_MATCH;
@@ -167,7 +161,7 @@ IpsOption::EvalStatus ReplaceOption::eval(Cursor& c, Packet* p)
     if ( c.get_pos() < repl.size() )
         return NO_MATCH;
 
-    if ( replace_ok() )
+    if ( replace_ok(p->context->conf) )
         store(c.get_pos() - repl.size());
 
     return MATCH;
@@ -175,10 +169,10 @@ IpsOption::EvalStatus ReplaceOption::eval(Cursor& c, Packet* p)
 
 void ReplaceOption::action(Packet*)
 {
-    Profile profile(replacePerfStats);
+    RuleProfile profile(replacePerfStats);
 
     if ( pending() )
-        Replace_QueueChange(repl, (unsigned)pos());
+        DetectionEngine::add_replacement(repl, (unsigned)pos());
 }
 
 //-------------------------------------------------------------------------

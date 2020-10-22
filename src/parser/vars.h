@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -63,9 +63,6 @@ struct VarEntry
 
 VarEntry* VarDefine(snort::SnortConfig*, const char* name, const char* value);
 int PortVarDefine(snort::SnortConfig*, const char* name, const char* s);
-
-// FIXIT-L put ParseIpVar() definition and declaration in matching files
-void ParseIpVar(snort::SnortConfig*, const char* name, const char* s);
 
 VarEntry* VarAlloc();
 void DeleteVars(VarEntry* var_table);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -62,17 +62,15 @@ public:
     static void release_plugins();
     static void dump_plugins();
 
+    static void new_config(snort::SnortConfig*);
     static snort::Actions::Type get_action_type(const char*);
+    static void delete_config(snort::SnortConfig*);
 
     static void instantiate(const snort::ActionApi*, snort::Module*, snort::SnortConfig*);
 
-    static void thread_init(snort::SnortConfig*);
-    static void thread_term(snort::SnortConfig*);
-
-    static void reset_queue();
-    static void queue_reject();
-    static void queue(snort::IpsAction*);
-    static void execute(snort::Packet*);
+    static void thread_init(const snort::SnortConfig*);
+    static void thread_reinit(const snort::SnortConfig*);
+    static void thread_term();
 
 #ifdef PIGLET
     static IpsActionWrapper* instantiate(const char*, snort::Module*);

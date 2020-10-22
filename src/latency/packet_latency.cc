@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,7 @@
 #include "detection/detection_engine.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
+#include "main/snort_debug.h"
 #include "protocols/packet.h"
 #include "utils/stats.h"
 
@@ -72,7 +73,7 @@ using EventHandler = EventingWrapper<Event>;
 
 static inline std::ostream& operator<<(std::ostream& os, const Event& e)
 {
-    os << "latency: " << e.packet->context->packet_number << " packet";
+    os << "packet " << e.packet->context->packet_number;
 
     if ( e.fastpathed )
         os << " fastpathed: ";
@@ -88,8 +89,22 @@ static inline std::ostream& operator<<(std::ostream& os, const Event& e)
 
     os << "[" << e.packet->dsize << "]";
 
-    os << ", " << e.packet->ptrs.ip_api.get_src() << ":" << e.packet->ptrs.sp;
-    os << " -> " << e.packet->ptrs.ip_api.get_dst() << ":" << e.packet->ptrs.dp;
+    if ( e.packet->has_ip() or e.packet->is_data() )
+    {
+        SfIpString src_addr, dst_addr;
+        unsigned src_port = 0, dst_port = 0;
+
+        e.packet->ptrs.ip_api.get_src()->ntop(src_addr);
+        e.packet->ptrs.ip_api.get_dst()->ntop(dst_addr);
+        if ( e.packet->proto_bits & (PROTO_BIT__TCP|PROTO_BIT__UDP) )
+        {
+            src_port = e.packet->ptrs.sp;
+            dst_port = e.packet->ptrs.dp;
+        }
+
+        os << ", " << src_addr << ":" << src_port;
+        os << " -> " << dst_addr << ":" << dst_port;
+    }
 
     return os;
 }
@@ -102,7 +117,7 @@ template<typename Clock = SnortClock>
 class Impl
 {
 public:
-    Impl(const ConfigWrapper&, EventHandler&, EventHandler&);
+    Impl(const ConfigWrapper&, EventHandler&);
 
     void push();
     bool pop(const Packet*);
@@ -114,12 +129,11 @@ private:
     std::vector<PacketTimer<Clock>> timers;
     const ConfigWrapper& config;
     EventHandler& event_handler;
-    EventHandler& log_handler;
 };
 
 template<typename Clock>
-inline Impl<Clock>::Impl(const ConfigWrapper& cfg, EventHandler& eh, EventHandler& lh) :
-    config(cfg), event_handler(eh), log_handler(lh)
+inline Impl<Clock>::Impl(const ConfigWrapper& cfg, EventHandler& eh) :
+    config(cfg), event_handler(eh)
 { }
 
 template<typename Clock>
@@ -136,18 +150,20 @@ inline bool Impl<Clock>::pop(const Packet* p)
 
     auto timed_out = timer.marked_as_fastpathed;
 
-    if ( timer.timed_out() )
+    bool force_timeout = timer.timed_out();
+
+#ifdef REG_TEST
+    force_timeout = config->test_timeout ? true : force_timeout;
+#endif
+
+    if ( force_timeout )
     {
         timed_out = true;
 
         // timer.mark implies fastpath-related timeout
         Event e { p, timer.marked_as_fastpathed, timer.elapsed() };
 
-        if ( config->action & PacketLatencyConfig::LOG )
-            log_handler.handle(e);
-
-        if ( config->action & PacketLatencyConfig::ALERT )
-            event_handler.handle(e);
+        event_handler.handle(e);
     }
 
     elapsed = clock_usecs(TO_USECS(timer.elapsed()));
@@ -187,27 +203,24 @@ static struct SnortConfigWrapper : public ConfigWrapper
 
 static struct SnortEventHandler : public EventHandler
 {
-    void handle(const Event&) override
-    { DetectionEngine::queue_event(GID_LATENCY, LATENCY_EVENT_PACKET_FASTPATHED); }
-} event_handler;
-
-static struct SnortLogHandler : public EventHandler
-{
     void handle(const Event& e) override
     {
         assert(e.packet);
         std::ostringstream ss;
         ss << e;
-        LogMessage("%s\n", ss.str().c_str());
+        debug_logf(latency_trace, e.packet, "%s\n", ss.str().c_str());
+
+        DetectionEngine::queue_event(GID_LATENCY, LATENCY_EVENT_PACKET_FASTPATHED);
     }
-} log_handler;
+} event_handler;
 
 static THREAD_LOCAL Impl<>* impl = nullptr;
 
+// FIXIT-L this should probably be put in a tinit
 static inline Impl<>& get_impl()
 {
     if ( !impl )
-        impl = new Impl<>(config, event_handler, log_handler);
+        impl = new Impl<>(config, event_handler);
 
     return *impl;
 }
@@ -311,15 +324,12 @@ TEST_CASE ( "packet latency impl", "[latency]" )
 
     MockConfigWrapper config;
     EventHandlerSpy event_handler;
-    EventHandlerSpy log_handler;
 
     MockClock::reset();
 
-    packet_latency::Impl<MockClock> impl(config, event_handler, log_handler);
+    packet_latency::Impl<MockClock> impl(config, event_handler);
 
     config.config.max_time = 2_ticks;
-    config.config.action = PacketLatencyConfig::ALERT_AND_LOG;
-
     SECTION( "fastpath enabled" )
     {
         config.config.fastpath = true;
@@ -335,7 +345,6 @@ TEST_CASE ( "packet latency impl", "[latency]" )
             CHECK( impl.pop(nullptr) );
 
             CHECK( event_handler.count == 1 );
-            CHECK( log_handler.count == 1 );
         }
 
         SECTION( "no timeout" )
@@ -344,7 +353,6 @@ TEST_CASE ( "packet latency impl", "[latency]" )
             CHECK_FALSE( impl.pop(nullptr) );
 
             CHECK( event_handler.count == 0 );
-            CHECK( log_handler.count == 0 );
         }
     }
 
@@ -363,7 +371,6 @@ TEST_CASE ( "packet latency impl", "[latency]" )
             CHECK( impl.pop(nullptr) );
 
             CHECK( event_handler.count == 1 );
-            CHECK( log_handler.count == 1 );
         }
 
         SECTION( "no timeout" )
@@ -372,7 +379,6 @@ TEST_CASE ( "packet latency impl", "[latency]" )
             CHECK_FALSE( impl.pop(nullptr) );
 
             CHECK( event_handler.count == 0 );
-            CHECK( log_handler.count == 0 );
         }
     }
 }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,6 +32,7 @@ extern const BaseApi* nin_reputation;
 
 extern const BaseApi* nin_appid[];
 extern const BaseApi* nin_port_scan[];
+extern const BaseApi* nin_rna[];
 
 #ifdef STATIC_INSPECTORS
 extern const BaseApi* nin_arp_spoof[];
@@ -52,6 +53,7 @@ void load_network_inspectors()
     PluginManager::load_plugins(network_inspectors);
     PluginManager::load_plugins(nin_appid);
     PluginManager::load_plugins(nin_port_scan);
+    PluginManager::load_plugins(nin_rna);
 
 #ifdef STATIC_INSPECTORS
     PluginManager::load_plugins(nin_arp_spoof);

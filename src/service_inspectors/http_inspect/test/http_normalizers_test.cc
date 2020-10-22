@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,7 @@
 #include "config.h"
 #endif
 
+#include "service_inspectors/http_inspect/http_common.h"
 #include "service_inspectors/http_inspect/http_field.h"
 #include "service_inspectors/http_inspect/http_normalizers.h"
 #include "service_inspectors/http_inspect/http_test_manager.h"
@@ -32,7 +33,7 @@
 #include <CppUTestExt/MockSupport.h>
 
 using namespace snort;
-using namespace HttpEnums;
+using namespace HttpCommon;
 
 // Stubs whose sole purpose is to make the test code link
 const bool HttpEnums::is_sp_tab[256] {};

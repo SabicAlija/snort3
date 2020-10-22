@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,7 +29,7 @@
 
 using namespace snort;
 
-Flow* TcpHA::create_session(FlowKey* key)
+Flow* TcpHA::create_session(const FlowKey* key)
 {
     assert(key);
 
@@ -42,7 +42,6 @@ Flow* TcpHA::create_session(FlowKey* key)
     }
 
     return flow;
-
 }
 
 void TcpHA::deactivate_session(Flow* flow)
@@ -60,7 +59,7 @@ void TcpHA::deactivate_session(Flow* flow)
 
 THREAD_LOCAL TcpHA* TcpHAManager::tcp_ha = nullptr;
 
-void TcpHAManager::process_deletion(Flow* flow)
+void TcpHAManager::process_deletion(Flow& flow)
 {
     if( tcp_ha != nullptr )
         tcp_ha->process_deletion(flow);

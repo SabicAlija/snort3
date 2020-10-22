@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,7 +40,11 @@ public:
     virtual ~Session() = default;
 
     virtual bool setup(snort::Packet*) { return true; }
-    virtual void update_direction(char /*dir*/, const snort::SfIp*, uint16_t /*port*/) { }
+    virtual void update_direction(char /*dir*/, const snort::SfIp*, uint16_t /*port*/)
+    {
+        // UDP is currently the only stream that implements this. Others should not be calling.
+        assert(false);
+    }
     virtual int process(snort::Packet*) { return 0; }
 
     virtual void restart(snort::Packet*) { }
@@ -68,8 +72,11 @@ public:
     virtual bool is_sequenced(uint8_t /*dir*/) { return true; }
     virtual bool are_packets_missing(uint8_t /*dir*/) { return true; }
 
+    virtual void disable_reassembly(snort::Flow*) { }
     virtual uint8_t get_reassembly_direction() { return SSN_DIR_NONE; }
     virtual uint8_t missing_in_reassembled(uint8_t /*dir*/) { return SSN_MISSING_NONE; }
+
+    virtual bool set_packet_action_to_hold(snort::Packet*) { return false; }
 
 protected:
     Session(snort::Flow* f) { flow = f; }

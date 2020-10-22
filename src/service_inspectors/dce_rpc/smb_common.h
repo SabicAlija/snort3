@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -72,6 +72,7 @@
 
 #define DCE2_SMB_ID   0xff534d42  /* \xffSMB */
 #define DCE2_SMB2_ID  0xfe534d42  /* \xfeSMB */
+#define DCE2_SMB_ID_SIZE 4
 
 // MS-FSCC Section 2.1.5 - Pathname
 #define DCE2_SMB_MAX_PATH_LEN  32760
@@ -374,11 +375,21 @@ struct SmbAndXCommon
     uint16_t smb_off2;     /* offset (from SMB hdr start) to next cmd (@smb_wct) */
 };
 
+//NbssLen should be used by SMB1
 inline uint32_t NbssLen(const NbssHdr* nb)
 {
-    /* Treat first bit of flags as the upper byte to length */
+    // Treat first bit of flags as the upper byte to length
+    //[MS-SMB] 2.1 Transport - Length can be maximum 0x1FFFF
     // The left operand of '&' is a garbage value
     return ((nb->flags & 0x01) << 16) | ntohs(nb->length);  // ... FIXIT-W
+}
+
+// NbssLen2 should be used by SMB2/SMB3
+inline uint32_t NbssLen2(const NbssHdr *nb)
+{
+    // The Length is 3 bytes. [MS-SMB2] 2.1 Transport
+    // The left operand of '<<' is a garbage value
+    return ((nb->flags << 16) | ntohs(nb->length));  // ... FIXIT-W
 }
 
 inline uint8_t NbssType(const NbssHdr* nb)
@@ -454,6 +465,8 @@ inline bool SmbFmtAscii(const uint8_t fmt)
 {
     return fmt == SMB_FMT__ASCII ? true : false;
 }
+
+#pragma pack()
 
 #endif
 

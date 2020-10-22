@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -86,9 +86,9 @@ private:
 
 uint32_t Dnp3ObjOption::hash() const
 {
-    uint32_t a = group, b = var, c = 0;
+    uint32_t a = group, b = var, c = IpsOption::hash();
 
-    mix_str(a,b,c,get_name());
+    mix(a,b,c);
     finalize(a,b,c);
 
     return c;
@@ -96,7 +96,7 @@ uint32_t Dnp3ObjOption::hash() const
 
 bool Dnp3ObjOption::operator==(const IpsOption& ips) const
 {
-    if ( strcmp(get_name(), ips.get_name()) )
+    if ( !IpsOption::operator==(ips) )
         return false;
 
     const Dnp3ObjOption& rhs = (const Dnp3ObjOption&)ips;
@@ -107,7 +107,7 @@ bool Dnp3ObjOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus Dnp3ObjOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(dnp3_obj_perf_stats);
+    RuleProfile profile(dnp3_obj_perf_stats);
 
     size_t header_size;
 
@@ -156,8 +156,10 @@ static const Parameter s_params[] =
 {
     { "group", Parameter::PT_INT, "0:255", "0",
       "match given DNP3 object header group" },
+
     { "var", Parameter::PT_INT, "0:255", "0",
       "match given DNP3 object header var" },
+
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -188,9 +190,10 @@ bool Dnp3ObjModule::begin(const char*, int, SnortConfig*)
 bool Dnp3ObjModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("group") )
-        group = v.get_long();
+        group = v.get_uint8();
+
     else if ( v.is("var") )
-        var = v.get_long();
+        var = v.get_uint8();
 
     return true;
 }

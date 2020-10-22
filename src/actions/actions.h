@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -35,7 +35,7 @@ class SO_PUBLIC Actions
 {
 public:
     // FIXIT-L if Type is changed, RateFilterModule and type in actions.cc must be updated
-    enum Type
+    enum Type : uint8_t
     { NONE = 0, LOG, PASS, ALERT, DROP, BLOCK, RESET, MAX };
 
     static const char* get_string(Type);

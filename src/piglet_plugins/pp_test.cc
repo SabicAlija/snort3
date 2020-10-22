@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -40,8 +40,8 @@ using namespace snort;
 class TestPiglet : public Piglet::BasePlugin
 {
 public:
-    TestPiglet(Lua::State& state, const std::string& target) :
-        BasePlugin(state, target) { }
+    TestPiglet(Lua::State& state, const std::string& tgt) :
+        BasePlugin(state, tgt) { }
 
     bool setup() override;
 };

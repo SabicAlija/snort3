@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,6 @@
 #include <iostream>
 
 #include "main/snort_config.h"
-#include "main/snort_debug.h"
 #include "target_based/snort_protocols.h"
 
 #include <CppUTest/CommandLineTestRunner.h>
@@ -78,7 +77,7 @@ TEST(protocol_reference, service_protocols)
     CHECK( is_service_protocol(t3) );
 }
 
-// Builtin Protocols (ip, icmp, tcp, udp, user and file)
+// Builtin Protocols (ip, icmp, tcp, udp, file)
 //
 // Verify normal behaviour of the builtin protocols.
 //   1. Check the builtin protocols match the hardcoded ID's
@@ -86,7 +85,7 @@ TEST(protocol_reference, service_protocols)
 //     * is_network_protocol()
 //     * is_builtin_protocol()
 //     * is_service_protocol()
-TEST(protocol_reference, builtin_protocols) 
+TEST(protocol_reference, builtin_protocols)
 {
     ProtocolReference refs;
 
@@ -119,12 +118,6 @@ TEST(protocol_reference, builtin_protocols)
     CHECK( is_network_protocol(udp) );
     CHECK( is_builtin_protocol(udp) );
     CHECK( !is_service_protocol(udp) );
-
-    SnortProtocolId user = refs.add("user");
-    CHECK( user == SNORT_PROTO_USER );
-    CHECK( !is_network_protocol(user) );
-    CHECK( is_builtin_protocol(user) );
-    CHECK( is_service_protocol(user) );
 
     SnortProtocolId file = refs.add("file");
     CHECK( file == SNORT_PROTO_FILE );

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -34,6 +34,15 @@
 struct Http2ParaList
 {
 public:
+#ifdef REG_TEST
+    int64_t print_amount;
+
+    bool test_input;
+    bool test_output;
+    bool print_hex;
+    bool show_pegs;
+    bool show_scan;
+#endif
 };
 
 class Http2Module : public snort::Module
@@ -69,6 +78,9 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    bool is_bindable() const override
+    { return true; }
 
 private:
     static const snort::Parameter http2_params[];

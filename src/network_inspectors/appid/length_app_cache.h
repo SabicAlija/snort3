@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,9 +29,6 @@
 #define LENGTH_SEQUENCE_CNT_MAX (5)
 
 #pragma pack(1)
-
-class AppIdConfig;
-enum class IpProtocol : uint8_t;
 
 struct LengthSequenceEntry
 {
@@ -77,10 +74,26 @@ struct LengthKey
 
 #pragma pack()
 
-void init_length_app_cache();
-void free_length_app_cache();
-AppId find_length_app_cache(const LengthKey&);
-bool add_length_app_cache(const LengthKey&, AppId);
+class LengthCache
+{
+public:
+    AppId find(const LengthKey& key)
+    {
+        auto entry = cache.find(key);
+        if (entry == cache.end())
+            return APP_ID_NONE;
+        else
+            return entry->second;
+    }
+
+    bool add(const LengthKey& key, AppId val)
+    {
+        return (cache.emplace(key, val)).second == true;
+    }
+
+private:
+    std::map<LengthKey, AppId>cache;
+};
 
 #endif
 

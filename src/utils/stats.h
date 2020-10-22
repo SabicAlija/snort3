@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,7 +34,7 @@ using IndexVec = std::vector<unsigned>;
 // FIXIT-L split this out into appropriate modules
 struct PacketCount
 {
-    PegCount total_from_daq;
+    PegCount analyzed_pkts;
     PegCount hard_evals;
     PegCount raw_searches;
     PegCount cooked_searches;
@@ -44,6 +44,12 @@ struct PacketCount
     PegCount header_searches;
     PegCount body_searches;
     PegCount file_searches;
+    PegCount raw_key_searches;
+    PegCount raw_header_searches;
+    PegCount method_searches;
+    PegCount stat_code_searches;
+    PegCount stat_msg_searches;
+    PegCount cookie_searches;
     PegCount offloads;
     PegCount alert_pkts;
     PegCount total_alert_pkts;
@@ -54,6 +60,15 @@ struct PacketCount
     PegCount log_limit;
     PegCount event_limit;
     PegCount alert_limit;
+    PegCount context_stalls;
+    PegCount offload_busy;
+    PegCount onload_waits;
+    PegCount offload_fallback;
+    PegCount offload_failures;
+    PegCount offload_suspends;
+    PegCount pcre_match_limit;
+    PegCount pcre_recursion_limit;
+    PegCount pcre_error;
 };
 
 struct ProcessCount
@@ -66,19 +81,11 @@ struct ProcessCount
     PegCount inspector_deletions;
     PegCount daq_reloads;
     PegCount attribute_table_reloads;
-    PegCount attribute_table_hosts;
-};
-
-struct AuxCount
-{
-    PegCount internal_blacklist;
-    PegCount internal_whitelist;
-    PegCount idle;
-    PegCount rx_bytes;
+    PegCount attribute_table_hosts;     // FIXIT-D - remove when host attribute pegs updated
+    PegCount attribute_table_overflow;  // FIXIT-D - remove when host attribute pegs updated
 };
 
 extern ProcessCount proc_stats;
-extern THREAD_LOCAL AuxCount aux_counts;
 
 extern const PegInfo daq_names[];
 extern const PegInfo pc_names[];
@@ -88,7 +95,7 @@ namespace snort
 {
 extern SO_PUBLIC THREAD_LOCAL PacketCount pc;
 
-SO_PUBLIC PegCount get_packet_number();
+SO_PUBLIC inline PegCount get_packet_number() { return pc.analyzed_pkts; }
 
 SO_PUBLIC void LogLabel(const char*, FILE* = stdout);
 SO_PUBLIC void LogValue(const char*, const char*, FILE* = stdout);
@@ -101,7 +108,7 @@ SO_PUBLIC void LogStat(const char*, double, FILE* = stdout);
 void sum_stats(PegCount* sums, PegCount* counts, unsigned n);
 void show_stats(PegCount*, const PegInfo*, const char* module_name = nullptr);
 void show_stats(PegCount*, const PegInfo*, unsigned n, const char* module_name = nullptr);
-void show_stats(PegCount*, const PegInfo*, IndexVec&, const char* module_name, FILE*);
+void show_stats(PegCount*, const PegInfo*, const IndexVec&, const char* module_name, FILE*);
 void show_percent_stats(PegCount*, const char*[], unsigned n, const char* module_name = nullptr);
 
 void sum_stats(SimpleStats* sums, SimpleStats* counts);
@@ -114,4 +121,3 @@ void TimeStart();
 void TimeStop();
 
 #endif
-

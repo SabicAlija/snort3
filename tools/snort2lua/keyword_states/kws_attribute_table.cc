@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,7 +37,7 @@ public:
     bool convert(std::istringstream& data) override;
 
 private:
-    std::istringstream* stream; // so I can call ld->failed_conversion
+    std::istringstream* stream = nullptr; // so I can call ld->failed_conversion
     std::unordered_map<std::string, std::string> attr_map;
     std::ifstream attr_file;
 

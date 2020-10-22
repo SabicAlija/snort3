@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,10 +21,12 @@
 #include "config.h"
 #endif
 
+#include "http_enum.h"
 #include "http_msg_header.h"
 #include "http_msg_request.h"
 
 using namespace HttpEnums;
+using namespace snort;
 
 const StrCode HttpMsgRequest::method_list[] =
 {
@@ -136,6 +138,7 @@ const StrCode HttpMsgHeadShared::header_list[] =
     { HEAD_CONTENT_TRANSFER_ENCODING, "content-transfer-encoding" },
     { HEAD_MIME_VERSION,              "mime-version" },
     { HEAD_PROXY_AGENT,               "proxy-agent" },
+    { HEAD_CONTENT_DISPOSITION,       "content-disposition" },
     { 0,                              nullptr }
 };
 
@@ -213,80 +216,77 @@ const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_CONTENT_LENGTH
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_CHARSET
     { EVENT__NONE, INF__NONE, false, norm_remove_quotes_lws, norm_to_lower, nullptr };
 
-#if defined(__clang__)
-// Designated initializers are not supported in C++11. However we're going to play compilation
-// roulette and hopes this works.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wc99-extensions"
-#endif
-
-/* *INDENT-OFF* */
-const HeaderNormalizer* const HttpMsgHeadShared::header_norms[HEAD__MAX_VALUE] = {
-    [0] = &NORMALIZER_BASIC,
-    [HEAD__OTHER] = &NORMALIZER_BASIC,
-    [HEAD_CACHE_CONTROL] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_CONNECTION] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_DATE] = &NORMALIZER_DATE,
-    [HEAD_PRAGMA] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_TRAILER] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_COOKIE] = &NORMALIZER_BASIC,
-    [HEAD_SET_COOKIE] = &NORMALIZER_BASIC,
-    [HEAD_TRANSFER_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_UPGRADE] = &NORMALIZER_BASIC,
-    [HEAD_VIA] = &NORMALIZER_BASIC,
-    [HEAD_WARNING] = &NORMALIZER_BASIC,
-    [HEAD_ACCEPT] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_ACCEPT_CHARSET] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_ACCEPT_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_ACCEPT_LANGUAGE] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_AUTHORIZATION] = &NORMALIZER_BASIC,
-    [HEAD_EXPECT] = &NORMALIZER_CASE_INSENSITIVE,
-    [HEAD_FROM] = &NORMALIZER_BASIC,
-    [HEAD_HOST] = &NORMALIZER_NO_REPEAT,
-    [HEAD_IF_MATCH] = &NORMALIZER_BASIC,
-    [HEAD_IF_MODIFIED_SINCE] = &NORMALIZER_DATE,
-    [HEAD_IF_NONE_MATCH] = &NORMALIZER_BASIC,
-    [HEAD_IF_RANGE] = &NORMALIZER_BASIC,
-    [HEAD_IF_UNMODIFIED_SINCE] = &NORMALIZER_DATE,
-    [HEAD_MAX_FORWARDS] = &NORMALIZER_BASIC,
-    [HEAD_PROXY_AUTHORIZATION] = &NORMALIZER_BASIC,
-    [HEAD_RANGE] = &NORMALIZER_BASIC,
-    [HEAD_REFERER] = &NORMALIZER_URI,
-    [HEAD_TE] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_USER_AGENT] = &NORMALIZER_BASIC,
-    [HEAD_ACCEPT_RANGES] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_AGE] = &NORMALIZER_NUMBER,
-    [HEAD_ETAG] = &NORMALIZER_BASIC,
-    [HEAD_LOCATION] = &NORMALIZER_URI,
-    [HEAD_PROXY_AUTHENTICATE] = &NORMALIZER_BASIC,
-    [HEAD_RETRY_AFTER] = &NORMALIZER_BASIC,  // may be date or number
-    [HEAD_SERVER] = &NORMALIZER_BASIC,
-    [HEAD_VARY] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_WWW_AUTHENTICATE] = &NORMALIZER_BASIC,
-    [HEAD_ALLOW] = &NORMALIZER_METHOD_LIST,
-    [HEAD_CONTENT_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_CONTENT_LANGUAGE] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_CONTENT_LENGTH] = &NORMALIZER_CONTENT_LENGTH,
-    [HEAD_CONTENT_LOCATION] = &NORMALIZER_URI,
-    [HEAD_CONTENT_MD5] = &NORMALIZER_BASIC,
-    [HEAD_CONTENT_RANGE] = &NORMALIZER_BASIC,
-    [HEAD_CONTENT_TYPE] = &NORMALIZER_CHARSET,
-    [HEAD_EXPIRES] = &NORMALIZER_DATE,
-    [HEAD_LAST_MODIFIED] = &NORMALIZER_DATE,
-    [HEAD_X_FORWARDED_FOR] = &NORMALIZER_BASIC,
-    [HEAD_TRUE_CLIENT_IP] = &NORMALIZER_BASIC,
-    [HEAD_X_WORKING_WITH] = &NORMALIZER_BASIC,
-    [HEAD_CONTENT_TRANSFER_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_MIME_VERSION] = &NORMALIZER_BASIC,
-    [HEAD_PROXY_AGENT] = &NORMALIZER_BASIC,
+const HeaderNormalizer* const HttpMsgHeadShared::header_norms[HEAD__MAX_VALUE + MAX_CUSTOM_HEADERS + 1] = {
+    &NORMALIZER_BASIC,      // 0
+    &NORMALIZER_BASIC,      // HEAD__OTHER
+    &NORMALIZER_TOKEN_LIST, // HEAD_CACHE_CONTROL
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONNECTION
+    &NORMALIZER_DATE,       // HEAD_DATE
+    &NORMALIZER_TOKEN_LIST, // HEAD_PRAGMA
+    &NORMALIZER_TOKEN_LIST, // HEAD_TRAILER
+    &NORMALIZER_BASIC,      //HEAD_COOKIE
+    &NORMALIZER_BASIC,      //HEAD_SET_COOKIE
+    &NORMALIZER_TOKEN_LIST, // HEAD_TRANSFER_ENCODING
+    &NORMALIZER_BASIC,      // HEAD_UPGRADE
+    &NORMALIZER_BASIC,      // HEAD_VIA
+    &NORMALIZER_BASIC,      // HEAD_WARNING
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_CHARSET
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_ENCODING
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_LANGUAGE
+    &NORMALIZER_BASIC,      // HEAD_AUTHORIZATION
+    &NORMALIZER_CASE_INSENSITIVE, // HEAD_EXPECT
+    &NORMALIZER_BASIC,      // HEAD_FROM
+    &NORMALIZER_NO_REPEAT,  // HEAD_HOST
+    &NORMALIZER_BASIC,      // HEAD_IF_MATCH
+    &NORMALIZER_DATE,       // HEAD_IF_MODIFIED_SINCE
+    &NORMALIZER_BASIC,      // HEAD_IF_NONE_MATCH
+    &NORMALIZER_BASIC,      // HEAD_IF_RANGE
+    &NORMALIZER_DATE,       // HEAD_IF_UNMODIFIED_SINCE
+    &NORMALIZER_BASIC,      // HEAD_MAX_FORWARDS
+    &NORMALIZER_BASIC,      // HEAD_PROXY_AUTHORIZATION
+    &NORMALIZER_BASIC,      // HEAD_RANGE
+    &NORMALIZER_URI,        // HEAD_REFERER
+    &NORMALIZER_TOKEN_LIST, // HEAD_TE
+    &NORMALIZER_BASIC,      // HEAD_USER_AGENT
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_RANGES
+    &NORMALIZER_NUMBER,     // HEAD_AGE
+    &NORMALIZER_BASIC,      // HEAD_ETAG
+    &NORMALIZER_URI,        // HEAD_LOCATION
+    &NORMALIZER_BASIC,      // HEAD_PROXY_AUTHENTICATE
+    &NORMALIZER_BASIC,      // HEAD_RETRY_AFTER, may be date or number
+    &NORMALIZER_BASIC,      // HEAD_SERVER
+    &NORMALIZER_TOKEN_LIST, // HEAD_VARY
+    &NORMALIZER_BASIC,      // HEAD_WWW_AUTHENTICATE
+    &NORMALIZER_METHOD_LIST, // HEAD_ALLOW
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONTENT_ENCODING
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONTENT_LANGUAGE
+    &NORMALIZER_CONTENT_LENGTH, // HEAD_CONTENT_LENGTH
+    &NORMALIZER_URI,        // HEAD_CONTENT_LOCATION
+    &NORMALIZER_BASIC,      // HEAD_CONTENT_MD5
+    &NORMALIZER_BASIC,      // HEAD_CONTENT_RANGE
+    &NORMALIZER_CHARSET,    // HEAD_CONTENT_TYPE
+    &NORMALIZER_DATE,       // HEAD_EXPIRES
+    &NORMALIZER_DATE,       // HEAD_LAST_MODIFIED
+    &NORMALIZER_BASIC,      // HEAD_X_FORWARDED_FOR
+    &NORMALIZER_BASIC,      // HEAD_TRUE_CLIENT_IP
+    &NORMALIZER_BASIC,      // HEAD_X_WORKING_WITH
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONTENT_TRANSFER_ENCODING
+    &NORMALIZER_BASIC,      // HEAD_MIME_VERSION
+    &NORMALIZER_BASIC,      // HEAD_PROXY_AGENT
+    &NORMALIZER_BASIC,      // HEAD_CONTENT_DISPOSITION
+    &NORMALIZER_BASIC,      // HEAD__MAX_VALUE
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
+    &NORMALIZER_BASIC,      // HEAD_CUSTOM_XFF_HEADER
 };
-/* *INDENT-ON* */
 
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
-
-const snort::RuleMap HttpModule::http_events[] =
+const RuleMap HttpModule::http_events[] =
 {
     { EVENT_ASCII,                      "ascii encoding" },
     { EVENT_DOUBLE_DECODE,              "double decoding attack" },
@@ -322,7 +322,7 @@ const snort::RuleMap HttpModule::http_events[] =
     { EVENT_SIMPLE_REQUEST,             "simple request" },
     { EVENT_UNESCAPED_SPACE_URI,        "unescaped space in HTTP URI" },
     { EVENT_PIPELINE_MAX,               "too many pipelined requests" },
-    { EVENT_ANOM_SERVER,                "anomalous http server on undefined HTTP port" },
+    { EVENT_OBSOLETE_ANOM_SERVER,       "obsolete event--deleted" },
     { EVENT_INVALID_STATCODE,           "invalid status code in HTTP response" },
     { EVENT_UNUSED_1,                   "unused event number--should not appear" },
     { EVENT_UTF_NORM_FAIL,              "HTTP response has UTF charset that failed to normalize" },
@@ -368,7 +368,7 @@ const snort::RuleMap HttpModule::http_events[] =
     { EVENT_UNKNOWN_ENCODING,           "unknown Content-Encoding used" },
     { EVENT_STACKED_ENCODINGS,          "multiple Content-Encodings applied" },
     { EVENT_RESPONSE_WO_REQUEST,        "server response before client request" },
-    { EVENT_PDF_SWF_OVERRUN,            "PDF/SWF decompression of server response too big" },
+    { EVENT_FILE_DECOMPR_OVERRUN,       "PDF/SWF/ZIP decompression of server response too big" },
     { EVENT_BAD_CHAR_IN_HEADER_NAME,    "nonprinting character in HTTP message header name" },
     { EVENT_BAD_CONTENT_LENGTH,         "bad Content-Length value in HTTP header" },
     { EVENT_HEADER_WRAPPING,            "HTTP header line wrapped" },
@@ -390,6 +390,20 @@ const snort::RuleMap HttpModule::http_events[] =
     { EVENT_BAD_HEADER_WHITESPACE,      "white space embedded in critical header value" },
     { EVENT_GZIP_EARLY_END,             "gzip compressed data followed by unexpected non-gzip "
                                         "data" },
+    { EVENT_EXCESS_REPEAT_PARAMS,       "excessive HTTP parameter key repeats" },
+    { EVENT_H2_NON_IDENTITY_TE,         "HTTP/2 Transfer-Encoding header other than identity" },
+    { EVENT_H2_DATA_OVERRUNS_CL,        "HTTP/2 message body overruns Content-Length header "
+                                        "value" },
+    { EVENT_H2_DATA_UNDERRUNS_CL,       "HTTP/2 message body smaller than Content-Length header "
+                                        "value" },
+    { EVENT_CONNECT_REQUEST_BODY,       "HTTP CONNECT request with a message body" },
+    { EVENT_EARLY_C2S_TRAFFIC_AFTER_CONNECT, "HTTP client-to-server traffic after CONNECT request "
+                                        "but before CONNECT response" },
+    { EVENT_200_CONNECT_RESP_WITH_CL,   "HTTP CONNECT 2XX response with Content-Length header" },
+    { EVENT_200_CONNECT_RESP_WITH_TE,   "HTTP CONNECT 2XX response with Transfer-Encoding header" },
+    { EVENT_100_CONNECT_RESP,           "HTTP CONNECT response with 1XX status code" },
+    { EVENT_EARLY_CONNECT_RESPONSE,     "HTTP CONNECT response before request message completed" },
+    { EVENT_MALFORMED_CD_FILENAME,      "malformed HTTP Content-Disposition filename parameter" },
     { 0, nullptr }
 };
 
@@ -417,6 +431,13 @@ const PegInfo HttpModule::peg_names[PEG_COUNT_MAX+1] =
     { CountType::SUM, "uri_coding", "URIs with character coding problems" },
     { CountType::NOW, "concurrent_sessions", "total concurrent http sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent http sessions" },
+    { CountType::SUM, "detains_requested", "packet hold requests for detained inspection" },
+    { CountType::SUM, "script_detections", "early inspections of scripts in HTTP responses" },
+    { CountType::SUM, "partial_inspections", "pre-inspections for detained inspection" },
+    { CountType::SUM, "excess_parameters", "repeat parameters exceeding max" },
+    { CountType::SUM, "parameters", "HTTP parameters inspected" },
+    { CountType::SUM, "connect_tunnel_cutovers", "CONNECT tunnel flow cutovers to wizard" },
+    { CountType::SUM, "ssl_srch_abandoned_early", "total SSL search abandoned too soon" },
     { CountType::END, nullptr, nullptr }
 };
 

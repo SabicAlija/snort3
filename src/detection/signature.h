@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,56 +26,56 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 #include "target_based/snort_protocols.h"
 
 namespace snort
 {
-struct GHash;
+class GHash;
 struct SnortConfig;
 }
 
 struct OptTreeNode;
 
-/* this contains a list of the URLs for various reference systems */
-struct ReferenceSystemNode
+struct ReferenceSystem
 {
-    char* name;
-    char* url;
-    ReferenceSystemNode* next;
+    ReferenceSystem(const std::string& n, const char* u) : name(n), url(u) { }
+    std::string name;
+    std::string url;
 };
 
-ReferenceSystemNode* ReferenceSystemAdd(snort::SnortConfig*, const char*, const char* = nullptr);
+const ReferenceSystem* reference_system_add(snort::SnortConfig*, const std::string&, const char* = "");
 
-/* XXX: update to point to the ReferenceURLNode in the referenceURL list */
 struct ReferenceNode
 {
-    char* id;
-    ReferenceSystemNode* system;
-    ReferenceNode* next;
+    ReferenceNode(const ReferenceSystem* sys, const std::string& id) : system(sys), id(id) { }
+    const ReferenceSystem* system;
+    std::string id;
 };
 
-void AddReference(snort::SnortConfig*, ReferenceNode**, const char*, const char*);
+void add_reference(snort::SnortConfig*, OptTreeNode*, const std::string& sys, const std::string& id);
 
-/* struct for rule classification */
 struct ClassType
 {
-    // FIXIT-L type and name are backwards (name -> text, type -> name)
-    char* type;      /* classification type */
-    int id;          /* classification id */
-    char* name;      /* "pretty" classification name */
-    int priority;    /* priority */
-    ClassType* next;
+    ClassType(const char* s, const char* txt, unsigned pri, int id) :
+        name(s), text(txt), priority(pri), id(id) { }
+
+    std::string name;
+    std::string text;
+    unsigned priority;
+    int id;
 };
 
-/* NOTE:  These methods can only be used during parse time */
-void AddClassification(snort::SnortConfig*, const char* type, const char* name, int priority);
+void add_classification(snort::SnortConfig*, const char* name, const char* text, unsigned priority);
 
-ClassType* ClassTypeLookupByType(snort::SnortConfig*, const char*);
+const ClassType* get_classification(snort::SnortConfig*, const char*);
 
 struct SignatureServiceInfo
 {
-    char* service;
+    SignatureServiceInfo(const char* s, SnortProtocolId proto) :
+        service(s), snort_protocol_id(proto) { }
+    std::string service;
     SnortProtocolId snort_protocol_id;
 };
 
@@ -90,21 +90,23 @@ enum Target
 
 struct SigInfo
 {
-    char* message;
-    ClassType* class_type;
-    ReferenceNode* refs;
-    SignatureServiceInfo* services;
+    std::string message;
+    std::string* body = nullptr;
 
-    uint32_t gid;
-    uint32_t sid;
-    uint32_t rev;
+    std::vector<const ReferenceNode*> refs;
+    std::vector<SignatureServiceInfo> services;
 
-    uint32_t class_id;
-    uint32_t priority;
-    uint32_t num_services;
+    const ClassType* class_type = nullptr;
 
-    bool builtin;
-    Target target;
+    uint32_t gid = 0;
+    uint32_t sid = 0;
+    uint32_t rev = 0;
+
+    uint32_t class_id = 0;
+    uint32_t priority = 0;
+
+    bool builtin = false;
+    Target target = TARGET_NONE;
 };
 
 snort::GHash* OtnLookupNew();
@@ -113,10 +115,12 @@ OptTreeNode* OtnLookup(snort::GHash*, uint32_t gid, uint32_t sid);
 void OtnLookupFree(snort::GHash*);
 void OtnRemove(snort::GHash*, OptTreeNode*);
 
-void OtnDeleteData(void* data);
-void OtnFree(void* data);
-
 OptTreeNode* GetOTN(uint32_t gid, uint32_t sid);
+
+void dump_msg_map(const snort::SnortConfig*);
+void dump_rule_deps(const snort::SnortConfig*);
+void dump_rule_meta(const snort::SnortConfig*);
+void dump_rule_state(const snort::SnortConfig*);
 
 #endif
 

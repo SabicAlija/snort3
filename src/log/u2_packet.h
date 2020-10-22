@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -54,8 +54,8 @@ private:
     static const unsigned max_size =
         offset + sizeof(eth::EtherHdr) + sizeof(ip::IP6Hdr) + sizeof(tcp::TCPHdr);
 
-    uint16_t size;
-    uint16_t dsize;
+    uint16_t size = 0;
+    uint16_t dsize = 0;
 
     union
     {

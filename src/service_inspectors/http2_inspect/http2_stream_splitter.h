@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2018 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,6 +20,7 @@
 #ifndef HTTP2_STREAM_SPLITTER_H
 #define HTTP2_STREAM_SPLITTER_H
 
+#include "service_inspectors/http_inspect/http_common.h"
 #include "stream/stream_splitter.h"
 
 #include "http2_enum.h"
@@ -30,27 +31,43 @@ class Http2Inspect;
 class Http2StreamSplitter : public snort::StreamSplitter
 {
 public:
-    Http2StreamSplitter(bool is_client_to_server) : snort::StreamSplitter(is_client_to_server),
-        source_id(is_client_to_server ? Http2Enums::SRC_CLIENT : Http2Enums::SRC_SERVER) { }
-    Status scan(snort::Flow* flow, const uint8_t* data, uint32_t length, uint32_t not_used,
+    Http2StreamSplitter(bool is_client_to_server) :
+        snort::StreamSplitter(is_client_to_server),
+        source_id(is_client_to_server ? HttpCommon::SRC_CLIENT : HttpCommon::SRC_SERVER)
+        { }
+    Status scan(snort::Packet* pkt, const uint8_t* data, uint32_t length, uint32_t not_used,
         uint32_t* flush_offset) override;
     const snort::StreamBuffer reassemble(snort::Flow* flow, unsigned total, unsigned offset, const
         uint8_t* data, unsigned len, uint32_t flags, unsigned& copied) override;
     bool finish(snort::Flow* flow) override;
+    bool init_partial_flush(snort::Flow* flow) override;
     bool is_paf() override { return true; }
 
     // FIXIT-M should return actual packet buffer size
     unsigned max(snort::Flow*) override { return Http2Enums::MAX_OCTETS; }
 
 private:
-    const Http2Enums::SourceId source_id;
+    const HttpCommon::SourceId source_id;
+    static StreamSplitter::Status data_frame_header_checks(Http2FlowData* session_data,
+        uint32_t* flush_offset, HttpCommon::SourceId source_id, uint32_t frame_length,
+        uint32_t& data_offset);
+    static StreamSplitter::Status non_data_frame_header_checks(
+        Http2FlowData* session_data, HttpCommon::SourceId source_id, uint32_t frame_length,
+        uint8_t type);
+    static StreamSplitter::Status non_data_scan(Http2FlowData* session_data,
+        uint32_t length, uint32_t* flush_offset, HttpCommon::SourceId source_id, uint8_t type,
+        uint8_t frame_flags, uint32_t& data_offset);
+    static void partial_flush_data(Http2FlowData* session_data,
+        HttpCommon::SourceId source_id, uint32_t* flush_offset, uint32_t data_offset,
+        Http2Stream* const stream);
+    static snort::StreamSplitter::Status implement_scan(Http2FlowData* session_data, const uint8_t* data,
+        uint32_t length, uint32_t* flush_offset, HttpCommon::SourceId source_id);
+    static const snort::StreamBuffer implement_reassemble(Http2FlowData* session_data, unsigned total,
+        unsigned offset, const uint8_t* data, unsigned len, uint32_t flags,
+        HttpCommon::SourceId source_id);
+    static bool read_frame_hdr(Http2FlowData* session_data, const uint8_t* data,
+        uint32_t length, HttpCommon::SourceId source_id, uint32_t& data_offset);
 };
 
-snort::StreamSplitter::Status implement_scan(Http2FlowData* session_data, const uint8_t* data,
-    uint32_t length, uint32_t* flush_offset, Http2Enums::SourceId source_id);
-const snort::StreamBuffer implement_reassemble(Http2FlowData* session_data, unsigned total,
-    unsigned offset, const uint8_t* data, unsigned len, uint32_t flags, unsigned& copied,
-    Http2Enums::SourceId source_id);
 
 #endif
-
